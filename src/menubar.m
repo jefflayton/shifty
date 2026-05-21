@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#include <time.h>
 // #include <Foundation/Foundation.h>
 
 typedef void (*MenuActionCallback)(const char *action, const char *params);
@@ -12,79 +13,125 @@ static NSPopover *gPopover = NULL;
 
 @interface PopoverVC : NSViewController
 @property(nonatomic, strong) NSDatePicker *clockInTime;
-@property(nonatomic, strong) NSTextField *clockInLabel2;
+@property(nonatomic, strong) NSDatePicker *clockOutTime;
+@property(nonatomic, strong) NSDateFormatter *clockFormatter;
 @end
 
 static PopoverVC *gPopoverVC = NULL;
 
 @implementation PopoverVC
 - (void)loadView {
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 500)];
+    // View
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, 300)];
 
+    // title
     NSTextField *title = [NSTextField labelWithString:@"Shifty"];
     title.translatesAutoresizingMaskIntoConstraints = NO;
     title.alignment = NSTextAlignmentCenter;
     [view addSubview:title];
 
+    // shiftDuration
+    NSDateFormatter *timeFormatter = [[NSDateFormatter alloc] init];
+    timeFormatter.dateFormat = @"hh:mm";
+
+    NSDatePicker *shiftDuration = [[NSDatePicker alloc] init];
+    shiftDuration.translatesAutoresizingMaskIntoConstraints = NO;
+    shiftDuration.datePickerStyle = NSDatePickerStyleTextField;
+    shiftDuration.datePickerElements = NSDatePickerElementFlagHourMinute;
+    shiftDuration.locale = [NSLocale localeWithLocaleIdentifier:@"en_GB"];
+    shiftDuration.dateValue = [timeFormatter dateFromString:@"8:00"];
+    [view addSubview:shiftDuration];
+
+    // clockInLabel
     NSTextField *clockInLabel = [NSTextField labelWithString:@"Clock In"];
     clockInLabel.translatesAutoresizingMaskIntoConstraints = NO;
     clockInLabel.alignment = NSTextAlignmentCenter;
     [view addSubview:clockInLabel];
 
-    NSDatePicker *clockInTime =
-        [[NSDatePicker alloc] initWithFrame:NSMakeRect(10, 40, 180, 24)];
+    // clockInTime
+    NSDatePicker *clockInTime = [[NSDatePicker alloc] init];
+    // [[NSDatePicker alloc] initWithFrame:NSMakeRect(10, 40, 180, 24)];
     clockInTime.translatesAutoresizingMaskIntoConstraints = NO;
     clockInTime.datePickerStyle = NSDatePickerStyleTextField;
     clockInTime.datePickerElements = NSDatePickerElementFlagHourMinute;
     clockInTime.dateValue = [NSDate date];
     [view addSubview:clockInTime];
-
-    NSButton *clockIn = [NSButton buttonWithTitle:@"Clock In"
-                                           target:self
-                                           action:@selector(didClockIn:)];
-    clockIn.translatesAutoresizingMaskIntoConstraints = NO;
-    [view addSubview:clockIn];
     self.clockInTime = clockInTime;
 
-    NSTextField *clockInLabel2 = [NSTextField labelWithString:@"Clock In"];
-    clockInLabel2.translatesAutoresizingMaskIntoConstraints = NO;
-    clockInLabel2.alignment = NSTextAlignmentCenter;
-    [view addSubview:clockInLabel2];
-    self.clockInLabel2 = clockInLabel2;
+    // clockInSetNow
+    NSButton *clockInSetNow = [NSButton buttonWithTitle:@"Now"
+                                                 target:self
+                                                 action:@selector(didSetNow:)];
+    clockInSetNow.translatesAutoresizingMaskIntoConstraints = NO;
+    [view addSubview:clockInSetNow];
 
+    // clockInBtn
+    NSButton *clockInBtn = [NSButton buttonWithTitle:@"Clock In"
+                                              target:self
+                                              action:@selector(didClockIn:)];
+    clockInBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [view addSubview:clockInBtn];
+
+    // clockOutTime
+    NSDatePicker *clockOutTime = [[NSDatePicker alloc] init];
+    clockOutTime.translatesAutoresizingMaskIntoConstraints = NO;
+    clockOutTime.datePickerStyle = NSDatePickerStyleTextField;
+    clockOutTime.datePickerElements = NSDatePickerElementFlagHourMinute;
+    [view addSubview:clockOutTime];
+    self.clockOutTime = clockOutTime;
+
+    // quitBtn
     NSButton *quitBtn = [NSButton buttonWithTitle:@"Quit"
                                            target:NSApp
                                            action:@selector(terminate:)];
     quitBtn.translatesAutoresizingMaskIntoConstraints = NO;
     [view addSubview:quitBtn];
 
+    // Constraints
     [NSLayoutConstraint activateConstraints:@[
+        // title
         [title.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
         [title.topAnchor constraintEqualToAnchor:view.topAnchor constant:8],
 
-        [clockInLabel.topAnchor constraintEqualToAnchor:title.bottomAnchor
-                                               constant:12],
+        // shiftDuration
+        [shiftDuration.topAnchor constraintEqualToAnchor:title.bottomAnchor
+                                                constant:12],
+        [shiftDuration.centerXAnchor
+            constraintEqualToAnchor:view.centerXAnchor],
+        [shiftDuration.widthAnchor constraintEqualToConstant:80],
+
+        // clockInLabel
+        [clockInLabel.topAnchor
+            constraintEqualToAnchor:shiftDuration.bottomAnchor
+                           constant:4],
         [clockInLabel.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
 
+        // clockInTime
         [clockInTime.topAnchor constraintEqualToAnchor:clockInLabel.bottomAnchor
                                               constant:4],
-        [clockInTime.leadingAnchor constraintEqualToAnchor:view.leadingAnchor
-                                                  constant:10],
-        [clockInTime.trailingAnchor constraintEqualToAnchor:view.trailingAnchor
-                                                   constant:-10],
+        [clockInTime.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
+        [clockInTime.widthAnchor constraintEqualToConstant:80],
 
-        [clockIn.topAnchor constraintEqualToAnchor:clockInTime.bottomAnchor
-                                          constant:4],
-        [clockIn.leadingAnchor constraintEqualToAnchor:view.leadingAnchor
-                                              constant:10],
-        [clockIn.trailingAnchor constraintEqualToAnchor:view.trailingAnchor
-                                               constant:-10],
+        // clockInSetNow
+        [clockInSetNow.topAnchor constraintEqualToAnchor:clockInTime.topAnchor],
+        [clockInSetNow.leadingAnchor
+            constraintEqualToAnchor:clockInTime.trailingAnchor
+                           constant:4],
+        [clockInSetNow.heightAnchor
+            constraintEqualToAnchor:clockInTime.heightAnchor],
 
-        [clockInLabel2.topAnchor constraintEqualToAnchor:clockIn.bottomAnchor
-                                                constant:12],
-        [clockInLabel2.centerXAnchor
-            constraintEqualToAnchor:view.centerXAnchor],
+        // clockIn
+        [clockInBtn.topAnchor constraintEqualToAnchor:clockInTime.bottomAnchor
+                                             constant:4],
+        [clockInBtn.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
+        [clockInBtn.widthAnchor constraintEqualToConstant:80],
 
+        // clockOutTime
+        [clockOutTime.topAnchor constraintEqualToAnchor:clockInBtn.bottomAnchor
+                                               constant:4],
+        [clockOutTime.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
+
+        // quitBtn
         [quitBtn.bottomAnchor constraintEqualToAnchor:view.bottomAnchor
                                              constant:-8],
         [quitBtn.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
@@ -100,6 +147,9 @@ static PopoverVC *gPopoverVC = NULL;
     NSString *params = [NSString stringWithFormat:@"%ld", (long)ts];
     if (gCallback)
         gCallback([action UTF8String], [params UTF8String]);
+}
+- (void)didSetNow:(id)sender {
+    self.clockInTime.dateValue = [NSDate date];
 }
 @end
 
@@ -125,6 +175,13 @@ static PopoverVC *gPopoverVC = NULL;
     gPopover.delegate = self;
 
     gPopoverVC = (PopoverVC *)gPopover.contentViewController;
+
+    // clockFormatter
+    NSTimeZone *gmt = [NSTimeZone timeZoneWithAbbreviation:@"GMT"];
+    NSDateFormatter *clockFormatter = [[NSDateFormatter alloc] init];
+    clockFormatter.dateFormat = @"hh:mm a";
+    clockFormatter.timeZone = gmt;
+    gPopoverVC.clockFormatter = clockFormatter;
 }
 
 - (void)togglePopover:(id)sender {
@@ -142,11 +199,12 @@ void onMenuResponse(const char *route, const char *data) {
     NSString *r = route ? @(route) : @"";
     NSString *d = data ? @(data) : @"";
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSLog(@"onMenuResponse: route=%@ data=%@ popoverVC=%@", r, d, gPopoverVC);
-        if ([r isEqualToString:@"clock_in_ack"]) {
-            NSLog(@"setting clockInLabel2 to %@", d);
-            gPopoverVC.clockInLabel2.stringValue = d;
-        }
+      NSLog(@"onMenuResponse: route=%@ data=%@ popoverVC=%@", r, d, gPopoverVC);
+      if ([r isEqualToString:@"startup_ack"] || [r isEqualToString:@"clock_in_ack"]) {
+          NSTimeInterval ts = (NSTimeInterval)[d longLongValue];
+          NSDate *clockOut = [NSDate dateWithTimeIntervalSince1970:ts];
+          gPopoverVC.clockOutTime.dateValue = clockOut;
+      }
     });
 }
 
@@ -158,8 +216,12 @@ void runMenuBarApp(MenuActionCallback callback,
         *responseOut = onMenuResponse;
 
     NSString *tz = [NSTimeZone localTimeZone].name;
-    NSString *action = [NSString stringWithFormat:@"timezone"];
-    NSString *params = [NSString stringWithFormat:@"%@", tz];
+    NSDate *date = [NSDate date];
+    NSTimeInterval ts = [date timeIntervalSince1970];
+
+    NSString *action = [NSString stringWithFormat:@"startup"];
+    NSString *params =
+        [NSString stringWithFormat:@"%@|%ld|%d|%d", tz, (long)ts, 8, 0];
     callback([action UTF8String], [params UTF8String]);
 
     [NSApplication sharedApplication];

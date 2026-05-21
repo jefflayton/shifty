@@ -16,15 +16,14 @@ fn onMenuAction(action: [*c]const u8, params: [*c]const u8) callconv(.c) void {
         std.debug.print("open!\n", .{});
     } else {
         const handler = router.get(action_slice) orelse return;
-        const result = handler(params_slice);
-        if (result.len > 0) {
+        var result_buf: [256]u8 = undefined;
+        const len = handler(params_slice, &result_buf);
+        if (len > 0) {
             if (gResponse) |resp| {
                 var ack_buf: [256]u8 = undefined;
-                var result_buf: [256]u8 = undefined;
                 const ack = std.fmt.bufPrintZ(&ack_buf, "{s}_ack", .{action_slice}) catch return;
-                const result_z = std.fmt.bufPrintZ(&result_buf, "{s}", .{result}) catch return;
-                std.debug.print("{s}:{d}: ack={s} result={s}\n", .{ @src().file, @src().line, ack, result_z });
-                resp(ack.ptr, result_z.ptr);
+                result_buf[len] = 0;
+                resp(ack.ptr, result_buf[0..len :0].ptr);
             }
         }
     }
