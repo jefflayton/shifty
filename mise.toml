@@ -3,5 +3,5 @@ watchexec = "latest"
 zig = "0.16.0"
 zls = "0.16.0"
 
-[tasks.watch]
-run = "watchexec -e h,m,zig --restart -- zig build run"
+[tasks.build]
+run = "zig build"
