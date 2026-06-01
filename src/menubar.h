@@ -1,3 +1,9 @@
-typedef void (*MenuActionCallback)(const char *action, const char *params);
-typedef void (*MenuActionResponse)(const char *route, const char *data);
-void runMenuBarApp(MenuActionCallback callback, MenuActionResponse *response);
+#ifndef MENUBAR_H
+#define MENUBAR_H
+
+void swiftuiInit(void);
+void swiftuiRun(void);
+
+void zigClockIn(long ts);
+
+#endif // MENUBAR_H
