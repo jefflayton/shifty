@@ -1,4 +1,3 @@
-// const builtin = @import("builtin");
 const std = @import("std");
 const Build = std.Build;
 
@@ -21,6 +20,7 @@ pub fn build(b: *Build) void {
     };
     const zig_obj = b.addObject(obj_options);
 
+    const shifty_bin_path = b.path("platforms/macos/Shifty.app/Contents/MacOS/shifty");
     const menubar_path = b.path("src/menubar.swift");
     const menubar_obj_path = b.path("zig-out/menubar.o");
 
@@ -44,13 +44,14 @@ pub fn build(b: *Build) void {
     });
     link.addFileArg(menubar_obj_path);
     link.addFileArg(zig_obj.getEmittedBin());
-    link.addArgs(&.{ "-o", "zig-out/bin/shifty" });
+    link.addArg("-o");
+    link.addFileArg(shifty_bin_path);
     link.step.dependOn(&swift_obj.step);
     link.step.dependOn(&zig_obj.step);
 
     b.getInstallStep().dependOn(&link.step);
 
-    const run_cmd = b.addSystemCommand(&.{"zig-out/bin/shifty"});
+    const run_cmd = b.addSystemCommand(&.{shifty_bin_path.src_path.sub_path});
     const run_step = b.step("run", "Run executable");
     run_cmd.step.dependOn(&link.step);
     run_step.dependOn(&run_cmd.step);
