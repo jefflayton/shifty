@@ -3,7 +3,8 @@
 
 void swiftuiInit(void);
 void swiftuiRun(void);
+void swiftuiSetClockOut(long ts);
 
-void zigClockIn(long ts);
+long zigClockIn(long ts);
 
 #endif // MENUBAR_H
