@@ -2,5 +2,7 @@
 zig-out
 zig-pkg
 platforms/macos/Shifty.app/Contents/MacOS/shifty
+platforms/macos/Applications
 .DS_Store
 *.o
+*.dmg
