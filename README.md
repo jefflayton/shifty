@@ -8,6 +8,15 @@ The backend logic and builds are done with Zig 0.16. The UI is built with Swift 
 
 Download `Shifty.dmg` from the latest release in [Releases](https://codeberg.org/jefflayton/shifty/releases).
 
+The application is currently not properly signed. 
+
+Go to `System Settings -> Privacy & Security -> Security` and click allow for `Shifty.app`.
+
+Or, in your terminal run: 
+```sh
+xattr -dr com.apple.quarantine /Applications/Shifty.app
+```
+
 ## Development
 ### Requirements
 

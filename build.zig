@@ -49,13 +49,19 @@ pub fn build(b: *Build) void {
     link.step.dependOn(&swift_obj.step);
     link.step.dependOn(&zig_obj.step);
 
+    const codesign = b.addSystemCommand(&.{
+        "codesign", "--force", "--deep", "--sign", "-", // "-" = ad-hoc identity
+    });
+    codesign.addFileArg(bundle_path);
+    codesign.step.dependOn(&link.step);
+
     const app_symlink = b.addSystemCommand(&.{
         "ln",
         "-sf",
         "/Applications",
     });
     app_symlink.addFileArg(macos_path.join(b.allocator, "Applications") catch @panic("Out of Memory"));
-    app_symlink.step.dependOn(&link.step);
+    app_symlink.step.dependOn(&codesign.step);
 
     const dmg = b.addSystemCommand(&.{
         "hdiutil",    "create",
