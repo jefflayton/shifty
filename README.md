@@ -1,38 +1,36 @@
 # Shifty
 
-Work-in-progress time tracker and shift calculator for macOS. Lives in your menu bar.
+Work-in-progress time tracker and shift calculator for macOS that lives in your menu bar.
 
-Built with Zig 0.16. The UI is a native macOS menu bar app (Obj-C/Swift bridge via `menubar.h/m`). Core logic — clock-in/out, timezone handling, time math — is written in Zig.
+The backend logic and builds are done with Zig 0.16. The UI is built with Swift and SwiftUI.
 
-## Requirements
+## Installation
+
+Download `Shifty.dmg` from the latest release in [Releases](https://codeberg.org/jefflayton/shifty/releases).
+
+## Development
+### Requirements
 
 - [mise](https://mise.jdx.dev/) (manages Zig, ZLS, watchexec)
 - macOS (only platform supported right now)
 
-## Getting started
+### Getting started
 
 Trust the mise config, then run the watcher:
 
 ```sh
 mise trust mise.toml
-mise run watch
+mise watch -w src/ build run
 ```
 
 The `watch` task rebuilds and reruns on any `.zig`, `.m`, or `.h` file change.
 
-## Project layout
+### Building
 
-```
-src/
-  main.zig      # entry point, menu bar event loop
-  router.zig    # maps menu actions to handlers
-  state.zig     # global app state (timezone, etc.)
-  time.zig      # time math
-  menubar.h/m   # Obj-C menu bar bridge
-platforms/
-  macos/        # macOS app bundle
+You can build the app on macOS with:
+
+```sh
+mise run build
 ```
 
-## Status
-
-Early. Clock-in and timezone actions wire up end-to-end. Shift calculation and persistence are next.
+This generates `Shifty.app` in `platform/macos` and `Shifty.dmg` in the project root.
