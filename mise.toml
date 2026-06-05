@@ -1,3 +1,6 @@
+[env]
+SPARKLE_VERSION = "2.9.2"
+
 [tools]
 watchexec = "latest"
 zig = "0.16.0"

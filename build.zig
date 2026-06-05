@@ -6,6 +6,7 @@ pub fn build(b: *Build) void {
     const macos_path = b.path("platforms/macos");
     const bundle_path = macos_path.join(b.allocator, "Shifty.app") catch @panic("Out of Memory");
     const bin_path = bundle_path.join(b.allocator, "Contents/MacOS/shifty") catch @panic("Out of Memory");
+    const frameworks_path = b.pathFromRoot("platforms/macos/Shifty.app/Contents/Frameworks");
     const menubar_path = b.path("src/menubar.swift");
     const menubar_obj_path = b.path("zig-out/menubar.o");
 
@@ -29,38 +30,72 @@ pub fn build(b: *Build) void {
 
     const swift_obj = b.addSystemCommand(&.{
         "swiftc",
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        "@executable_path/../Frameworks",
+        "-F",
+        frameworks_path,
+        "-framework",
+        "Sparkle",
         "-parse-as-library",
         "-emit-object",
     });
+    // swift_obj.addArgs(&.{
+    // });
     swift_obj.addFileArg(menubar_path);
     swift_obj.addArg("-o");
     swift_obj.addFileArg(menubar_obj_path);
 
     const link = b.addSystemCommand(&.{
         "swiftc",
-        "-framework", "SwiftUI", // Required Frameworks
-        "-framework", "AppKit",
-        "-framework", "Foundation",
+        "-Xlinker",
+        "-rpath",
+        "-Xlinker",
+        "@executable_path/../Frameworks",
+        "-F",
+        frameworks_path,
+        "-framework",
+        "Sparkle",
+        // "-F"
     });
+    // link.addFileArg(frameworks_path);
+    // link.addArgs(&.{
+    // });
     link.addFileArg(menubar_obj_path);
     link.addFileArg(zig_obj.getEmittedBin());
     link.addArg("-o");
     link.addFileArg(bin_path);
+
     link.step.dependOn(&swift_obj.step);
     link.step.dependOn(&zig_obj.step);
 
+    // Sign inside-out, WITHOUT --deep. --deep would re-sign (and clobber)
+    // Sparkle.framework's own valid signature; Sparkle then refuses updates.
+    // Sign the Mach-O binary first, then seal the outer .app on top of it.
+    const codesign_bin = b.addSystemCommand(&.{
+        "codesign", "--force", "--options=runtime",
+        "--sign",   "-", // "-" = ad-hoc identity
+    });
+    codesign_bin.addFileArg(bin_path);
+    codesign_bin.step.dependOn(&link.step);
+
     const codesign = b.addSystemCommand(&.{
-        "codesign", "--force", "--deep", "--sign", "-", // "-" = ad-hoc identity
+        "codesign", "--force", "--options=runtime",
+        "--sign",   "-", // "-" = ad-hoc identity
     });
     codesign.addFileArg(bundle_path);
-    codesign.step.dependOn(&link.step);
+    codesign.step.dependOn(&codesign_bin.step);
 
     const app_symlink = b.addSystemCommand(&.{
         "ln",
         "-sf",
         "/Applications",
     });
-    app_symlink.addFileArg(macos_path.join(b.allocator, "Applications") catch @panic("Out of Memory"));
+    app_symlink.addFileArg(
+        macos_path.join(b.allocator, "Applications") catch @panic("Out of Memory"),
+    );
+
     app_symlink.step.dependOn(&codesign.step);
 
     const dmg = b.addSystemCommand(&.{
@@ -75,6 +110,7 @@ pub fn build(b: *Build) void {
     });
     dmg.addFileArg(dmg_path);
     dmg.step.dependOn(&app_symlink.step);
+    dmg.step.dependOn(&codesign.step);
 
     b.getInstallStep().dependOn(&dmg.step);
 
