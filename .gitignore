@@ -1,10 +1,7 @@
+.cache
 .zig-cache
 zig-out
 zig-pkg
-platforms/macos/Shifty.app/Contents/MacOS/shifty
-platforms/macos/Shifty.app/Contents/_CodeSignature
-platforms/macos/Shifty.app/Contents/Frameworks
-platforms/macos/Applications
 .DS_Store
-*.o
-*.dmg
+_site
+_dist

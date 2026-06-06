@@ -1,8 +1,6 @@
 on:
   release:
     types: [published]
-env:
-  SPARKLE_VERSION: 2.9.2
 
 jobs:
   build:
@@ -11,48 +9,34 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Sparkle
-        run: |
-          mkdir -p .actions/sparkle
-
-          curl -L https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz -o .actions/sparkle/sparkle.tar.xz
-
-          tar -xf .actions/sparkle/sparkle.tar.xz -C .actions/sparkle
-
-          rm -rf platforms/macos/Shifty.app/Contents/Frameworks/Sparkle.framework
-          mv .actions/sparkle/Sparkle.framework platforms/macos/Shifty.app/Contents/Frameworks
-
       - name: Update Version
         run: |
           VERSION="${{ forgejo.ref_name }}"
           VERSION="${VERSION#v}"
 
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
-            platforms/macos/Shifty.app/Contents/Info.plist
+            platforms/macos/Info.plist
 
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
-            platforms/macos/Shifty.app/Contents/Info.plist
+            platforms/macos/Info.plist
 
       - name: Build
-        run: |
-          zig build
-
-      - run: mkdir -p _site
+        run: zig build
 
       - name: Upload DMG
         run: |
           curl -X POST \
             -H "Authorization: token ${{ forgejo.token }}" \
             -H "Content-Type: application/octet-stream" \
-            --data-binary @Shifty.dmg \
+            --data-binary @zig-out/Shifty.dmg \
             "${{ forgejo.api_url }}/repos/${{ forgejo.repository }}/releases/${{ forgejo.event.release.id }}/assets?name=Shifty.dmg"
 
       - name: Generate appcast.xml
         run: |
-          mkdir -p _dist
-          cp Shifty.dmg _dist/
+          mkdir -p _dist _site
+          cp zig-out/Shifty.dmg _dist/
 
-          .actions/sparkle/bin/generate_appcast \
+          .cache/sparkle/bin/generate_appcast \
             --download-url-prefix "https://codeberg.org/${{ forgejo.repository }}/releases/download/${{ forgejo.event.release.tag_name }}/" \
             -o _site/appcast.xml _dist
 
