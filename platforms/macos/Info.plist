@@ -9,13 +9,14 @@
   <string>shifty</string>
   <key>CFBundleIdentifier</key>
   <string>com.jeffreylayton.shifty</string>
-  <key>CFBundleVersion</key>
-  <string>1.0.0</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>LSUIElement</key>
   <true/>
+  <!-- Sparkle -->
+  <key>SUPublicEDKey</key>
+  <string>aofremTRZ16Rh0CppFMHCNNPB7Phsb8EGbppCRn7j4w=</string>
 </dict>
 </plist>

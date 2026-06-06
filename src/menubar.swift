@@ -1,6 +1,17 @@
 import AppKit
 import Foundation
+import Sparkle
 import SwiftUI
+
+// This view model class publishes when new updates can be checked by the user
+final class CheckForUpdatesViewModel: ObservableObject {
+  @Published var canCheckForUpdates = false
+
+  init(updater: SPUUpdater) {
+    updater.publisher(for: \.canCheckForUpdates)
+      .assign(to: &$canCheckForUpdates)
+  }
+}
 
 var globalState: GlobalState? = nil
 
@@ -10,11 +21,21 @@ class GlobalState: ObservableObject {
 }
 
 struct PopoverView: View {
+  @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
+  private let updater: SPUUpdater
+
   @StateObject var state = GlobalState.shared
   @State var clockInTime = Date()
   @State var shiftLength = 8
   @State var lunchMins = 0.0
   @State var quitHovered = false
+
+  init(updater: SPUUpdater) {
+    self.updater = updater
+
+    // Create our view model for our CheckForUpdatesView
+    self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
+  }
 
   func onClockIn() {
     let inTs = self.clockInTime.timeIntervalSince1970
@@ -70,6 +91,8 @@ struct PopoverView: View {
       )
 
       Divider()
+      Button("Check for Updates", action: updater.checkForUpdates)
+        .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
       Button {
         NSApp.terminate(nil)
       } label: {
@@ -105,7 +128,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var popover: NSPopover!
   var item: NSStatusItem!
 
+  private var updateController: SPUStandardUpdaterController!
+
   func applicationDidFinishLaunching(_ notification: Notification) {
+    updateController = SPUStandardUpdaterController(
+      startingUpdater: true,
+      updaterDelegate: nil,
+      userDriverDelegate: nil
+    )
+
     NSApp.setActivationPolicy(.accessory)
 
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -117,7 +148,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     popover = NSPopover()
     popover.contentViewController = NSHostingController(
-      rootView: PopoverView())
+      rootView: PopoverView(updater: updateController.updater))
     popover.behavior = .transient
   }
 

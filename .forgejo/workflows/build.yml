@@ -1,0 +1,47 @@
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Update Version
+        run: |
+          VERSION="${{ forgejo.ref_name }}"
+          VERSION="${VERSION#v}"
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
+            platforms/macos/Info.plist
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
+            platforms/macos/Info.plist
+
+      - name: Build
+        run: zig build
+
+      - name: Upload DMG
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ forgejo.token }}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @zig-out/Shifty.dmg \
+            "${{ forgejo.api_url }}/repos/${{ forgejo.repository }}/releases/${{ forgejo.event.release.id }}/assets?name=Shifty.dmg"
+
+      - name: Generate appcast.xml
+        run: |
+          mkdir -p _dist _site
+          cp zig-out/Shifty.dmg _dist/
+
+          .cache/sparkle/bin/generate_appcast \
+            --download-url-prefix "https://codeberg.org/${{ forgejo.repository }}/releases/download/${{ forgejo.event.release.tag_name }}/" \
+            -o _site/appcast.xml _dist
+
+      - uses: https://codeberg.org/git-pages/action@v2
+        with:
+          site: "https://${{ forgejo.repository_owner }}.codeberg.page/shifty/"
+          token: ${{ forgejo.token }}
+          source: _site/
