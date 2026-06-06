@@ -15,11 +15,8 @@ pub fn build(b: *Build) void {
     const frameworks = b.path(bundle ++ "/Frameworks");
     const macos = "platforms/macos";
 
-    // Setup .app
-    const inst_app = b.addInstallDirectory(.{
-        .source_dir = b.path(macos ++ "/template/Shifty.app"),
-        .install_dir = .prefix,
-        .install_subdir = "Shifty.app",
+    const inst_app = b.addSystemCommand(&.{
+        "mkdir", "-p", bundle ++ "/MacOS", bundle ++ "/Frameworks",
     });
 
     // Install plist
