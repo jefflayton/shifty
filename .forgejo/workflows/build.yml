@@ -33,8 +33,11 @@ jobs:
             --download-url-prefix "https://jefflayton.codeberg.page/shifty/" \
             -o _site/appcast.xml _site
 
-      - uses: https://codeberg.org/git-pages/action@v2
-        with:
-          site: "https://${{ forgejo.repository_owner }}.codeberg.page/shifty/"
-          token: ${{ forgejo.token }}
-          source: _site/
+      - name: Deploy to Pages
+        run: |
+          cd _site
+          git init -q
+          git checkout -q -b pages
+          git add -A
+          git -c user.name=ci -c user.email=ci@shifty commit -q -m "deploy ${{ forgejo.ref_name }}"
+          git push -qf "https://${{ forgejo.token }}@codeberg.org/${{ forgejo.repository }}.git" pages
