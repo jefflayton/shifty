@@ -1,22 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key>
-  <string>Shifty</string>
-  <key>CFBundleExecutable</key>
-  <string>shifty</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.jeffreylayton.shifty</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>LSUIElement</key>
-  <true/>
-  <!-- Sparkle -->
-  <key>SUPublicEDKey</key>
-  <string>aofremTRZ16Rh0CppFMHCNNPB7Phsb8EGbppCRn7j4w=</string>
+	<key>CFBundleExecutable</key>
+	<string>shifty</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.jeffreylayton.shifty</string>
+	<key>CFBundleName</key>
+	<string>Shifty</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://jefflayton.codeberg.page/shifty/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>aofremTRZ16Rh0CppFMHCNNPB7Phsb8EGbppCRn7j4w=</string>
 </dict>
 </plist>

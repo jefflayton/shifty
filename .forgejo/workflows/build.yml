@@ -1,6 +1,7 @@
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 jobs:
   build:
@@ -23,22 +24,14 @@ jobs:
       - name: Build
         run: zig build
 
-      - name: Upload DMG
-        run: |
-          curl -X POST \
-            -H "Authorization: token ${{ forgejo.token }}" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @zig-out/Shifty.dmg \
-            "${{ forgejo.api_url }}/repos/${{ forgejo.repository }}/releases/${{ forgejo.event.release.id }}/assets?name=Shifty.dmg"
-
       - name: Generate appcast.xml
         run: |
-          mkdir -p _dist _site
-          cp zig-out/Shifty.dmg _dist/
+          mkdir -p _site
+          cp zig-out/Shifty.dmg _site/
 
           .cache/sparkle/bin/generate_appcast \
-            --download-url-prefix "https://codeberg.org/${{ forgejo.repository }}/releases/download/${{ forgejo.event.release.tag_name }}/" \
-            -o _site/appcast.xml _dist
+            --download-url-prefix "https://jefflayton.codeberg.page/shifty/" \
+            -o _site/appcast.xml _site
 
       - uses: https://codeberg.org/git-pages/action@v2
         with:
