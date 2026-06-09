@@ -2,6 +2,8 @@ const std = @import("std");
 const Build = std.Build;
 
 pub fn build(b: *Build) void {
+    _ = b.step("test", "Run tests");
+
     const target = b.resolveTargetQuery(.{
         .os_tag = .macos,
         .cpu_arch = .aarch64,

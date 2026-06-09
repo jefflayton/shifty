@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stamp dev version
+        run: |
+          V="0.0.0-ci.${{ forgejo.run_number }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" platforms/macos/Info.plist
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test
+
+      - name: Upload dmg artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: Shifty-ci-${{ forgejo.run_number }}
+          path: zig-out/Shifty.dmg
+          if-no-files-found: warn
