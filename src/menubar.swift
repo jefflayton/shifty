@@ -25,13 +25,13 @@ struct PopoverView: View {
 
   @Bindable var model: ShiftModel
   @State var quitHovered = false
-  var clockOutTime: Date {
+  var clockOut: Date {
 
     let inTs = self.model.clockInTime.timeIntervalSince1970
     let outTs = zigClockIn(
       shift: self.model.shiftLength,
       in_ts: Int(inTs),
-      lunch: Int(self.model.lunchMins),
+      lunch: Int(self.model.lunchMins)
     )
 
     return Date(timeIntervalSince1970: TimeInterval(outTs))
@@ -77,7 +77,7 @@ struct PopoverView: View {
 
       HStack {
         Text("Clock Out:").bold()
-        Text(clockOutTime, style: .time)
+        Text(clockOut, style: .time)
       }.padding()
 
       Divider()
@@ -129,6 +129,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     NSApp.setActivationPolicy(.accessory)
 
+    setupMenu()
+
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item.button?.image = NSImage(
       systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
@@ -146,24 +148,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if popover.isShown {
       popover.close()
     } else {
+      NSApp.activate(ignoringOtherApps: true)
       popover.show(
         relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.maxY)
     }
   }
 }
 
-struct ZigApp: App {
-  @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+func setupMenu() {
+  let mainMenu = NSMenu()
 
-  var body: some Scene {}
+  let appItem = NSMenuItem()
+  mainMenu.addItem(appItem)
+  let appMenu = NSMenu()
+  appItem.submenu = appMenu
+  appMenu.addItem(
+    withTitle: "Quit Shifty",
+    action: #selector(NSApplication.terminate(_:)),
+    keyEquivalent: "q")
+
+  let editItem = NSMenuItem()
+  editItem.title = "Edit"
+  mainMenu.addItem(editItem)
+  let editMenu = NSMenu(title: "Edit")
+  editItem.submenu = editMenu
+
+  editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+  editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+  editMenu.addItem(.separator())
+  editMenu.addItem(
+    withTitle: "Cut", action: #selector(NSText.cut(_:)),
+    keyEquivalent:
+      "x")
+  editMenu.addItem(
+    withTitle: "Copy", action: #selector(NSText.copy(_:)),
+    keyEquivalent:
+      "c")
+  editMenu.addItem(
+    withTitle: "Paste", action: #selector(NSText.paste(_:)),
+    keyEquivalent: "v")
+  editMenu.addItem(
+    withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
+    keyEquivalent: "a")
+
+  NSApp.mainMenu = mainMenu
 }
+
+private var appDelegate: AppDelegate?
 
 @_cdecl("swiftuiInit")
 public func swiftuiInit() {}
 
 @_cdecl("swiftuiRun")
 public func swiftuiRun() {
-  ZigApp.main()
+  let app = NSApplication.shared
+  let delegate = AppDelegate()
+  appDelegate = delegate  // retain
+  app.delegate = delegate
+  app.run()
 }
 
 @_silgen_name("zigClockIn")
