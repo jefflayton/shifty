@@ -13,37 +13,35 @@ final class CheckForUpdatesViewModel: ObservableObject {
   }
 }
 
-var globalState: GlobalState? = nil
-
-class GlobalState: ObservableObject {
-  static let shared = GlobalState()
-  @Published var clockOutTime: Date? = nil
+@Observable class ShiftModel {
+  var clockInTime = Date()
+  var shiftLength = 8
+  var lunchMins = 0.0
 }
 
 struct PopoverView: View {
   @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
   private let updater: SPUUpdater
 
-  @StateObject var state = GlobalState.shared
-  @State var clockInTime = Date()
-  @State var shiftLength = 8
-  @State var lunchMins = 0.0
+  @Bindable var model: ShiftModel
   @State var quitHovered = false
+  var clockOut: Date {
 
-  init(updater: SPUUpdater) {
+    let inTs = self.model.clockInTime.timeIntervalSince1970
+    let outTs = zigClockIn(
+      shift: self.model.shiftLength,
+      in_ts: Int(inTs),
+      lunch: Int(self.model.lunchMins)
+    )
+
+    return Date(timeIntervalSince1970: TimeInterval(outTs))
+  }
+  init(updater: SPUUpdater, model: ShiftModel) {
     self.updater = updater
+    self.model = model
 
     // Create our view model for our CheckForUpdatesView
     self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
-  }
-
-  func onClockIn() {
-    let inTs = self.clockInTime.timeIntervalSince1970
-    let outTs = zigClockIn(shift: shiftLength, in_ts: Int(inTs), lunch: Int(lunchMins))
-
-    DispatchQueue.main.async {
-      self.state.clockOutTime = Date(timeIntervalSince1970: TimeInterval(outTs))
-    }
   }
 
   var body: some View {
@@ -55,40 +53,32 @@ struct PopoverView: View {
       HStack {
         Text("Shift Length").bold()
         Spacer()
-        TextField("Shift Length", value: $shiftLength, format: .number)
+        TextField("Shift Length", value: $model.shiftLength, format: .number)
           .frame(width: 20)
         Text(" hr")
       }
 
-      DatePicker("Clock In", selection: $clockInTime, displayedComponents: .hourAndMinute)
+      DatePicker("Clock In", selection: $model.clockInTime, displayedComponents: .hourAndMinute)
 
       HStack {
         Text("Lunch").bold()
         Spacer()
-        TextField("Lunch", value: $lunchMins, format: .number)
+        TextField("Lunch", value: $model.lunchMins, format: .number)
           .frame(width: 40)
         Text(" min")
       }.padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
 
-      Slider(value: $lunchMins, in: 0...120, step: 1) {
+      Slider(value: $model.lunchMins, in: 0...120, step: 1) {
       } minimumValueLabel: {
         Text("0")
       } maximumValueLabel: {
         Text("120")
       }
 
-      if let clockOut = self.state.clockOutTime {
-        HStack {
-          Text("Clock Out:").bold()
-          Text(clockOut, style: .time)
-        }.padding()
-      }
-
-      Button(
-        "Clock In",
-        role: .none,
-        action: { onClockIn() }
-      )
+      HStack {
+        Text("Clock Out:").bold()
+        Text(clockOut, style: .time)
+      }.padding()
 
       Divider()
       Button("Check for Updates", action: updater.checkForUpdates)
@@ -124,9 +114,9 @@ struct PopoverView: View {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-  @StateObject private var globalState = GlobalState.shared
   var popover: NSPopover!
   var item: NSStatusItem!
+  let model = ShiftModel()
 
   private var updateController: SPUStandardUpdaterController!
 
@@ -139,6 +129,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     NSApp.setActivationPolicy(.accessory)
 
+    setupMenu()
+
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     item.button?.image = NSImage(
       systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
@@ -148,7 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     popover = NSPopover()
     popover.contentViewController = NSHostingController(
-      rootView: PopoverView(updater: updateController.updater))
+      rootView: PopoverView(updater: updateController.updater, model: model))
     popover.behavior = .transient
   }
 
@@ -156,24 +148,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if popover.isShown {
       popover.close()
     } else {
+      NSApp.activate(ignoringOtherApps: true)
       popover.show(
         relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.maxY)
     }
   }
 }
 
-struct ZigApp: App {
-  @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+func setupMenu() {
+  let mainMenu = NSMenu()
 
-  var body: some Scene {}
+  let appItem = NSMenuItem()
+  mainMenu.addItem(appItem)
+  let appMenu = NSMenu()
+  appItem.submenu = appMenu
+  appMenu.addItem(
+    withTitle: "Quit Shifty",
+    action: #selector(NSApplication.terminate(_:)),
+    keyEquivalent: "q")
+
+  let editItem = NSMenuItem()
+  editItem.title = "Edit"
+  mainMenu.addItem(editItem)
+  let editMenu = NSMenu(title: "Edit")
+  editItem.submenu = editMenu
+
+  editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+  editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+  editMenu.addItem(.separator())
+  editMenu.addItem(
+    withTitle: "Cut", action: #selector(NSText.cut(_:)),
+    keyEquivalent:
+      "x")
+  editMenu.addItem(
+    withTitle: "Copy", action: #selector(NSText.copy(_:)),
+    keyEquivalent:
+      "c")
+  editMenu.addItem(
+    withTitle: "Paste", action: #selector(NSText.paste(_:)),
+    keyEquivalent: "v")
+  editMenu.addItem(
+    withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
+    keyEquivalent: "a")
+
+  NSApp.mainMenu = mainMenu
 }
+
+private var appDelegate: AppDelegate?
 
 @_cdecl("swiftuiInit")
 public func swiftuiInit() {}
 
 @_cdecl("swiftuiRun")
 public func swiftuiRun() {
-  ZigApp.main()
+  let app = NSApplication.shared
+  let delegate = AppDelegate()
+  appDelegate = delegate  // retain
+  app.delegate = delegate
+  app.run()
 }
 
 @_silgen_name("zigClockIn")

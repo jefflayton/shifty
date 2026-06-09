@@ -16,6 +16,8 @@
 	<string>0.0.0</string>
 	<key>LSUIElement</key>
 	<true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>SUFeedURL</key>

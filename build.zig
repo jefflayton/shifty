@@ -7,6 +7,7 @@ pub fn build(b: *Build) void {
     const target = b.resolveTargetQuery(.{
         .os_tag = .macos,
         .cpu_arch = .aarch64,
+        .os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } },
     });
     const optimize = b.standardOptimizeOption(.{});
 
@@ -52,6 +53,8 @@ pub fn build(b: *Build) void {
     const menubar_obj_path = b.path(".zig-cache/menubar.o");
     const swift_obj = b.addSystemCommand(&.{
         "swiftc",
+        "-target",
+        "arm64-apple-macos15.0",
         "-Xlinker",
         "-rpath",
         "-Xlinker",
@@ -72,6 +75,8 @@ pub fn build(b: *Build) void {
 
     const link = b.addSystemCommand(&.{
         "swiftc",
+        "-target",
+        "arm64-apple-macos15.0",
         "-Xlinker",
         "-rpath",
         "-Xlinker",
