@@ -22,7 +22,7 @@ pub fn build(b: *Build) void {
     });
 
     // Install plist
-    const inst_plist = b.addInstallFile(
+    const inst_info_plist = b.addInstallFile(
         b.path(macos ++ "/Info.plist"),
         "Shifty.app/Contents/Info.plist",
     );
@@ -89,21 +89,23 @@ pub fn build(b: *Build) void {
     link.addFileArg(bin);
     link.step.dependOn(&swift_obj.step);
     link.step.dependOn(&inst_app.step);
-    link.step.dependOn(&inst_plist.step);
+    link.step.dependOn(&inst_info_plist.step);
 
     // Sign inside-out, WITHOUT --deep. --deep would re-sign (and clobber)
     // Sparkle.framework's own valid signature; Sparkle then refuses updates.
     // Sign the Mach-O binary first, then seal the outer .app on top of it.
     const codesign_bin = b.addSystemCommand(&.{
         "codesign", "--force", "--options=runtime",
-        "--sign", "-", // "-" = ad-hoc identity
+        "--sign",         "-", // "-" = ad-hoc identity
+        "--entitlements", macos ++ "/entitlements.plist",
     });
     codesign_bin.addFileArg(bin);
     codesign_bin.step.dependOn(&link.step);
 
     const codesign = b.addSystemCommand(&.{
         "codesign", "--force", "--options=runtime",
-        "--sign", "-", // "-" = ad-hoc identity
+        "--sign",         "-", // "-" = ad-hoc identity
+        "--entitlements", macos ++ "/entitlements.plist",
         app,
     });
     codesign.step.dependOn(&codesign_bin.step);
