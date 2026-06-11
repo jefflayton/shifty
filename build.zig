@@ -65,6 +65,8 @@ pub fn build(b: *Build) void {
     swift_obj.addArgs(&.{
         "-framework",
         "Sparkle",
+        "-import-objc-header",
+        "src/shifty.h",
         "-parse-as-library",
         "-emit-object",
     });
@@ -87,6 +89,8 @@ pub fn build(b: *Build) void {
     link.addArgs(&.{
         "-framework",
         "Sparkle",
+        "-import-objc-header",
+        "src/shifty.h",
     });
     link.addFileArg(menubar_obj_path);
     link.addFileArg(zig_obj.getEmittedBin());

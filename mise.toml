@@ -8,3 +8,6 @@ zls = "0.16.0"
 
 [tasks.build]
 run = "zig build"
+
+[tasks.build-run]
+run = "zig build run"

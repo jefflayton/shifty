@@ -13,10 +13,29 @@ final class CheckForUpdatesViewModel: ObservableObject {
   }
 }
 
+class Interval: Identifiable {
+  let id = UUID()
+  var inDate: Date
+  var outDate: Date
+
+  var isValid: Bool { inDate < outDate }
+
+  init() {
+    let calendar = Calendar.current
+    self.inDate = Date()
+    if let newDate = calendar.date(byAdding: .hour, value: 1, to: self.inDate) {
+      self.outDate = newDate
+    } else {
+      self.outDate = Date()
+    }
+  }
+}
+
 @Observable class ShiftModel {
   var clockInTime = Date()
   var shiftLength = 8
   var lunchMins = 0.0
+  var breaks: [Interval] = []
 }
 
 struct PopoverView: View {
@@ -25,17 +44,28 @@ struct PopoverView: View {
 
   @Bindable var model: ShiftModel
   @State var quitHovered = false
-  var clockOut: Date {
 
-    let inTs = self.model.clockInTime.timeIntervalSince1970
-    let outTs = zigClockIn(
-      shift: self.model.shiftLength,
-      in_ts: Int(inTs),
-      lunch: Int(self.model.lunchMins)
-    )
+  var clockOut: Date {
+    let cBreaks = model.breaks.map { brk in
+      ShiftInterval(
+        in_ts: Int64(brk.inDate.timeIntervalSince1970),
+        out_ts: Int64(brk.outDate.timeIntervalSince1970),
+      )
+    }
+
+    let inTs = model.clockInTime.timeIntervalSince1970
+    let outTs = cBreaks.withUnsafeBufferPointer { buf in
+      clockIn(
+        Int64(model.shiftLength),
+        Int64(inTs),
+        buf.baseAddress,
+        buf.count
+      )
+    }
 
     return Date(timeIntervalSince1970: TimeInterval(outTs))
   }
+
   init(updater: SPUUpdater, model: ShiftModel) {
     self.updater = updater
     self.model = model
@@ -52,7 +82,6 @@ struct PopoverView: View {
 
       HStack {
         Text("Shift Length").bold()
-        Spacer()
         TextField("Shift Length", value: $model.shiftLength, format: .number)
           .frame(width: 20)
         Text(" hr")
@@ -61,18 +90,34 @@ struct PopoverView: View {
       DatePicker("Clock In", selection: $model.clockInTime, displayedComponents: .hourAndMinute)
 
       HStack {
-        Text("Lunch").bold()
-        Spacer()
-        TextField("Lunch", value: $model.lunchMins, format: .number)
-          .frame(width: 40)
-        Text(" min")
-      }.padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
+        Text("Breaks").bold()
+        Button(action: { model.breaks.append(Interval()) }) {
+          Image(systemName: "plus")
+        }
+      }
+      .padding(.vertical, 4)
 
-      Slider(value: $model.lunchMins, in: 0...120, step: 1) {
-      } minimumValueLabel: {
-        Text("0")
-      } maximumValueLabel: {
-        Text("120")
+      ForEach($model.breaks) { $brk in
+        HStack {
+          DatePicker("", selection: $brk.inDate, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+          DatePicker("", selection: $brk.outDate, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+          Button {
+            let id = brk.id
+            model.breaks.removeAll { $0.id == id }
+          } label: {
+            Image(systemName: "trash")
+          }
+          .buttonStyle(.borderless)
+        }
+        if !brk.isValid {
+          HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+            Text("Invalid break times")
+          }
+          .foregroundStyle(.red)
+        }
       }
 
       HStack {
@@ -109,7 +154,7 @@ struct PopoverView: View {
       .padding(.horizontal, 4)
     }
     .padding()
-    .frame(width: 200)
+    .frame(width: 250)
   }
 }
 
@@ -207,6 +252,3 @@ public func swiftuiRun() {
   app.delegate = delegate
   app.run()
 }
-
-@_silgen_name("zigClockIn")
-func zigClockIn(shift: Int, in_ts: Int, lunch: Int) -> Int
