@@ -180,7 +180,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let symbol =
       NSImage(
-        systemSymbolName: "clock.arrow.trianglehead.clockwise.rotte.90.path.dotted",
+        systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
         accessibilityDescription: "Shifty")
       ?? NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: "Shifty")
     item.button?.image = symbol
