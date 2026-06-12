@@ -177,10 +177,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     setupMenu()
 
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    item.button?.image = NSImage(
-      systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
-      accessibilityDescription:
-        "Shifty")
+
+    let symbol =
+      NSImage(
+        systemSymbolName: "clock.arrow.trianglehead.clockwise.rotte.90.path.dotted",
+        accessibilityDescription: "Shifty")
+      ?? NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: "Shifty")
+    item.button?.image = symbol
+
     item.button?.action = #selector(toggle)
 
     popover = NSPopover()
