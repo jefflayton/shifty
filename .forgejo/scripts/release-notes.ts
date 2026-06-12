@@ -103,11 +103,48 @@ async function buildNotes(range: string): Promise<string> {
 }
 
 type Release = { id: number; draft: boolean; tag_name: string };
+type Asset = { id: number; name: string };
 
 async function releaseByTag(tag: string): Promise<Release | null> {
     const res = await fetch(`${API}/releases/tags/${tag}`, { headers });
     if (!res.ok) return null;
     return await res.json();
+}
+
+/**
+ * Attach a file to a release as a downloadable asset. Replaces any existing
+ * asset of the same name so re-runs are idempotent.
+ */
+async function uploadAsset(releaseId: number, path: string) {
+    const name = path.split("/").pop()!;
+
+    // Auth header only — fetch sets the multipart Content-Type with boundary.
+    const auth = { Authorization: headers.Authorization };
+
+    const listRes = await fetch(`${API}/releases/${releaseId}/assets`, {
+        headers: auth,
+    });
+    if (listRes.ok) {
+        const assets: Asset[] = await listRes.json();
+        for (const a of assets.filter((a) => a.name === name)) {
+            await fetch(`${API}/releases/${releaseId}/assets/${a.id}`, {
+                method: "DELETE",
+                headers: auth,
+            });
+        }
+    }
+
+    const form = new FormData();
+    form.append("attachment", new Blob([await Deno.readFile(path)]), name);
+    const res = await fetch(
+        `${API}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`,
+        { method: "POST", headers: auth, body: form },
+    );
+    if (!res.ok) {
+        console.error(`Asset upload failed: ${res.status} ${await res.text()}`);
+        Deno.exit(1);
+    }
+    console.log(`Uploaded asset ${name}.`);
 }
 
 /**  The single rolling draft release, if one exists. */
@@ -118,8 +155,11 @@ async function existingDraft(): Promise<Release | null> {
     return list.find((r) => r.draft) ?? null;
 }
 
-/**  Publish notes as the release for TAG (creates it if missing). */
-async function publish(tag: string, body: string) {
+/**
+ * Publish notes as the release for TAG (creates it if missing).
+ * Returns the release id so assets can be attached to it.
+ */
+async function publish(tag: string, body: string): Promise<number> {
     const rel = await releaseByTag(tag);
     if (rel) {
         await fetch(`${API}/releases/${rel.id}`, {
@@ -128,14 +168,16 @@ async function publish(tag: string, body: string) {
             body: JSON.stringify({ body }),
         });
         console.log(`Updated release ${rel.id} body.`);
-    } else {
-        await fetch(`${API}/releases`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ tag_name: tag, name: tag, body }),
-        });
-        console.log(`Created release for ${tag}.`);
+        return rel.id;
     }
+    const res = await fetch(`${API}/releases`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ tag_name: tag, name: tag, body }),
+    });
+    const created: Release = await res.json();
+    console.log(`Created release for ${tag}.`);
+    return created.id;
 }
 
 /**
@@ -172,11 +214,17 @@ if (import.meta.main) {
     const args = Deno.args;
     const outIdx = args.indexOf("--out");
     const out = outIdx >= 0 ? args[outIdx + 1] : undefined;
+    const assetIdx = args.indexOf("--asset");
+    const asset = assetIdx >= 0 ? args[assetIdx + 1] : undefined;
     const doPublish = args.includes("--publish");
     const doDraft = args.includes("--draft");
 
     if (!out && !doPublish && !doDraft) {
         console.error("Pass --out <file>, --publish, and/or --draft.");
+        Deno.exit(1);
+    }
+    if (asset && !doPublish) {
+        console.error("--asset requires --publish.");
         Deno.exit(1);
     }
 
@@ -211,7 +259,8 @@ if (import.meta.main) {
             console.log(`Wrote ${out}.`);
         }
         if (doPublish) {
-            await publish(tag, notes);
+            const id = await publish(tag, notes);
+            if (asset) await uploadAsset(id, asset);
         }
     }
 }

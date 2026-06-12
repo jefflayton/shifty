@@ -87,11 +87,11 @@ jobs:
                   git -c user.name=ci -c user.email=ci@shifty commit -q -m "deploy ${{ forgejo.ref_name }}"
                   git push -qf "https://${{ secrets.RELEASE_TOKEN || forgejo.token }}@codeberg.org/${{ forgejo.repository }}.git" pages
 
-            - name: Publish release notes
+            - name: Publish release notes + dmg
               if: env.IS_RELEASE == 'true'
               env:
                   API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
                   TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
                   TAG: ${{ forgejo.ref_name }}
               run: |
-                  deno task release-notes --publish
+                  deno task release-notes --publish --asset zig-out/Shifty.dmg
