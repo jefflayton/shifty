@@ -1,82 +1,97 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to stamp for the test build (no release side-effects)"
-        default: "0.0.0-dev"
+    push:
+        tags: ["v*"]
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Version to stamp for the test build (no release side-effects)"
+                default: "0.0.0-dev"
 
 concurrency:
-  group: release-${{ forgejo.ref_name }}
-  cancel-in-progress: false
+    group: release-${{ forgejo.ref_name }}
+    cancel-in-progress: false
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  build:
-    runs-on: self-hosted
-    env:
-      IS_RELEASE: ${{ startsWith(forgejo.ref, 'refs/tags/') }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+    build:
+        runs-on: self-hosted
+        env:
+            IS_RELEASE: ${{ startsWith(forgejo.ref, 'refs/tags/') }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
 
-      - name: Resolve version
-        id: ver
-        run: |
-          case "${{ forgejo.ref }}" in
-            refs/tags/*)
-              V="${{ forgejo.ref_name }}"; V="${V#v}"
-              case "$V" in
-                [0-9]*.[0-9]*.[0-9]*) : ;;
-                *) echo "Tag '$V' is not X.Y.Z semver."; exit 1 ;;
-              esac ;;
-            *)
-              V="${{ inputs.version }}"; V="${V#v}" ;;
-          esac
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Building version $V (release=$IS_RELEASE)"
+            - name: Resolve version
+              id: ver
+              run: |
+                  case "${{ forgejo.ref }}" in
+                    refs/tags/*)
+                      V="${{ forgejo.ref_name }}"; V="${V#v}"
+                      case "$V" in
+                        [0-9]*.[0-9]*.[0-9]*) : ;;
+                        *) echo "Tag '$V' is not X.Y.Z semver."; exit 1 ;;
+                      esac ;;
+                    *)
+                      V="${{ inputs.version }}"; V="${V#v}" ;;
+                  esac
+                  echo "version=$V" >> "$GITHUB_OUTPUT"
+                  echo "Building version $V (release=$IS_RELEASE)"
 
-      - name: Stamp Info.plist
-        run: |
-          V="${{ steps.ver.outputs.version }}"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" platforms/macos/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
+            - name: Stamp Info.plist
+              run: |
+                  V="${{ steps.ver.outputs.version }}"
+                  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" platforms/macos/Info.plist
+                  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
 
-      - name: Build
-        run: zig build
+            - name: Build
+              run: zig build
 
-      - name: Upload dmg artifact (always)
-        uses: actions/upload-artifact@v3
-        with:
-          name: Shifty-${{ steps.ver.outputs.version }}-dmg
-          path: zig-out/Shifty.dmg
+            - name: Upload dmg artifact (always)
+              uses: actions/upload-artifact@v3
+              with:
+                  name: Shifty-${{ steps.ver.outputs.version }}-dmg
+                  path: zig-out/Shifty.dmg
+                  retention-days: 1
 
-      - name: Generate appcast.xml
-        run: |
-          mkdir -p _site
-          cp zig-out/Shifty.dmg _site/
-          .cache/sparkle/bin/generate_appcast \
-            --download-url-prefix "https://jefflayton.codeberg.page/shifty/" \
-            -o _site/appcast.xml _site
+            - name: Stage dmg + release notes
+              env:
+                  API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
+                  TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
+                  TAG: ${{ forgejo.ref_name }}
+              run: |
+                  mkdir -p _site
+                  cp zig-out/Shifty.dmg _site/
+                  # Notes file named after the archive -> generate_appcast embeds it.
+                  if [ "$IS_RELEASE" = "true" ]; then
+                    deno task release-notes --out _site/Shifty.md
+                  fi
 
-      - name: Upload site artifact (always)
-        uses: actions/upload-artifact@v3
-        with:
-          name: site-${{ steps.ver.outputs.version }}
-          path: _site
+            - name: Generate appcast.xml
+              run: |
+                  .cache/sparkle/bin/generate_appcast \
+                    --download-url-prefix "https://jefflayton.codeberg.page/shifty/" \
+                    -o _site/appcast.xml _site
 
-      - name: Deploy to Pages
-        if: env.IS_RELEASE == 'true'
-        run: |
-          cd _site
-          git init -q
-          git checkout -q -b pages
-          git add -A
-          git -c user.name=ci -c user.email=ci@shifty commit -q -m "deploy ${{ forgejo.ref_name }}"
-          git push -qf "https://${{ secrets.RELEASE_TOKEN || forgejo.token }}@codeberg.org/${{ forgejo.repository }}.git" pages
+            - name: Deploy to Pages
+              if: env.IS_RELEASE == 'true'
+              run: |
+                  cd _site
+                  git init -q
+                  git checkout -q -b pages
+                  git add -A
+                  git -c user.name=ci -c user.email=ci@shifty commit -q -m "deploy ${{ forgejo.ref_name }}"
+                  git push -qf "https://${{ secrets.RELEASE_TOKEN || forgejo.token }}@codeberg.org/${{ forgejo.repository }}.git" pages
+
+            - name: Publish release notes
+              if: env.IS_RELEASE == 'true'
+              env:
+                  API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
+                  TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
+                  TAG: ${{ forgejo.ref_name }}
+              run: |
+                  deno task release-notes --publish
