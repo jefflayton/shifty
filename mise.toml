@@ -2,6 +2,7 @@
 SPARKLE_VERSION = "2.9.2"
 
 [tools]
+deno = "latest"
 watchexec = "latest"
 zig = "0.16.0"
 zls = "0.16.0"

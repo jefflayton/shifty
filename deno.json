@@ -1,0 +1,8 @@
+{
+    "tasks": {
+        "release-notes": "--allow-run --allow-net --allow-env --allow-write .forgejo/scripts/release-notes.ts"
+    },
+    "fmt": {
+        "indentWidth": 4
+    }
+}
