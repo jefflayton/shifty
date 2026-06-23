@@ -2,8 +2,13 @@ import AppKit
 import Foundation
 import Sparkle
 import SwiftUI
+import UserNotifications
 
-// This view model class publishes when new updates can be checked by the user
+func log(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+  let body = items.map { "\($0)" }.joined(separator: separator)
+  print("[swift.menubar]", body, terminator: terminator)
+}
+
 final class CheckForUpdatesViewModel: ObservableObject {
   @Published var canCheckForUpdates = false
 
@@ -126,6 +131,11 @@ struct PopoverView: View {
       }.padding()
 
       Divider()
+      Button(
+        "Alarm",
+        action: {
+          Task { @MainActor in AlarmController.shared.schedule(after: 30) }
+        })
       Button("Check for Updates", action: updater.checkForUpdates)
         .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
       Button {
@@ -155,7 +165,23 @@ struct PopoverView: View {
     }
     .padding()
     .frame(width: 250)
+    .onAppear(perform: {
+      let center = UNUserNotificationCenter.current()
+      center.getNotificationSettings { settings in
+      }
+      center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+      }
+      UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) {
+        granted, error in
+        if granted {
+          log("Permission granted")
+        } else if let error = error {
+          log(error.localizedDescription)
+        }
+      }
+    })
   }
+
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -166,6 +192,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private var updateController: SPUStandardUpdaterController!
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    setupLogs()
+
     updateController = SPUStandardUpdaterController(
       startingUpdater: true,
       updaterDelegate: nil,
@@ -191,6 +219,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     popover.contentViewController = NSHostingController(
       rootView: PopoverView(updater: updateController.updater, model: model))
     popover.behavior = .transient
+
   }
 
   @objc func toggle() {
@@ -241,6 +270,16 @@ func setupMenu() {
     keyEquivalent: "a")
 
   NSApp.mainMenu = mainMenu
+}
+
+func setupLogs() {
+  let dir = "\(NSHomeDirectory())/Library/Logs/Shifty"
+  try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+  let path = "\(dir)/shifty.log"
+  freopen(path, "a+", stdout)
+  freopen(path, "a+", stderr)
+  setvbuf(stdout, nil, _IOLBF, 0)
+  setvbuf(stderr, nil, _IOLBF, 0)
 }
 
 private var appDelegate: AppDelegate?

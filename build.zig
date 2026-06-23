@@ -32,11 +32,15 @@ pub fn build(b: *Build) void {
     const inst_sparkle = installSparkle(b);
     inst_sparkle.step.dependOn(&inst_app.step);
 
+    const clean_sparkle = b.addSystemCommand(&.{
+        "rm", "-rf", bundle ++ "/Frameworks/Sparkle.framework",
+    });
+    clean_sparkle.step.dependOn(&inst_sparkle.step);
     const cp_sparkle = b.addSystemCommand(&.{
         "cp",                               "-R",
         ".cache/sparkle/Sparkle.framework", bundle ++ "/Frameworks/Sparkle.framework",
     });
-    cp_sparkle.step.dependOn(&inst_sparkle.step);
+    cp_sparkle.step.dependOn(&clean_sparkle.step); // was: inst_sparkle
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -68,9 +72,11 @@ pub fn build(b: *Build) void {
         "-import-objc-header",
         "src/shifty.h",
         "-parse-as-library",
+        "-wmo",
         "-emit-object",
     });
     swift_obj.addFileArg(b.path("src/menubar.swift"));
+    swift_obj.addFileArg(b.path("src/alarmController.swift"));
     swift_obj.addArg("-o");
     swift_obj.addFileArg(menubar_obj_path);
     swift_obj.step.dependOn(&cp_sparkle.step);
