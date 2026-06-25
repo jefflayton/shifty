@@ -3,6 +3,7 @@ const Build = std.Build;
 
 pub fn build(b: *Build) void {
     _ = b.step("test", "Run tests");
+    const io = b.graph.io;
 
     const target = b.resolveTargetQuery(.{
         .os_tag = .macos,
@@ -19,7 +20,9 @@ pub fn build(b: *Build) void {
     const macos = "platforms/macos";
 
     const inst_app = b.addSystemCommand(&.{
-        "mkdir", "-p", bundle ++ "/MacOS", bundle ++ "/Frameworks",
+        "mkdir",                "-p",
+        bundle ++ "/MacOS",     bundle ++ "/Frameworks",
+        bundle ++ "/Resources",
     });
 
     // Install plist
@@ -27,6 +30,8 @@ pub fn build(b: *Build) void {
         b.path(macos ++ "/Info.plist"),
         "Shifty.app/Contents/Info.plist",
     );
+
+    const inst_alarm = b.addInstallFile(b.path(macos ++ "/Resources/alarm.caf"), "Shifty.app/Contents/Resources/alarm.caf");
 
     // Install Sparkle
     const inst_sparkle = installSparkle(b);
@@ -70,13 +75,23 @@ pub fn build(b: *Build) void {
         "-framework",
         "Sparkle",
         "-import-objc-header",
-        "src/shifty.h",
+        "src/core/shifty.h",
         "-parse-as-library",
         "-wmo",
         "-emit-object",
     });
-    swift_obj.addFileArg(b.path("src/menubar.swift"));
-    swift_obj.addFileArg(b.path("src/alarmController.swift"));
+
+    var dir = std.Io.Dir.cwd().openDir(io, "platforms/macos", .{ .iterate = true }) catch @panic("Missing platforms/macos dir");
+    defer dir.close(io);
+    var walker = dir.walk(b.allocator) catch @panic("walk alloc fail");
+    defer walker.deinit();
+    while (walker.next(io) catch @panic("walk fail")) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".swift")) {
+            const p = b.fmt("platforms/macos/{s}", .{entry.path});
+            swift_obj.addFileArg(b.path(p));
+        }
+    }
+
     swift_obj.addArg("-o");
     swift_obj.addFileArg(menubar_obj_path);
     swift_obj.step.dependOn(&cp_sparkle.step);
@@ -96,7 +111,7 @@ pub fn build(b: *Build) void {
         "-framework",
         "Sparkle",
         "-import-objc-header",
-        "src/shifty.h",
+        "src/core/shifty.h",
     });
     link.addFileArg(menubar_obj_path);
     link.addFileArg(zig_obj.getEmittedBin());
@@ -105,6 +120,7 @@ pub fn build(b: *Build) void {
     link.step.dependOn(&swift_obj.step);
     link.step.dependOn(&inst_app.step);
     link.step.dependOn(&inst_info_plist.step);
+    link.step.dependOn(&inst_alarm.step);
 
     // Sign inside-out, WITHOUT --deep. --deep would re-sign (and clobber)
     // Sparkle.framework's own valid signature; Sparkle then refuses updates.
