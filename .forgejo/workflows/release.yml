@@ -49,7 +49,7 @@ jobs:
                   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
 
             - name: Build
-              run: zig build
+              run: zig build -Dbundle
 
             - name: Upload dmg artifact (always)
               uses: actions/upload-artifact@v3

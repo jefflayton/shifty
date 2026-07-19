@@ -23,7 +23,7 @@ jobs:
                   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" platforms/macos/Info.plist
 
             - name: Build
-              run: zig build
+              run: zig build -Dbundle
 
             - name: Test
               run: zig build test

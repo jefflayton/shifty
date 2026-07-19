@@ -13,16 +13,16 @@ pub fn build(b: *Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const app = "zig-out/Shifty.app";
-    const bundle = app ++ "/Contents";
-    const bin_str = bundle ++ "/MacOS/shifty";
+    const bundle_path = app ++ "/Contents";
+    const bin_str = bundle_path ++ "/MacOS/shifty";
     const bin = b.path(bin_str);
-    const frameworks = b.path(bundle ++ "/Frameworks");
+    const frameworks = b.path(bundle_path ++ "/Frameworks");
     const macos = "platforms/macos";
 
     const inst_app = b.addSystemCommand(&.{
-        "mkdir",                "-p",
-        bundle ++ "/MacOS",     bundle ++ "/Frameworks",
-        bundle ++ "/Resources",
+        "mkdir",                     "-p",
+        bundle_path ++ "/MacOS",     bundle_path ++ "/Frameworks",
+        bundle_path ++ "/Resources",
     });
 
     // Install plist
@@ -38,12 +38,12 @@ pub fn build(b: *Build) void {
     inst_sparkle.step.dependOn(&inst_app.step);
 
     const clean_sparkle = b.addSystemCommand(&.{
-        "rm", "-rf", bundle ++ "/Frameworks/Sparkle.framework",
+        "rm", "-rf", bundle_path ++ "/Frameworks/Sparkle.framework",
     });
     clean_sparkle.step.dependOn(&inst_sparkle.step);
     const cp_sparkle = b.addSystemCommand(&.{
         "cp",                               "-R",
-        ".cache/sparkle/Sparkle.framework", bundle ++ "/Frameworks/Sparkle.framework",
+        ".cache/sparkle/Sparkle.framework", bundle_path ++ "/Frameworks/Sparkle.framework",
     });
     cp_sparkle.step.dependOn(&clean_sparkle.step); // was: inst_sparkle
 
@@ -141,37 +141,14 @@ pub fn build(b: *Build) void {
     });
     codesign.step.dependOn(&codesign_bin.step);
 
-    const dmg_stage = "zig-out/dmg";
-
-    const clean_stage = b.addSystemCommand(&.{ "rm", "-rf", dmg_stage });
-    clean_stage.step.dependOn(&codesign.step);
-
-    const mk_stage = b.addSystemCommand(&.{ "mkdir", "-p", dmg_stage });
-    mk_stage.step.dependOn(&clean_stage.step);
-
-    const stage_app = b.addSystemCommand(&.{ "cp", "-R", app });
-    stage_app.addArg(dmg_stage ++ "/Shifty.app");
-    stage_app.step.dependOn(&mk_stage.step);
-
-    const app_link = b.addSystemCommand(&.{
-        "ln",
-        "-sf",
-        "/Applications",
-        dmg_stage ++ "/Applications",
-    });
-    app_link.step.dependOn(&stage_app.step);
-
-    const dmg = b.addSystemCommand(&.{
-        "hdiutil",    "create",
-        "-volname",   "Shifty",
-        "-srcfolder", dmg_stage,
-        "-ov", // overwrite if exists
-        "-format",            "UDZO", // compressed
-        "zig-out/Shifty.dmg",
-    });
-    dmg.step.dependOn(&app_link.step);
-
-    b.getInstallStep().dependOn(&dmg.step);
+    const bundle_step = bundle(b, app);
+    const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
+    if (bundle_opt) {
+        bundle_step.dependOn(&codesign.step);
+        b.getInstallStep().dependOn(bundle_step);
+    } else {
+        b.getInstallStep().dependOn(&codesign.step);
+    }
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
     const run_step = b.step("run", "Run executable");
@@ -196,4 +173,41 @@ fn installSparkle(b: *Build) *Build.Step.Run {
     });
 
     return fetch_sparkle;
+}
+
+fn bundle(b: *Build, app_path: []const u8) *Build.Step {
+    const bundle_step = b.step("bundle", "Bundle macOS DMG");
+
+    const dmg_stage = "zig-out/dmg";
+
+    const clean_stage = b.addSystemCommand(&.{ "rm", "-rf", dmg_stage });
+
+    const mk_stage = b.addSystemCommand(&.{ "mkdir", "-p", dmg_stage });
+    mk_stage.step.dependOn(&clean_stage.step);
+
+    const stage_app = b.addSystemCommand(&.{ "cp", "-R", app_path });
+    stage_app.addArg(dmg_stage ++ "/Shifty.app");
+    stage_app.step.dependOn(&mk_stage.step);
+
+    const app_link = b.addSystemCommand(&.{
+        "ln",
+        "-sf",
+        "/Applications",
+        dmg_stage ++ "/Applications",
+    });
+    app_link.step.dependOn(&stage_app.step);
+
+    const dmg = b.addSystemCommand(&.{
+        "hdiutil",    "create",
+        "-volname",   "Shifty",
+        "-srcfolder", dmg_stage,
+        "-ov", // overwrite if exists
+        "-format",            "UDZO", // compressed
+        "zig-out/Shifty.dmg",
+    });
+    dmg.step.dependOn(&app_link.step);
+
+    bundle_step.dependOn(&dmg.step);
+
+    return bundle_step;
 }
