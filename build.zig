@@ -2,15 +2,52 @@ const std = @import("std");
 const Build = std.Build;
 
 pub fn build(b: *Build) void {
-    _ = b.step("test", "Run tests");
-    const io = b.graph.io;
-
     const target = b.resolveTargetQuery(.{
         .os_tag = .macos,
         .cpu_arch = .aarch64,
         .os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } },
     });
     const optimize = b.standardOptimizeOption(.{});
+
+    const build_macos_step = buildMacOS(b, target, optimize);
+    b.getInstallStep().dependOn(build_macos_step);
+
+    const core_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const unit_tests = b.addTest(.{ .root_module = core_mod });
+    const run_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_tests.step);
+}
+
+fn installSparkle(b: *Build) *Build.Step.Run {
+    const SPARKLE_VERSION = "2.9.2";
+
+    const fetch_sparkle = b.addSystemCommand(&.{
+        "sh", "-c",
+        "test -d .cache/sparkle/Sparkle.framework || " ++
+            "( mkdir -p .cache/sparkle && " ++
+            "curl -L https://github.com/sparkle-project/Sparkle/releases/download/" ++ SPARKLE_VERSION ++ "/Sparkle-" ++ SPARKLE_VERSION ++ ".tar.xz" ++
+            " -o .cache/sparkle/sparkle.tar.xz && " ++
+            "tar -xf .cache/sparkle/sparkle.tar.xz -C .cache/sparkle Sparkle.framework bin )",
+    });
+
+    return fetch_sparkle;
+}
+
+fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step {
+    const io = b.graph.io;
+
+    const build_macos_step = b.step("build-macos", "Build the app for MacOS");
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const app = "zig-out/Shifty.app";
     const bundle_path = app ++ "/Contents";
@@ -46,12 +83,6 @@ pub fn build(b: *Build) void {
         ".cache/sparkle/Sparkle.framework", bundle_path ++ "/Frameworks/Sparkle.framework",
     });
     cp_sparkle.step.dependOn(&clean_sparkle.step); // was: inst_sparkle
-
-    const mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     const obj_options: Build.ObjectOptions = .{
         .name = "shifty",
@@ -145,9 +176,9 @@ pub fn build(b: *Build) void {
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
     if (bundle_opt) {
         bundle_step.dependOn(&codesign.step);
-        b.getInstallStep().dependOn(bundle_step);
+        build_macos_step.dependOn(bundle_step);
     } else {
-        b.getInstallStep().dependOn(&codesign.step);
+        build_macos_step.dependOn(&codesign.step);
     }
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
@@ -158,21 +189,8 @@ pub fn build(b: *Build) void {
     const check_exe = b.addObject(obj_options);
     const check_step = b.step("check", "Compilation check");
     check_step.dependOn(&check_exe.step);
-}
 
-fn installSparkle(b: *Build) *Build.Step.Run {
-    const SPARKLE_VERSION = "2.9.2";
-
-    const fetch_sparkle = b.addSystemCommand(&.{
-        "sh", "-c",
-        "test -d .cache/sparkle/Sparkle.framework || " ++
-            "( mkdir -p .cache/sparkle && " ++
-            "curl -L https://github.com/sparkle-project/Sparkle/releases/download/" ++ SPARKLE_VERSION ++ "/Sparkle-" ++ SPARKLE_VERSION ++ ".tar.xz" ++
-            " -o .cache/sparkle/sparkle.tar.xz && " ++
-            "tar -xf .cache/sparkle/sparkle.tar.xz -C .cache/sparkle Sparkle.framework bin )",
-    });
-
-    return fetch_sparkle;
+    return build_macos_step;
 }
 
 fn bundle(b: *Build, app_path: []const u8) *Build.Step {
