@@ -12,20 +12,20 @@ pub const Interval = extern struct {
     }
 };
 
-pub fn clockIn(shift_hrs: i64, in_ts: i64, breaks: []const Interval) i64 {
+pub fn clockIn(shift_secs: i64, in_ts: i64, breaks: []const Interval) i64 {
     var break_s: i64 = 0;
     for (breaks) |b| {
         if (b.duration()) |d| break_s += d;
     }
-    return in_ts + shift_hrs * time.s_per_hour + break_s;
+    return in_ts + shift_secs + break_s;
 }
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 test "clockIn - no breaks" {
-    const shift_hrs = 8;
+    const shift_secs = 8 * time.s_per_hour;
     const in_ts: i64 = 1784503278;
-    const out_ts = clockIn(shift_hrs, in_ts, &.{});
+    const out_ts = clockIn(shift_secs, in_ts, &.{});
 
     // 1784503278       -- In Timestamp
     //   + (8 * 3600)   -- Shift Length
@@ -35,7 +35,7 @@ test "clockIn - no breaks" {
 }
 
 test "clockIn - 1 break" {
-    const shift_hrs = 8;
+    const shift_secs = 8 * time.s_per_hour;
     const in_ts: i64 = 1784503278;
     const breaks: []const Interval = &.{
         .{
@@ -44,7 +44,7 @@ test "clockIn - 1 break" {
         },
     };
 
-    const out_ts = clockIn(shift_hrs, in_ts, breaks);
+    const out_ts = clockIn(shift_secs, in_ts, breaks);
 
     // 1784503278       -- In Timestamp
     //   + (8 * 3600)   -- Shift Length
@@ -55,7 +55,7 @@ test "clockIn - 1 break" {
 }
 
 test "clockIn - 3 breaks" {
-    const shift_hrs = 8;
+    const shift_secs = 8 * time.s_per_hour;
     const in_ts: i64 = 1784503278;
     const breaks: []const Interval = &.{
         .{
@@ -72,7 +72,7 @@ test "clockIn - 3 breaks" {
         },
     };
 
-    const out_ts = clockIn(shift_hrs, in_ts, breaks);
+    const out_ts = clockIn(shift_secs, in_ts, breaks);
 
     // 1784503278           -- In Timestamp
     //   + (8 * 3600)       -- Shift Length
