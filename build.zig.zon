@@ -9,5 +9,9 @@
             .url = "https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz",
             .hash = "N-V-__8AAL56vAU1SNDfVVOnLs1-vO2C8pKvMRx07WJw-b1b",
         },
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis?ref=main#cca454be4e002dbe1a386ff0fd3420ea21813fb5",
+            .hash = "vaxis-0.6.0-BWNV_DYXCgBP-oydkwMvwclWtjMrMAmSmg7cO6wtYFno",
+        },
     },
 }

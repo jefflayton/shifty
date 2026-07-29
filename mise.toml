@@ -4,18 +4,38 @@ watchexec = "latest"
 zig = "0.16.0"
 zls = "0.16.0"
 
-[tasks.build]
+# --- macOS app ---
+[tasks."build:macos"]
+alias = "bm"
 run = '''
 #!/usr/bin/env bash
 pkill -x shifty
-zig build
+zig build macos
 '''
-sources = ["src/**/*", "build.zig"]
+sources = ["src/**/*", "build.zig", "platforms/macos/**/*"]
 outputs = ["zig-out/Shifty.app/Contents/MacOS/shifty"]
 
-[tasks.dev]
+[tasks."run:macos"]
+alias = "rm"
+depends = ["macos"]
 run = "open zig-out/Shifty.app"
-depends = ["build"]
 
 [tasks.log]
 run = "tail -F ~/Library/Logs/Shifty/shifty.log"
+
+# --- TUI ---
+[tasks."build:tui"]
+alias = "bt"
+run = "zig build tui"
+
+[tasks."run:tui"]
+alias = "rt"
+run = "zig build run-tui"
+
+# --- shared ---
+[tasks.test]
+alias = "t"
+run = "zig build test"
+
+[tasks."build:all"]
+run = "zig build all"
