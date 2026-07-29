@@ -4,4 +4,10 @@
     .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0xa50b3b45021c303a,
+    .dependencies = .{
+        .sparkle = .{
+            .url = "https://github.com/sparkle-project/Sparkle/releases/download/2.9.2/Sparkle-2.9.2.tar.xz",
+            .hash = "N-V-__8AAL56vAU1SNDfVVOnLs1-vO2C8pKvMRx07WJw-b1b",
+        },
+    },
 }

@@ -1,6 +1,3 @@
-[env]
-SPARKLE_VERSION = "2.9.2"
-
 [tools]
 deno = "latest"
 watchexec = "latest"
@@ -8,7 +5,17 @@ zig = "0.16.0"
 zls = "0.16.0"
 
 [tasks.build]
-run = "zig build"
+run = '''
+#!/usr/bin/env bash
+pkill -x shifty
+zig build
+'''
+sources = ["src/**/*", "build.zig"]
+outputs = ["zig-out/Shifty.app/Contents/MacOS/shifty"]
 
-[tasks.build-run]
-run = "zig build run"
+[tasks.dev]
+run = "open zig-out/Shifty.app"
+depends = ["build"]
+
+[tasks.log]
+run = "tail -F ~/Library/Logs/Shifty/shifty.log"
