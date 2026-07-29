@@ -23,21 +23,6 @@ pub fn build(b: *Build) void {
     test_step.dependOn(&run_tests.step);
 }
 
-fn installSparkle(b: *Build) *Build.Step.Run {
-    const SPARKLE_VERSION = "2.9.2";
-
-    const fetch_sparkle = b.addSystemCommand(&.{
-        "sh", "-c",
-        "test -d .cache/sparkle/Sparkle.framework || " ++
-            "( mkdir -p .cache/sparkle && " ++
-            "curl -L https://github.com/sparkle-project/Sparkle/releases/download/" ++ SPARKLE_VERSION ++ "/Sparkle-" ++ SPARKLE_VERSION ++ ".tar.xz" ++
-            " -o .cache/sparkle/sparkle.tar.xz && " ++
-            "tar -xf .cache/sparkle/sparkle.tar.xz -C .cache/sparkle Sparkle.framework bin )",
-    });
-
-    return fetch_sparkle;
-}
-
 fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step {
     const io = b.graph.io;
 
@@ -71,18 +56,23 @@ fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
     const inst_alarm = b.addInstallFile(b.path(macos ++ "/Resources/alarm.caf"), "Shifty.app/Contents/Resources/alarm.caf");
 
     // Install Sparkle
-    const inst_sparkle = installSparkle(b);
-    inst_sparkle.step.dependOn(&inst_app.step);
+    const sparkle_dep = b.dependency("sparkle", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const clean_sparkle = b.addSystemCommand(&.{
-        "rm", "-rf", bundle_path ++ "/Frameworks/Sparkle.framework",
+        "rm",
+        "-rf",
+        bundle_path ++ "/Frameworks/Sparkle.framework",
     });
-    clean_sparkle.step.dependOn(&inst_sparkle.step);
-    const cp_sparkle = b.addSystemCommand(&.{
-        "cp",                               "-R",
-        ".cache/sparkle/Sparkle.framework", bundle_path ++ "/Frameworks/Sparkle.framework",
-    });
-    cp_sparkle.step.dependOn(&clean_sparkle.step); // was: inst_sparkle
+
+    const cp_sparkle = b.addSystemCommand(&.{ "cp", "-R" });
+    cp_sparkle.addDirectoryArg(sparkle_dep.path("Sparkle.framework"));
+    cp_sparkle.addArg(
+        bundle_path ++ "/Frameworks/Sparkle.framework",
+    );
+    cp_sparkle.step.dependOn(&clean_sparkle.step);
 
     const obj_options: Build.ObjectOptions = .{
         .name = "shifty",
