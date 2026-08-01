@@ -39,3 +39,6 @@ run = "zig build test"
 
 [tasks."build:all"]
 run = "zig build all"
+
+[tasks."ci:runner"]
+run = "forgejo-runner daemon -c ~/.config/forgejo-runner/config.yml"
