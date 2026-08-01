@@ -3,6 +3,8 @@ import Sparkle
 import SwiftUI
 import UserNotifications
 
+let secondsPerHour = 3600
+
 struct PopoverView: View {
   @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
   private let updater: SPUUpdater
@@ -21,7 +23,7 @@ struct PopoverView: View {
     let inTs = model.clockInTime.timeIntervalSince1970
     let outTs = cBreaks.withUnsafeBufferPointer { buf in
       clockIn(
-        Int64(model.shiftLength),
+        Int64(model.shiftLength * secondsPerHour),
         Int64(inTs),
         buf.baseAddress,
         buf.count
