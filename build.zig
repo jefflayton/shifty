@@ -2,37 +2,92 @@ const std = @import("std");
 const Build = std.Build;
 
 pub fn build(b: *Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const core = b.createModule(.{
+        .root_source_file = b.path("src/core/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const unit_tests = b.addTest(.{ .root_module = core });
+    const run_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_tests.step);
+
+    const macos_step = buildMacOS(b, optimize, core);
+    b.getInstallStep().dependOn(macos_step);
+
+    const tui_step = buildTui(b, target, optimize, core);
+
+    const all = b.step("all", "Build all applicable apps");
+    all.dependOn(test_step);
+    all.dependOn(tui_step);
+    if (target.result.os.tag == .macos) all.dependOn(macos_step);
+
+    const check = b.step("check", "Compile-check all");
+    check.dependOn(tui_step);
+    check.dependOn(macos_step);
+}
+
+fn buildTui(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    core: *Build.Module,
+) *Build.Step {
+    const tui_step = b.step("tui", "Build the TUI");
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/tui.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("core", core);
+
+    const vaxis = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("vaxis", vaxis.module("vaxis"));
+
+    const exe_opts: Build.ExecutableOptions = .{
+        .name = "shifty-tui",
+        .root_module = mod,
+    };
+    const exe = b.addExecutable(exe_opts);
+    const install_exe = b.addInstallArtifact(exe, .{});
+    tui_step.dependOn(&install_exe.step);
+
+    const run_step = b.step("run-tui", "Run the TUI");
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(&install_exe.step);
+    if (b.args) |args| run_cmd.addArgs(args);
+    run_step.dependOn(&run_cmd.step);
+
+    return tui_step;
+}
+
+fn buildMacOS(
+    b: *Build,
+    optimize: std.builtin.OptimizeMode,
+    core: *Build.Module,
+) *Build.Step {
+    const macos_step = b.step("macos", "Build the macOS app");
+
     const target = b.resolveTargetQuery(.{
         .os_tag = .macos,
         .cpu_arch = .aarch64,
         .os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } },
     });
-    const optimize = b.standardOptimizeOption(.{});
-
-    const build_macos_step = buildMacOS(b, target, optimize);
-    b.getInstallStep().dependOn(build_macos_step);
-
-    const core_mod = b.createModule(.{
-        .root_source_file = b.path("src/core/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const unit_tests = b.addTest(.{ .root_module = core_mod });
-    const run_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_tests.step);
-}
-
-fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step {
-    const io = b.graph.io;
-
-    const build_macos_step = b.step("build-macos", "Build the app for MacOS");
 
     const mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/macos.zig"),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("core", core);
 
     const app = "zig-out/Shifty.app";
     const bundle_path = app ++ "/Contents";
@@ -102,6 +157,7 @@ fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
         "-emit-object",
     });
 
+    const io = b.graph.io;
     var dir = std.Io.Dir.cwd().openDir(io, "platforms/macos", .{ .iterate = true }) catch @panic("Missing platforms/macos dir");
     defer dir.close(io);
     var walker = dir.walk(b.allocator) catch @panic("walk alloc fail");
@@ -166,21 +222,17 @@ fn buildMacOS(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
     if (bundle_opt) {
         bundle_step.dependOn(&codesign.step);
-        build_macos_step.dependOn(bundle_step);
+        macos_step.dependOn(bundle_step);
     } else {
-        build_macos_step.dependOn(&codesign.step);
+        macos_step.dependOn(&codesign.step);
     }
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
-    const run_step = b.step("run", "Run executable");
+    const run_step = b.step("run-macos", "Run macOS executable");
     run_cmd.step.dependOn(&link.step);
     run_step.dependOn(&run_cmd.step);
 
-    const check_exe = b.addObject(obj_options);
-    const check_step = b.step("check", "Compilation check");
-    check_step.dependOn(&check_exe.step);
-
-    return build_macos_step;
+    return macos_step;
 }
 
 fn bundle(b: *Build, app_path: []const u8) *Build.Step {
