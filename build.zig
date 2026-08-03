@@ -40,7 +40,7 @@ fn buildTui(
     const tui_step = b.step("tui", "Build the TUI");
 
     const mod = b.createModule(.{
-        .root_source_file = b.path("src/tui.zig"),
+        .root_source_file = b.path("src/tui/main.zig"),
         .target = target,
         .optimize = optimize,
     });
