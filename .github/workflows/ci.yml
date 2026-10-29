@@ -1,0 +1,50 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: write # draft release upkeep
+
+jobs:
+    # The macOS app needs swiftc/AppKit and is built by release.yml on
+    # macos-15. Everything else builds and tests on Linux.
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+
+            - uses: jdx/mise-action@v3
+              with:
+                  install_args: zig
+
+            - name: Test
+              run: zig build test
+
+            - name: Build TUI
+              run: zig build tui
+
+    draft-release:
+        if: github.event_name == 'push'
+        needs: test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+              with:
+                  fetch-depth: 0
+
+            - uses: jdx/mise-action@v3
+              with:
+                  install_args: deno
+
+            - name: Update draft release
+              env:
+                  API: ${{ github.api_url }}/repos/${{ github.repository }}
+                  TOKEN: ${{ github.token }}
+              run: deno task release-notes --draft

@@ -6,7 +6,7 @@ The backend logic and builds are done with Zig 0.16. The UI is built with Swift 
 
 ## Installation
 
-Download `Shifty.dmg` from the latest release in [Releases](https://codeberg.org/jefflayton/shifty/releases).
+Download `Shifty.dmg` from the latest release in [Releases](https://github.com/jefflayton/shifty/releases).
 
 The application is currently not properly signed. 
 

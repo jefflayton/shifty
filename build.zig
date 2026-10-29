@@ -129,6 +129,15 @@ fn buildMacOS(
     );
     cp_sparkle.step.dependOn(&clean_sparkle.step);
 
+    // Sparkle's CLI tools (generate_appcast, sign_update, ...) for release CI
+    const tools_step = b.step("sparkle-tools", "Install Sparkle CLI tools to zig-out/sparkle/bin");
+    const mk_tools = b.addSystemCommand(&.{ "mkdir", "-p", "zig-out/sparkle" });
+    const cp_tools = b.addSystemCommand(&.{ "cp", "-R" });
+    cp_tools.addDirectoryArg(sparkle_dep.path("bin"));
+    cp_tools.addArg("zig-out/sparkle/");
+    cp_tools.step.dependOn(&mk_tools.step);
+    tools_step.dependOn(&cp_tools.step);
+
     const obj_options: Build.ObjectOptions = .{
         .name = "shifty",
         .root_module = mod,

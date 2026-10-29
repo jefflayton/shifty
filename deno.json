@@ -1,6 +1,6 @@
 {
     "tasks": {
-        "release-notes": "deno run --allow-run --allow-net --allow-env --allow-write --allow-read .forgejo/scripts/release-notes.ts"
+        "release-notes": "deno run --allow-run --allow-net --allow-env --allow-write --allow-read .github/scripts/release-notes.ts"
     },
     "fmt": {
         "indentWidth": 4
