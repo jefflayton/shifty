@@ -18,7 +18,8 @@ final class AlarmController: ObservableObject {
 
   private struct Pending {
     let alarm: Alarm
-    let timer: Timer
+    var timer: Timer
+    let snoozed: Bool
   }
   private var pending: [String: Pending] = [:]
 
@@ -27,41 +28,92 @@ final class AlarmController: ObservableObject {
   private var alarmWindow: NSWindow?
   private var activityToken: NSObjectProtocol?
   private let snoozeInterval: TimeInterval = 5 * 60
+  /// The notification backstop only matters if the app isn't running, so it
+  /// trails the in-app alarm, which cancels it on firing.
+  private let backstopDelay: TimeInterval = 5
+  private static let soundName = "alarm.caf"
 
-  @discardableResult
-  func schedule(
-    id: String = UUID().uuidString,
-    title: String = "Session Complete",
-    body: String = "Your timer has ended.",
-    after seconds: TimeInterval
-  ) -> String {
-    cancel(id: id)
-
-    let alarm = Alarm(
-      id: id, title: title, body: body, fireDate: Date().addingTimeInterval(seconds))
-    let timer = Timer.scheduledTimer(withTimeInterval: max(seconds, 0.01), repeats: false) { _ in
-      Task { @MainActor in self.fire(id: id) }
+  init() {
+    // Timers don't advance while the Mac sleeps; re-arm them on wake so
+    // alarms due during sleep ring right away instead of hours late.
+    NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+    ) { _ in
+      Task { @MainActor in AlarmController.shared.rearmTimers() }
     }
-    pending[id] = Pending(alarm: alarm, timer: timer)
-    scheduleBackstop(for: alarm, after: seconds)
-
-    updateAppNap()
-    return id
   }
 
+  /// Backstop notifications need permission; ask when the first alarm is
+  /// added rather than on every launch. A no-op once answered.
+  func requestPermission() {
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) {
+      granted, error in
+      if granted {
+        log("Notification permission granted")
+      } else if let error {
+        log(error.localizedDescription)
+      }
+    }
+  }
+
+  /// Backstops from a previous run would ring at stale times; the scheduler
+  /// re-creates current ones after launch.
+  func removeStaleBackstops() {
+    UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+  }
+
+  func schedule(id: String, title: String, body: String, at date: Date) {
+    schedule(id: id, title: title, body: body, at: date, snoozed: false)
+  }
+
+  private func schedule(id: String, title: String, body: String, at date: Date, snoozed: Bool) {
+    cancel(id: id)
+
+    let alarm = Alarm(id: id, title: title, body: body, fireDate: date)
+    pending[id] = Pending(alarm: alarm, timer: makeTimer(id: id, at: date), snoozed: snoozed)
+    scheduleBackstop(for: alarm)
+
+    updateAppNap()
+  }
+
+  func pendingAlarm(id: String) -> Alarm? { pending[id]?.alarm }
+
+  func isSnoozed(id: String) -> Bool { pending[id]?.snoozed ?? false }
+
+  /// Stops the alarm whether it's pending or ringing.
   func cancel(id: String) {
-    pending.removeValue(forKey: id)?.timer.invalidate()
-    cancelBackstop(id: id)
+    cancelPending(id: id)
     ringing.removeAll { $0.id == id }
     refreshRingingState()
   }
 
-  func cancelAll() {
-    pending.values.forEach { $0.timer.invalidate() }
-    pending.removeAll()
-    ringing.forEach { cancelBackstop(id: $0.id) }
-    ringing.removeAll()
-    refreshRingingState()
+  /// Drops a pending alarm but leaves it ringing if it already is.
+  func cancelPending(id: String) {
+    pending.removeValue(forKey: id)?.timer.invalidate()
+    cancelBackstop(id: id)
+    updateAppNap()
+  }
+
+  /// Cancels every alarm, pending or ringing, whose id isn't in `ids`.
+  func cancelAll(except ids: Set<String>) {
+    let stale = Set(pending.keys).union(ringing.map(\.id)).subtracting(ids)
+    stale.forEach(cancel(id:))
+  }
+
+  private func makeTimer(id: String, at date: Date) -> Timer {
+    let timer = Timer(fire: max(date, Date()), interval: 0, repeats: false) { _ in
+      Task { @MainActor in self.fire(id: id) }
+    }
+    // .common so alarms still fire while a menu is being tracked
+    RunLoop.main.add(timer, forMode: .common)
+    return timer
+  }
+
+  private func rearmTimers() {
+    for (id, p) in pending {
+      p.timer.invalidate()
+      pending[id]?.timer = makeTimer(id: id, at: p.alarm.fireDate)
+    }
   }
 
   private func fire(id: String) {
@@ -83,7 +135,9 @@ final class AlarmController: ObservableObject {
     guard let a = ringing.first(where: { $0.id == id }) else { return }
     ringing.removeAll { $0.id == id }
     refreshRingingState()
-    schedule(id: id, title: a.title, body: a.body, after: snoozeInterval)
+    schedule(
+      id: id, title: a.title, body: a.body, at: Date().addingTimeInterval(snoozeInterval),
+      snoozed: true)
   }
 
   private func refreshRingingState() {
@@ -148,14 +202,19 @@ final class AlarmController: ObservableObject {
   }
 
   // Backstop
-  private func scheduleBackstop(for alarm: Alarm, after seconds: TimeInterval) {
+  private func scheduleBackstop(for alarm: Alarm) {
     let content = UNMutableNotificationContent()
     content.title = alarm.title
     content.body = alarm.body
-    content.sound = .defaultCritical
+    content.sound = UNNotificationSound(named: UNNotificationSoundName(Self.soundName))
     content.interruptionLevel = .timeSensitive
 
-    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(seconds, 1), repeats: false)
+    // A calendar trigger names a wall-clock time, so unlike an interval
+    // trigger it isn't thrown off by sleep or rescheduling.
+    let date = max(alarm.fireDate, Date()).addingTimeInterval(backstopDelay)
+    let components = Calendar.current.dateComponents(
+      [.year, .month, .day, .hour, .minute, .second], from: date)
+    let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
     UNUserNotificationCenter.current().add(
       UNNotificationRequest(identifier: backstopId(alarm.id), content: content, trigger: trigger)
     )

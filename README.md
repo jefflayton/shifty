@@ -43,7 +43,28 @@ zig build macos -Dbundle    # also zig-out/Shifty.dmg
 zig build tui               # zig-out/bin/shifty-tui
 zig build cli               # zig-out/bin/shifty
 zig build all               # tests + every frontend for this platform
+zig build test-macos        # menu bar app model tests (macOS only)
 ```
+
+Set `SHIFTY_OPEN_ON_LAUNCH=1` to open the menu bar popover at launch, e.g.
+`open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`.
+
+## Menu bar
+
+Set your shift length, clock-in time (**Now** sets it to the current time), and breaks; Shifty shows
+when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
+rolls over to today without its breaks.
+
+### Alarms
+
+Add alarms from the **+** next to *Alarms*:
+
+- **At clock out**, or **N min before clock out**: these follow your clock-out time, so adding an
+  unexpected break moves them later, even re-arming one that already rang.
+- **At a set time**: a fixed time of day during your shift.
+
+When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
+**Stop**. A notification is scheduled as a backup in case Shifty isn't running.
 
 ## CLI
 

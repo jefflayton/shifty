@@ -9,10 +9,12 @@ func log(_ items: Any..., separator: String = " ", terminator: String = "\n") {
   print("[swift.menubar]", body, terminator: terminator)
 }
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
   var popover: NSPopover!
   var item: NSStatusItem!
-  let model = ShiftModel()
+  let model = ShiftModel.load()
+  private var alarmScheduler: AlarmScheduler!
 
   private var updateController: SPUStandardUpdaterController!
 
@@ -26,6 +28,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     NSApp.setActivationPolicy(.accessory)
+
+    alarmScheduler = AlarmScheduler(model: model, controller: .shared)
 
     setupMenu()
 
@@ -41,10 +45,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     item.button?.action = #selector(toggle)
 
     popover = NSPopover()
-    popover.contentViewController = NSHostingController(
+    let host = NSHostingController(
       rootView: PopoverView(updater: updateController.updater, model: model))
+    // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
+    // default 320x320, positions itself for that, and taller content grows
+    // the window upward from its bottom edge, over the menu bar.
+    host.sizingOptions = .preferredContentSize
+    popover.contentViewController = host
     popover.behavior = .transient
 
+    // Development: open the popover without clicking the status item.
+    if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
+      // Wait for the status item to be placed in the menu bar.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
+    }
   }
 
   @objc func toggle() {
@@ -114,9 +128,12 @@ public func swiftuiInit() {}
 
 @_cdecl("swiftuiRun")
 public func swiftuiRun() {
-  let app = NSApplication.shared
-  let delegate = AppDelegate()
-  appDelegate = delegate  // retain
-  app.delegate = delegate
-  app.run()
+  // Called from Zig's main on the main thread.
+  MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    appDelegate = delegate  // retain
+    app.delegate = delegate
+    app.run()
+  }
 }

@@ -58,7 +58,7 @@ jobs:
                   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
 
             - name: Test
-              run: zig build test
+              run: zig build test test-macos
 
             # Naming any step replaces the default `install` step, so list it
             # explicitly or the app and DMG are never built.

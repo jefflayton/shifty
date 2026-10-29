@@ -276,6 +276,40 @@ fn buildMacOS(
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
     macos_step.dependOn(if (bundle_opt) bundle_step else &codesign.step);
 
+    // Tests for the app's model layer, linked against the Zig core through
+    // the same C ABI the app uses.
+    const test_macos = b.step("test-macos", "Run macOS model tests");
+    const ffi_obj = b.addObject(.{
+        .name = "shifty-ffi",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/ffi.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const swift_tests = b.addSystemCommand(&.{
+        "swiftc",
+        "-target",
+        "arm64-apple-macos15.0",
+        "-import-objc-header",
+    });
+    swift_tests.addFileArg(b.path("src/core/shifty.h"));
+    var models = std.Io.Dir.cwd().openDir(io, macos ++ "/Models", .{ .iterate = true }) catch @panic("Missing Models dir");
+    defer models.close(io);
+    var models_it = models.iterate();
+    while (models_it.next(io) catch @panic("iterate fail")) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".swift")) {
+            swift_tests.addFileArg(b.path(b.fmt(macos ++ "/Models/{s}", .{entry.name})));
+        }
+    }
+    swift_tests.addFileArg(b.path("tests/macos/main.swift"));
+    swift_tests.addFileArg(ffi_obj.getEmittedBin());
+    swift_tests.addArg("-o");
+    const test_bin = swift_tests.addOutputFileArg("shifty-macos-tests");
+    const run_swift_tests = std.Build.Step.Run.create(b, "run shifty-macos-tests");
+    run_swift_tests.addFileArg(test_bin);
+    test_macos.dependOn(&run_swift_tests.step);
+
     const run_cmd = b.addSystemCommand(&.{bin_str});
     const run_step = b.step("run-macos", "Run macOS executable");
     run_cmd.step.dependOn(&link.step);
