@@ -2,7 +2,9 @@ const API = Deno.env.get("API")!;
 const TOKEN = Deno.env.get("TOKEN")!;
 
 const headers = {
-    Authorization: `token ${TOKEN}`,
+    Authorization: `Bearer ${TOKEN}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",
 };
 
@@ -102,82 +104,105 @@ async function buildNotes(range: string): Promise<string> {
     return parts.join("\n\n");
 }
 
-type Release = { id: number; draft: boolean; tag_name: string };
+type Release = {
+    id: number;
+    draft: boolean;
+    tag_name: string;
+    upload_url: string;
+};
 type Asset = { id: number; name: string };
 
+/** Fail the run on a non-2xx response, otherwise return the parsed body. */
+async function check<T>(res: Response, what: string): Promise<T> {
+    if (!res.ok) {
+        console.error(`${what} failed: ${res.status} ${await res.text()}`);
+        Deno.exit(1);
+    }
+    return res.status === 204 ? (undefined as T) : await res.json();
+}
+
+/** All releases, including drafts (visible to an authenticated writer). */
+async function listReleases(): Promise<Release[]> {
+    const res = await fetch(`${API}/releases?per_page=100`, { headers });
+    return await check<Release[]>(res, "List releases");
+}
+
+/**
+ * The release for `tag`. GitHub's tags endpoint skips drafts, so fall back
+ * to a draft whose tag_name matches.
+ */
 async function releaseByTag(tag: string): Promise<Release | null> {
     const res = await fetch(`${API}/releases/tags/${tag}`, { headers });
-    if (!res.ok) return null;
-    return await res.json();
+    if (res.ok) return await res.json();
+    const releases = await listReleases();
+    return releases.find((r) => r.draft && r.tag_name === tag) ?? null;
 }
 
 /**
  * Attach a file to a release as a downloadable asset. Replaces any existing
  * asset of the same name so re-runs are idempotent.
  */
-async function uploadAsset(releaseId: number, path: string) {
+async function uploadAsset(release: Release, path: string) {
     const name = path.split("/").pop()!;
 
-    // Auth header only — fetch sets the multipart Content-Type with boundary.
-    const auth = { Authorization: headers.Authorization };
-
-    const listRes = await fetch(`${API}/releases/${releaseId}/assets`, {
-        headers: auth,
+    const listRes = await fetch(`${API}/releases/${release.id}/assets`, {
+        headers,
     });
-    if (listRes.ok) {
-        const assets: Asset[] = await listRes.json();
-        for (const a of assets.filter((a) => a.name === name)) {
-            await fetch(`${API}/releases/${releaseId}/assets/${a.id}`, {
+    const assets = await check<Asset[]>(listRes, "List assets");
+    for (const a of assets.filter((a) => a.name === name)) {
+        await check(
+            await fetch(`${API}/releases/assets/${a.id}`, {
                 method: "DELETE",
-                headers: auth,
-            });
-        }
+                headers,
+            }),
+            `Delete asset ${a.name}`,
+        );
     }
 
-    const form = new FormData();
-    form.append("attachment", new Blob([await Deno.readFile(path)]), name);
+    // upload_url is a URI template: ".../assets{?name,label}"
+    const uploadUrl = release.upload_url.replace(/\{.*\}$/, "");
     const res = await fetch(
-        `${API}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`,
-        { method: "POST", headers: auth, body: form },
+        `${uploadUrl}?name=${encodeURIComponent(name)}`,
+        {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/octet-stream" },
+            body: await Deno.readFile(path),
+        },
     );
-    if (!res.ok) {
-        console.error(`Asset upload failed: ${res.status} ${await res.text()}`);
-        Deno.exit(1);
-    }
+    await check(res, "Asset upload");
     console.log(`Uploaded asset ${name}.`);
 }
 
 /**  The single rolling draft release, if one exists. */
 async function existingDraft(): Promise<Release | null> {
-    const res = await fetch(`${API}/releases?draft=true&limit=1`, { headers });
-    if (!res.ok) return null;
-    const list: Release[] = await res.json();
-    return list.find((r) => r.draft) ?? null;
+    const releases = await listReleases();
+    return releases.find((r) => r.draft) ?? null;
 }
 
 /**
- * Publish notes as the release for TAG (creates it if missing).
- * Returns the release id so assets can be attached to it.
+ * Publish notes as the release for TAG (creates it if missing, and
+ * un-drafts it if it was a draft). Returns the release so assets can be
+ * attached to it.
  */
-async function publish(tag: string, body: string): Promise<number> {
+async function publish(tag: string, body: string): Promise<Release> {
     const rel = await releaseByTag(tag);
     if (rel) {
-        await fetch(`${API}/releases/${rel.id}`, {
+        const res = await fetch(`${API}/releases/${rel.id}`, {
             method: "PATCH",
             headers,
-            body: JSON.stringify({ body }),
+            body: JSON.stringify({ body, draft: false }),
         });
         console.log(`Updated release ${rel.id} body.`);
-        return rel.id;
+        return await check<Release>(res, "Update release");
     }
     const res = await fetch(`${API}/releases`, {
         method: "POST",
         headers,
         body: JSON.stringify({ tag_name: tag, name: tag, body }),
     });
-    const created: Release = await res.json();
+    const created = await check<Release>(res, "Create release");
     console.log(`Created release for ${tag}.`);
-    return created.id;
+    return created;
 }
 
 /**
@@ -187,25 +212,31 @@ async function publish(tag: string, body: string): Promise<number> {
 async function upsertDraft(body: string) {
     const draft = await existingDraft();
     if (draft) {
-        await fetch(`${API}/releases/${draft.id}`, {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({ body }),
-        });
+        await check(
+            await fetch(`${API}/releases/${draft.id}`, {
+                method: "PATCH",
+                headers,
+                body: JSON.stringify({ body }),
+            }),
+            "Update draft",
+        );
         console.log(`Updated draft ${draft.id} (${draft.tag_name}).`);
     } else {
         const latest = await latestTag().catch(() => "");
         const tag = nextPatch(latest);
-        await fetch(`${API}/releases`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-                tag_name: tag,
-                name: tag,
-                body,
-                draft: true,
+        await check(
+            await fetch(`${API}/releases`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                    tag_name: tag,
+                    name: tag,
+                    body,
+                    draft: true,
+                }),
             }),
-        });
+            "Create draft",
+        );
         console.log(`Created draft ${tag}.`);
     }
 }
@@ -259,8 +290,8 @@ if (import.meta.main) {
             console.log(`Wrote ${out}.`);
         }
         if (doPublish) {
-            const id = await publish(tag, notes);
-            if (asset) await uploadAsset(id, asset);
+            const release = await publish(tag, notes);
+            if (asset) await uploadAsset(release, asset);
         }
     }
 }

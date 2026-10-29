@@ -21,7 +21,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://jefflayton.codeberg.page/shifty/appcast.xml</string>
+	<string>https://jefflayton.github.io/shifty/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>aofremTRZ16Rh0CppFMHCNNPB7Phsb8EGbppCRn7j4w=</string>
 </dict>

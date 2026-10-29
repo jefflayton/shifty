@@ -10,28 +10,37 @@ on:
                 default: "0.0.0-dev"
 
 concurrency:
-    group: release-${{ forgejo.ref_name }}
+    group: release-${{ github.ref_name }}
     cancel-in-progress: false
 
 permissions:
     contents: write
+    pages: write
+    id-token: write
+
+env:
+    PAGES_URL: https://jefflayton.github.io/shifty/
 
 jobs:
     build:
-        runs-on: self-hosted
+        runs-on: macos-15
         env:
-            IS_RELEASE: ${{ startsWith(forgejo.ref, 'refs/tags/') }}
+            IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
         steps:
-            - uses: actions/checkout@v6
+            - uses: actions/checkout@v5
               with:
                   fetch-depth: 0
+
+            - uses: jdx/mise-action@v3
+              with:
+                  install_args: zig deno
 
             - name: Resolve version
               id: ver
               run: |
-                  case "${{ forgejo.ref }}" in
+                  case "${{ github.ref }}" in
                     refs/tags/*)
-                      V="${{ forgejo.ref_name }}"; V="${V#v}"
+                      V="${{ github.ref_name }}"; V="${V#v}"
                       case "$V" in
                         [0-9]*.[0-9]*.[0-9]*) : ;;
                         *) echo "Tag '$V' is not X.Y.Z semver."; exit 1 ;;
@@ -48,11 +57,14 @@ jobs:
                   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" platforms/macos/Info.plist
                   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" platforms/macos/Info.plist
 
+            - name: Test
+              run: zig build test
+
             - name: Build
-              run: zig build -Dbundle
+              run: zig build -Dbundle sparkle-tools
 
             - name: Upload dmg artifact (always)
-              uses: actions/upload-artifact@v3
+              uses: actions/upload-artifact@v4
               with:
                   name: Shifty-${{ steps.ver.outputs.version }}-dmg
                   path: zig-out/Shifty.dmg
@@ -60,9 +72,9 @@ jobs:
 
             - name: Stage dmg + release notes
               env:
-                  API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
-                  TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
-                  TAG: ${{ forgejo.ref_name }}
+                  API: ${{ github.api_url }}/repos/${{ github.repository }}
+                  TOKEN: ${{ github.token }}
+                  TAG: ${{ github.ref_name }}
               run: |
                   mkdir -p _site
                   cp zig-out/Shifty.dmg _site/
@@ -72,26 +84,37 @@ jobs:
                   fi
 
             - name: Generate appcast.xml
+              if: env.IS_RELEASE == 'true'
+              env:
+                  SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
               run: |
-                  .cache/sparkle/bin/generate_appcast \
-                    --download-url-prefix "https://jefflayton.codeberg.page/shifty/" \
+                  printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | zig-out/sparkle/bin/generate_appcast \
+                    --ed-key-file - \
+                    --download-url-prefix "$PAGES_URL" \
                     -o _site/appcast.xml _site
 
-            - name: Deploy to Pages
+            - name: Upload Pages artifact
               if: env.IS_RELEASE == 'true'
-              run: |
-                  cd _site
-                  git init -q
-                  git checkout -q -b pages
-                  git add -A
-                  git -c user.name=ci -c user.email=ci@shifty commit -q -m "deploy ${{ forgejo.ref_name }}"
-                  git push -qf "https://${{ secrets.RELEASE_TOKEN || forgejo.token }}@codeberg.org/${{ forgejo.repository }}.git" pages
+              uses: actions/upload-pages-artifact@v4
+              with:
+                  path: _site
 
             - name: Publish release notes + dmg
               if: env.IS_RELEASE == 'true'
               env:
-                  API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
-                  TOKEN: ${{ secrets.RELEASE_TOKEN || forgejo.token }}
-                  TAG: ${{ forgejo.ref_name }}
+                  API: ${{ github.api_url }}/repos/${{ github.repository }}
+                  TOKEN: ${{ github.token }}
+                  TAG: ${{ github.ref_name }}
               run: |
                   deno task release-notes --publish --asset zig-out/Shifty.dmg
+
+    deploy-pages:
+        if: startsWith(github.ref, 'refs/tags/')
+        needs: build
+        runs-on: ubuntu-latest
+        environment:
+            name: github-pages
+            url: ${{ steps.deploy.outputs.page_url }}
+        steps:
+            - id: deploy
+              uses: actions/deploy-pages@v4
