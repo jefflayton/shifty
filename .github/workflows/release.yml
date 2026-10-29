@@ -60,8 +60,13 @@ jobs:
             - name: Test
               run: zig build test
 
+            # Naming any step replaces the default `install` step, so list it
+            # explicitly or the app and DMG are never built.
             - name: Build
-              run: zig build -Dbundle sparkle-tools
+              run: zig build -Dbundle install sparkle-tools
+
+            - name: Check build outputs
+              run: test -f zig-out/Shifty.dmg && test -x zig-out/sparkle/bin/generate_appcast
 
             - name: Upload dmg artifact (always)
               uses: actions/upload-artifact@v4
@@ -92,6 +97,12 @@ jobs:
                     --ed-key-file - \
                     --download-url-prefix "$PAGES_URL" \
                     -o _site/appcast.xml _site
+                  # A key that doesn't match SUPublicEDKey only warns and leaves
+                  # the enclosure unsigned, which Sparkle clients reject.
+                  if ! grep -q 'sparkle:edSignature' _site/appcast.xml; then
+                    echo "::error::appcast.xml is unsigned; SPARKLE_ED_PRIVATE_KEY does not match SUPublicEDKey in Info.plist"
+                    exit 1
+                  fi
 
             - name: Upload Pages artifact
               if: env.IS_RELEASE == 'true'
