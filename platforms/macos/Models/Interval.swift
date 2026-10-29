@@ -1,6 +1,8 @@
 import Foundation
 
-class Interval: Identifiable {
+// A struct so edits through bindings mutate ShiftModel.breaks and trigger
+// observation; a class would change in place and leave clockOut stale.
+struct Interval: Identifiable {
   let id = UUID()
   var inDate: Date
   var outDate: Date

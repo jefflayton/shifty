@@ -23,7 +23,7 @@ struct PopoverView: View {
     let inTs = model.clockInTime.timeIntervalSince1970
     let outTs = cBreaks.withUnsafeBufferPointer { buf in
       clockIn(
-        Int64(model.shiftLength * secondsPerHour),
+        Int64(model.shiftLength * Double(secondsPerHour)),
         Int64(inTs),
         buf.baseAddress,
         buf.count
@@ -50,7 +50,7 @@ struct PopoverView: View {
       HStack {
         Text("Shift Length").bold()
         TextField("Shift Length", value: $model.shiftLength, format: .number)
-          .frame(width: 20)
+          .frame(width: 36)
         Text(" hr")
       }
 
@@ -128,11 +128,6 @@ struct PopoverView: View {
     .padding()
     .frame(width: 250)
     .onAppear(perform: {
-      let center = UNUserNotificationCenter.current()
-      center.getNotificationSettings { settings in
-      }
-      center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-      }
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) {
         granted, error in
         if granted {

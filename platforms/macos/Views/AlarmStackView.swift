@@ -12,8 +12,11 @@ struct AlarmStackView: View {
             .symbolEffect(.pulse)
             .foregroundStyle(.orange)
 
-          Text("Session Complete")
+          Text(alarm.title)
             .font(.headline)
+          Text(alarm.body)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
 
           HStack(spacing: 10) {
             Button("Snooze") { controller.snooze(id: alarm.id) }
