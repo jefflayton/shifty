@@ -9,6 +9,8 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/core/root.zig"),
         .target = target,
         .optimize = optimize,
+        // core.local reads the timezone via libc
+        .link_libc = true,
     });
 
     const unit_tests = b.addTest(.{ .root_module = core });
@@ -19,16 +21,56 @@ pub fn build(b: *Build) void {
     const macos_step = buildMacOS(b, optimize, core);
     b.getInstallStep().dependOn(macos_step);
 
-    const tui_step = buildTui(b, target, optimize, core);
+    const tui = buildTui(b, target, optimize, core);
+    test_step.dependOn(tui.tests);
+    const tui_step = tui.step;
+    const cli = buildCli(b, target, optimize, core);
+    test_step.dependOn(cli.tests);
 
     const all = b.step("all", "Build all applicable apps");
     all.dependOn(test_step);
     all.dependOn(tui_step);
+    all.dependOn(cli.step);
     if (target.result.os.tag == .macos) all.dependOn(macos_step);
 
     const check = b.step("check", "Compile-check all");
     check.dependOn(tui_step);
+    check.dependOn(cli.step);
     check.dependOn(macos_step);
+}
+
+fn buildCli(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    core: *Build.Module,
+) struct { step: *Build.Step, tests: *Build.Step } {
+    const cli_step = b.step("cli", "Build the CLI");
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("core", core);
+
+    const exe = b.addExecutable(.{
+        .name = "shifty",
+        .root_module = mod,
+    });
+    const install_exe = b.addInstallArtifact(exe, .{});
+    cli_step.dependOn(&install_exe.step);
+
+    const run_step = b.step("run-cli", "Run the CLI");
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(&install_exe.step);
+    if (b.args) |args| run_cmd.addArgs(args);
+    run_step.dependOn(&run_cmd.step);
+
+    const tests = b.addTest(.{ .root_module = mod });
+    const run_tests = b.addRunArtifact(tests);
+
+    return .{ .step = cli_step, .tests = &run_tests.step };
 }
 
 fn buildTui(
@@ -36,7 +78,7 @@ fn buildTui(
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     core: *Build.Module,
-) *Build.Step {
+) struct { step: *Build.Step, tests: *Build.Step } {
     const tui_step = b.step("tui", "Build the TUI");
 
     const mod = b.createModule(.{
@@ -66,7 +108,10 @@ fn buildTui(
     if (b.args) |args| run_cmd.addArgs(args);
     run_step.dependOn(&run_cmd.step);
 
-    return tui_step;
+    const tests = b.addTest(.{ .root_module = mod });
+    const run_tests = b.addRunArtifact(tests);
+
+    return .{ .step = tui_step, .tests = &run_tests.step };
 }
 
 fn buildMacOS(

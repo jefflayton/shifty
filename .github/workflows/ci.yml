@@ -27,8 +27,8 @@ jobs:
             - name: Test
               run: zig build test
 
-            - name: Build TUI
-              run: zig build tui
+            - name: Build TUI + CLI
+              run: zig build tui cli
 
     draft-release:
         if: github.event_name == 'push'
