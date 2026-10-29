@@ -10,6 +10,7 @@ struct ShiftBar: View {
   let now: Date
 
   private let height: CGFloat = 6
+  private let dot: CGFloat = 12
 
   private var progress: Double {
     let total = clockOut.timeIntervalSince(clockIn)
@@ -29,20 +30,20 @@ struct ShiftBar: View {
         workShape(width: width)
           .fill(Color.accentColor)
           .mask(alignment: .leading) {
-            Rectangle().frame(width: width * progress)
+            Rectangle().frame(width: width * CGFloat(progress))
           }
 
         if progress > 0 && progress < 1 {
           Circle()
             .fill(.white)
             .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 2))
-            .frame(width: height + 6, height: height + 6)
-            .offset(x: width * progress - (height + 6) / 2)
+            .frame(width: dot, height: dot)
+            .offset(x: width * CGFloat(progress) - dot / 2)
             .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
         }
       }
     }
-    .frame(height: height + 6)
+    .frame(height: dot)
     .accessibilityElement()
     .accessibilityLabel("Shift progress")
     .accessibilityValue("\(Int(progress * 100)) percent")
@@ -55,7 +56,8 @@ struct ShiftBar: View {
     for span in breaks + [1...1] {
       if span.lowerBound > start {
         let rect = CGRect(
-          x: width * start, y: 3, width: width * (span.lowerBound - start), height: height)
+          x: width * CGFloat(start), y: (dot - height) / 2,
+          width: width * CGFloat(span.lowerBound - start), height: height)
         path.addRoundedRect(in: rect, cornerSize: CGSize(width: height / 2, height: height / 2))
       }
       start = span.upperBound
