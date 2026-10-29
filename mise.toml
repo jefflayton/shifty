@@ -17,7 +17,7 @@ outputs = ["zig-out/Shifty.app/Contents/MacOS/shifty"]
 
 [tasks."run:macos"]
 alias = "rm"
-depends = ["macos"]
+depends = ["build:macos"]
 run = "open zig-out/Shifty.app"
 
 [tasks.log]
@@ -31,6 +31,15 @@ run = "zig build tui"
 [tasks."run:tui"]
 alias = "rt"
 run = "zig build run-tui"
+
+# --- CLI ---
+[tasks."build:cli"]
+alias = "bc"
+run = "zig build cli"
+
+[tasks."run:cli"]
+alias = "rc"
+run = "zig build run-cli --"
 
 # --- shared ---
 [tasks.test]

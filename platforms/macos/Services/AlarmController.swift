@@ -129,6 +129,7 @@ final class AlarmController: ObservableObject {
   private func cancelDockBounce() {
     if attentionRequestId != 0 {
       NSApp.cancelUserAttentionRequest(attentionRequestId)
+      attentionRequestId = 0
     }
   }
 
@@ -156,13 +157,15 @@ final class AlarmController: ObservableObject {
 
     let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(seconds, 1), repeats: false)
     UNUserNotificationCenter.current().add(
-      UNNotificationRequest(identifier: "alarm-\(alarm.id)", content: content, trigger: trigger)
+      UNNotificationRequest(identifier: backstopId(alarm.id), content: content, trigger: trigger)
     )
   }
 
+  private func backstopId(_ id: String) -> String { "alarm-\(id)" }
+
   private func cancelBackstop(id: String) {
     UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [
-      id
+      backstopId(id)
     ])
   }
 
