@@ -48,3 +48,60 @@ enum ShiftTimes {
     return date < floor ? nextDay(date, calendar: calendar) : date
   }
 }
+
+/// Geometry and labels for the popover's shift summary.
+enum ShiftSummary {
+  /// Valid breaks clipped to the shift and merged where they overlap, as
+  /// fractions (0...1) of the clock-in to clock-out span.
+  static func breakSpans(
+    _ breaks: [Interval], clockIn: Date, clockOut: Date, calendar: Calendar = .current
+  ) -> [ClosedRange<Double>] {
+    let total = clockOut.timeIntervalSince(clockIn)
+    guard total > 0 else { return [] }
+
+    let clipped = breaks.filter { ShiftTimes.isValid($0, calendar: calendar) }
+      .map { ShiftTimes.anchor($0, clockIn: clockIn, calendar: calendar) }
+      .map { (max($0.start, clockIn), min($0.end, clockOut)) }
+      .filter { $0.0 < $0.1 }
+      .sorted { $0.0 < $1.0 }
+
+    var merged: [(Date, Date)] = []
+    for (start, end) in clipped {
+      if let last = merged.last, start <= last.1 {
+        merged[merged.count - 1].1 = max(last.1, end)
+      } else {
+        merged.append((start, end))
+      }
+    }
+    return merged.map {
+      ($0.0.timeIntervalSince(clockIn) / total)...($0.1.timeIntervalSince(clockIn) / total)
+    }
+  }
+
+  /// Total break time inside the shift, in seconds.
+  static func breakSeconds(
+    _ breaks: [Interval], clockIn: Date, clockOut: Date, calendar: Calendar = .current
+  ) -> TimeInterval {
+    let total = clockOut.timeIntervalSince(clockIn)
+    return breakSpans(breaks, clockIn: clockIn, clockOut: clockOut, calendar: calendar)
+      .reduce(0) { $0 + ($1.upperBound - $1.lowerBound) * total }
+  }
+
+  /// "45 min", "2 hr", "1 hr 5 min" (rounded to the minute).
+  static func duration(_ seconds: TimeInterval) -> String {
+    let minutes = max(0, Int((seconds / 60).rounded()))
+    let (h, m) = (minutes / 60, minutes % 60)
+    switch (h, m) {
+    case (0, _): return "\(m) min"
+    case (_, 0): return "\(h) hr"
+    default: return "\(h) hr \(m) min"
+    }
+  }
+
+  /// When clock out is relative to now: "in 3 hr 12 min", "now", "12 min ago".
+  static func relative(_ clockOut: Date, now: Date) -> String {
+    let seconds = clockOut.timeIntervalSince(now)
+    if abs(seconds) < 60 { return "now" }
+    return seconds > 0 ? "in \(duration(seconds))" : "\(duration(-seconds)) ago"
+  }
+}

@@ -17,85 +17,62 @@ struct PopoverView: View {
   }
 
   var body: some View {
-    VStack(spacing: 12) {
-      Text("Shifty")
-        .font(.system(size: 20))
+    VStack(alignment: .leading, spacing: 16) {
+      ShiftSummaryView(model: model)
 
-      // Labels right-aligned in the first column, controls left-aligned in
-      // the second, so every row lines up.
-      Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
-        GridRow {
-          FormLabel("Shift Length")
-          HStack(spacing: 4) {
-            TextField("Shift Length", value: $model.shiftLength, format: .number)
-              .frame(width: 44)
-            Text("hr")
-          }
-        }
-
-        GridRow {
-          FormLabel("Clock In")
-          HStack {
-            DatePicker("Clock In", selection: $model.clockInTime, displayedComponents: .hourAndMinute)
-              .labelsHidden()
+      FormSection("Shift") {
+        FormRow("Clock in") {
+          HStack(spacing: 6) {
+            DatePicker(
+              "Clock in", selection: $model.clockInTime, displayedComponents: .hourAndMinute
+            )
+            .datePickerStyle(.field)
+            .labelsHidden()
+            .fixedSize()
             Button("Now") { model.clockInTime = Date() }
+              .controlSize(.small)
           }
         }
-
-        GridRow {
-          FormLabel("Breaks")
-          AddButton { model.breaks.append(Interval()) }
+        FormRow("Length") {
+          HStack(spacing: 6) {
+            TextField("Length", value: $model.shiftLength, format: .number)
+              .labelsHidden()
+              .multilineTextAlignment(.trailing)
+              .frame(width: 40)
+            Text("hours").foregroundStyle(.secondary)
+            Stepper("Length", value: $model.shiftLength, in: 0.25...24, step: 0.25)
+              .labelsHidden()
+          }
         }
+      }
 
+      FormSection("Breaks") {
+        AddButton(help: "Add a break") { model.breaks.append(Interval()) }
+      } content: {
+        if model.breaks.isEmpty {
+          Text("No breaks").foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
         ForEach($model.breaks) { $brk in
-          GridRow {
-            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-            VStack(alignment: .leading, spacing: 4) {
-              HStack(spacing: 6) {
-                DatePicker("", selection: $brk.inDate, displayedComponents: .hourAndMinute)
-                  .labelsHidden()
-                Text("–")
-                  .fixedSize()
-                DatePicker("", selection: $brk.outDate, displayedComponents: .hourAndMinute)
-                  .labelsHidden()
-                Button {
-                  let id = brk.id
-                  model.breaks.removeAll { $0.id == id }
-                } label: {
-                  Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-              }
-              if !brk.isValid {
-                Label("Invalid break times", systemImage: "exclamationmark.triangle.fill")
-                  .font(.caption)
-                  .foregroundStyle(.red)
-              }
-            }
+          BreakRow(brk: $brk) {
+            let id = brk.id
+            model.breaks.removeAll { $0.id == id }
           }
         }
-
-        GridRow {
-          FormLabel("Clock Out")
-          Text(model.clockOut, style: .time)
-            .font(.title3.bold())
-            .monospacedDigit()
-        }
-        .padding(.vertical, 4)
-
-        AlarmsSection(model: model)
       }
 
-      Divider()
+      AlarmsSection(model: model)
 
-      VStack(spacing: 0) {
-        MenuRowButton("Check for Updates", action: updater.checkForUpdates)
+      VStack(alignment: .leading, spacing: 2) {
+        Divider().padding(.bottom, 4)
+        MenuRowButton("Check for Updates…", action: updater.checkForUpdates)
           .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
-        MenuRowButton("Quit Shifty") { NSApp.terminate(nil) }
+        MenuRowButton("Quit Shifty", shortcut: "⌘Q") { NSApp.terminate(nil) }
       }
+      .padding(.horizontal, -6)
     }
-    .padding()
-    .frame(width: 380)
+    .padding(14)
+    .frame(width: 320)
     .onAppear {
       // Nothing observes the clock, so check for a finished shift on open.
       model.rollOverIfStale()
@@ -103,62 +80,90 @@ struct PopoverView: View {
   }
 }
 
-/// A form label in the popover's label column.
-struct FormLabel: View {
-  let text: String
-
-  init(_ text: String) { self.text = text }
+/// The clock-out time, how far away it is, and the shift at a glance.
+struct ShiftSummaryView: View {
+  let model: ShiftModel
 
   var body: some View {
-    Text(text)
-      .bold()
-      .gridColumnAlignment(.trailing)
-  }
-}
+    let clockOut = model.clockOut
+    let breaks = model.breaks
 
-/// The popover's "+" for adding a break or alarm.
-struct AddButton: View {
-  let action: () -> Void
+    TimelineView(.periodic(from: .now, by: 30)) { context in
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .lastTextBaseline) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Clock out")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+            Text(clockOut, style: .time)
+              .font(.system(size: 34, weight: .semibold, design: .rounded))
+              .monospacedDigit()
+              .contentTransition(.numericText())
+          }
+          Spacer()
+          Text(ShiftSummary.relative(clockOut, now: context.date))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
 
-  var body: some View {
-    Button(action: action) {
-      Image(systemName: "plus.circle")
-        // Match the Alarms menu's "+", which renders in the label color.
-        .foregroundStyle(.primary)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-  }
-}
+        ShiftBar(
+          clockIn: model.clockInTime,
+          clockOut: clockOut,
+          breaks: ShiftSummary.breakSpans(breaks, clockIn: model.clockInTime, clockOut: clockOut),
+          now: context.date
+        )
 
-/// A full-width, menu-style row that highlights on hover.
-struct MenuRowButton: View {
-  let title: String
-  let action: () -> Void
-  @State private var hovered = false
-  @Environment(\.isEnabled) private var isEnabled
-
-  init(_ title: String, action: @escaping () -> Void) {
-    self.title = title
-    self.action = action
-  }
-
-  var body: some View {
-    Button(action: action) {
-      HStack {
-        Text(title)
-        Spacer()
+        HStack {
+          Text(model.clockInTime, style: .time)
+          Spacer()
+          let onBreak = ShiftSummary.breakSeconds(
+            breaks, clockIn: model.clockInTime, clockOut: clockOut)
+          if onBreak > 0 {
+            Text("\(ShiftSummary.duration(onBreak)) on break")
+          }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
       }
-      .contentShape(Rectangle())
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
-      .background(
-        hovered && isEnabled ? Color.accentColor : .clear,
-        in: RoundedRectangle(cornerRadius: 4)
-      )
-      .foregroundStyle(hovered && isEnabled ? .white : isEnabled ? .primary : .secondary)
     }
-    .buttonStyle(.borderless)
-    .onHover { hovered = $0 }
+    .animation(.snappy, value: clockOut)
+  }
+}
+
+struct BreakRow: View {
+  @Binding var brk: Interval
+  let onRemove: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      HStack(spacing: 6) {
+        RemoveButton(help: "Remove break", action: onRemove)
+        DatePicker("Start", selection: $brk.inDate, displayedComponents: .hourAndMinute)
+          .datePickerStyle(.field)
+          .labelsHidden()
+          .fixedSize()
+        Text("to").foregroundStyle(.secondary)
+        DatePicker("End", selection: $brk.outDate, displayedComponents: .hourAndMinute)
+          .datePickerStyle(.field)
+          .labelsHidden()
+          .fixedSize()
+        Spacer()
+        if brk.isValid {
+          let (start, end) = ShiftTimes.anchor(brk, clockIn: brk.inDate)
+          Text(ShiftSummary.duration(end.timeIntervalSince(start)))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .fixedSize()
+        }
+      }
+      if !brk.isValid {
+        Text("A break must be between 1 minute and 12 hours.")
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+    }
+    .padding(.vertical, brk.isValid ? 0 : 6)
   }
 }
