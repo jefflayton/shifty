@@ -66,7 +66,12 @@ jobs:
               run: zig build -Dbundle install sparkle-tools
 
             - name: Check build outputs
-              run: test -f zig-out/Shifty.dmg && test -x zig-out/sparkle/bin/generate_appcast
+              run: |
+                  test -f zig-out/Shifty.dmg
+                  test -x zig-out/sparkle/bin/generate_appcast
+                  # The app as packaged into the DMG must carry a valid signature,
+                  # or generate_appcast rejects it.
+                  codesign --verify --strict zig-out/dmg/Shifty.app
 
             - name: Upload dmg artifact (always)
               uses: actions/upload-artifact@v4
@@ -88,8 +93,8 @@ jobs:
                     deno task release-notes --out _site/Shifty.md
                   fi
 
+            # Also runs on dry runs, so a bad signing key surfaces before tagging.
             - name: Generate appcast.xml
-              if: env.IS_RELEASE == 'true'
               env:
                   SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
               run: |
