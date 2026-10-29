@@ -45,13 +45,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     item.button?.action = #selector(toggle)
 
     popover = NSPopover()
-    popover.contentViewController = NSHostingController(
+    let host = NSHostingController(
       rootView: PopoverView(updater: updateController.updater, model: model))
+    // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
+    // default 320x320, positions itself for that, and taller content grows
+    // the window upward from its bottom edge, over the menu bar.
+    host.sizingOptions = .preferredContentSize
+    popover.contentViewController = host
     popover.behavior = .transient
 
     // Development: open the popover without clicking the status item.
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
-      DispatchQueue.main.async { self.toggle() }
+      // Wait for the status item to be placed in the menu bar.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
     }
   }
 
@@ -60,10 +66,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       popover.close()
     } else {
       NSApp.activate(ignoringOtherApps: true)
-      // .minY opens below the status item. .maxY asked for above it; with
-      // no room there AppKit flipped it and the popover overlapped the bar.
       popover.show(
-        relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.minY)
+        relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.maxY)
     }
   }
 }
