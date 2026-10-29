@@ -4,6 +4,13 @@ Work-in-progress time tracker and shift calculator for macOS that lives in your 
 
 The backend logic and builds are done with Zig 0.16. The UI is built with Swift and SwiftUI.
 
+## AI disclosure
+
+AI was used to help build Shifty. Parts of the code, tests, and CI were written with
+[Claude Code](https://claude.com/claude-code), and commits it helped write carry a
+`Co-Authored-By: Claude` trailer. All changes go through pull requests and CI before they are
+merged.
+
 ## Installation
 
 Download `Shifty.dmg` from the latest release in [Releases](https://github.com/jefflayton/shifty/releases).
