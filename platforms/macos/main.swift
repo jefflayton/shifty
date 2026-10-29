@@ -60,8 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       popover.close()
     } else {
       NSApp.activate(ignoringOtherApps: true)
+      // .minY opens below the status item. .maxY asked for above it; with
+      // no room there AppKit flipped it and the popover overlapped the bar.
       popover.show(
-        relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.maxY)
+        relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.minY)
     }
   }
 }
