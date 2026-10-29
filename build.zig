@@ -173,6 +173,8 @@ fn buildMacOS(
         bundle_path ++ "/Frameworks/Sparkle.framework",
     );
     cp_sparkle.step.dependOn(&clean_sparkle.step);
+    // The copy lands in Contents/Frameworks, which inst_app creates.
+    cp_sparkle.step.dependOn(&inst_app.step);
 
     // Sparkle's CLI tools (generate_appcast, sign_update, ...) for release CI
     const tools_step = b.step("sparkle-tools", "Install Sparkle CLI tools to zig-out/sparkle/bin");
