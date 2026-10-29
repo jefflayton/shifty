@@ -272,14 +272,9 @@ fn buildMacOS(
     });
     codesign.step.dependOn(&codesign_bin.step);
 
-    const bundle_step = bundle(b, app);
+    const bundle_step = bundle(b, app, &codesign.step);
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
-    if (bundle_opt) {
-        bundle_step.dependOn(&codesign.step);
-        macos_step.dependOn(bundle_step);
-    } else {
-        macos_step.dependOn(&codesign.step);
-    }
+    macos_step.dependOn(if (bundle_opt) bundle_step else &codesign.step);
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
     const run_step = b.step("run-macos", "Run macOS executable");
@@ -289,12 +284,16 @@ fn buildMacOS(
     return macos_step;
 }
 
-fn bundle(b: *Build, app_path: []const u8) *Build.Step {
+/// `signed` must finish before staging starts. Depending on it from the
+/// returned step alone isn't enough: the copy would race the build and
+/// can package a half-built, unsigned app.
+fn bundle(b: *Build, app_path: []const u8, signed: *Build.Step) *Build.Step {
     const bundle_step = b.step("bundle", "Bundle macOS DMG");
 
     const dmg_stage = "zig-out/dmg";
 
     const clean_stage = b.addSystemCommand(&.{ "rm", "-rf", dmg_stage });
+    clean_stage.step.dependOn(signed);
 
     const mk_stage = b.addSystemCommand(&.{ "mkdir", "-p", dmg_stage });
     mk_stage.step.dependOn(&clean_stage.step);
