@@ -3,35 +3,12 @@ import Sparkle
 import SwiftUI
 import UserNotifications
 
-let secondsPerHour = 3600
-
 struct PopoverView: View {
   @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
   private let updater: SPUUpdater
 
   @Bindable var model: ShiftModel
   @State var quitHovered = false
-
-  var clockOut: Date {
-    let cBreaks = model.breaks.map { brk in
-      ShiftInterval(
-        in_ts: Int64(brk.inDate.timeIntervalSince1970),
-        out_ts: Int64(brk.outDate.timeIntervalSince1970),
-      )
-    }
-
-    let inTs = model.clockInTime.timeIntervalSince1970
-    let outTs = cBreaks.withUnsafeBufferPointer { buf in
-      clockIn(
-        Int64(model.shiftLength * Double(secondsPerHour)),
-        Int64(inTs),
-        buf.baseAddress,
-        buf.count
-      )
-    }
-
-    return Date(timeIntervalSince1970: TimeInterval(outTs))
-  }
 
   init(updater: SPUUpdater, model: ShiftModel) {
     self.updater = updater
@@ -54,7 +31,10 @@ struct PopoverView: View {
         Text(" hr")
       }
 
-      DatePicker("Clock In", selection: $model.clockInTime, displayedComponents: .hourAndMinute)
+      HStack {
+        DatePicker("Clock In", selection: $model.clockInTime, displayedComponents: .hourAndMinute)
+        Button("Now") { model.clockInTime = Date() }
+      }
 
       HStack {
         Text("Breaks").bold()
@@ -89,15 +69,12 @@ struct PopoverView: View {
 
       HStack {
         Text("Clock Out:").bold()
-        Text(clockOut, style: .time)
+        Text(model.clockOut, style: .time)
       }.padding()
 
+      AlarmsSection(model: model)
+
       Divider()
-      Button(
-        "Alarm",
-        action: {
-          Task { @MainActor in AlarmController.shared.schedule(after: 30) }
-        })
       Button("Check for Updates", action: updater.checkForUpdates)
         .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
       Button {
@@ -126,8 +103,10 @@ struct PopoverView: View {
       .padding(.horizontal, 4)
     }
     .padding()
-    .frame(width: 250)
+    .frame(width: 300)
     .onAppear(perform: {
+      // Nothing observes the clock, so check for a finished shift on open.
+      model.rollOverIfStale()
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) {
         granted, error in
         if granted {
