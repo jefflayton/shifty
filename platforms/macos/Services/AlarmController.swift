@@ -43,6 +43,19 @@ final class AlarmController: ObservableObject {
     }
   }
 
+  /// Backstop notifications need permission; ask when the first alarm is
+  /// added rather than on every launch. A no-op once answered.
+  func requestPermission() {
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) {
+      granted, error in
+      if granted {
+        log("Notification permission granted")
+      } else if let error {
+        log(error.localizedDescription)
+      }
+    }
+  }
+
   /// Backstops from a previous run would ring at stale times; the scheduler
   /// re-creates current ones after launch.
   func removeStaleBackstops() {

@@ -3,27 +3,30 @@ import SwiftUI
 struct AlarmsSection: View {
   @Bindable var model: ShiftModel
 
+  /// Rows for the popover's Grid.
   var body: some View {
-    HStack {
-      Text("Alarms").bold()
+    GridRow {
+      FormLabel("Alarms")
       Menu {
         Button("At clock out") { add(.beforeClockOut(minutes: 0)) }
         Button("15 min before clock out") { add(.beforeClockOut(minutes: 15)) }
         Button("At a set time") { add(.atTime(model.clockOut)) }
       } label: {
-        Image(systemName: "plus")
+        Image(systemName: "plus.circle")
       }
       .menuStyle(.borderlessButton)
       .menuIndicator(.hidden)
       .fixedSize()
     }
-    .padding(.vertical, 4)
 
     if model.alarms.isEmpty {
-      Text("Alarms follow your clock out time as breaks change.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+      GridRow {
+        Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+        Text("Alarms follow your clock out time as breaks change.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
     }
 
     let clockOut = model.clockOut
@@ -41,6 +44,7 @@ struct AlarmsSection: View {
 
   private func add(_ trigger: AlarmRule.Trigger) {
     model.alarms.append(AlarmRule(trigger: trigger))
+    AlarmController.shared.requestPermission()
   }
 }
 
@@ -49,36 +53,48 @@ struct AlarmRow: View {
   let fireDate: Date
   let onDelete: () -> Void
 
+  /// A GridRow: the on/off switch sits in the label column.
   var body: some View {
-    HStack(spacing: 6) {
+    GridRow {
       Toggle("", isOn: $rule.isEnabled)
         .labelsHidden()
         .toggleStyle(.switch)
         .controlSize(.mini)
+        .gridColumnAlignment(.trailing)
 
-      switch rule.trigger {
-      case .beforeClockOut(let minutes):
-        Stepper(value: minutesBefore, in: 0...240, step: 5) {
-          Text(minutes == 0 ? "At clock out" : "\(minutes) min before")
+      HStack(spacing: 6) {
+        trigger
+        Spacer()
+
+        // A set-time alarm's picker already shows when it rings.
+        if case .beforeClockOut = rule.trigger {
+          Text(fireDate, style: .time)
+            .foregroundStyle(.secondary)
             .monospacedDigit()
+            .fixedSize()
         }
-      case .atTime:
-        DatePicker("", selection: time, displayedComponents: .hourAndMinute)
-          .labelsHidden()
+
+        Button(action: onDelete) {
+          Image(systemName: "trash")
+        }
+        .buttonStyle(.borderless)
       }
-
-      Spacer()
-
-      Text(fireDate, style: .time)
-        .foregroundStyle(.secondary)
-        .monospacedDigit()
-
-      Button(action: onDelete) {
-        Image(systemName: "trash")
-      }
-      .buttonStyle(.borderless)
+      .opacity(rule.isEnabled ? 1 : 0.5)
     }
-    .opacity(rule.isEnabled ? 1 : 0.5)
+  }
+
+  @ViewBuilder private var trigger: some View {
+    switch rule.trigger {
+    case .beforeClockOut(let minutes):
+      Stepper(value: minutesBefore, in: 0...240, step: 5) {
+        Text(minutes == 0 ? "At clock out" : "\(minutes) min before")
+          .monospacedDigit()
+          .fixedSize()
+      }
+    case .atTime:
+      DatePicker("", selection: time, displayedComponents: .hourAndMinute)
+        .labelsHidden()
+    }
   }
 
   private var minutesBefore: Binding<Int> {
