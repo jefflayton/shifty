@@ -24,11 +24,54 @@ async function latestTag(): Promise<string> {
     return await git("describe", "--tags", "--abbrev=0", "--match", "v*");
 }
 
-/**  Bump the patch component of a vX.Y.Z tag, e.g. v1.3.0 -> v1.3.1. */
-function nextPatch(tag: string): string {
+type Bump = "major" | "minor" | "patch";
+
+/**
+ * The semver bump a range of commit subjects calls for: `type!:` is
+ * breaking, `feat:` adds a feature, anything else is a patch.
+ */
+function bumpFor(subjects: string[]): Bump {
+    let bump: Bump = "patch";
+    for (const subject of subjects) {
+        const m = subject.match(/^(\w+)(\([^)]*\))?(!)?:/);
+        if (!m) continue;
+        if (m[3]) return "major";
+        if (m[1].toLowerCase() === "feat") bump = "minor";
+    }
+    return bump;
+}
+
+/** [major, minor, patch] of a vX.Y.Z tag, or null if it isn't one. */
+function parseVersion(tag: string): [number, number, number] | null {
     const m = tag.match(/^v(\d+)\.(\d+)\.(\d+)/);
-    if (!m) return "v0.0.1";
-    return `v${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** The tag after `tag` for `bump`, e.g. v1.4.0 + minor -> v1.5.0. */
+function nextVersion(tag: string, bump: Bump): string {
+    const v = parseVersion(tag);
+    if (!v) return "v0.1.0";
+    const [major, minor, patch] = v;
+    switch (bump) {
+        case "major":
+            return `v${major + 1}.0.0`;
+        case "minor":
+            return `v${major}.${minor + 1}.0`;
+        case "patch":
+            return `v${major}.${minor}.${patch + 1}`;
+    }
+}
+
+/** Whether vX.Y.Z tag `a` is a later version than `b`. */
+function isNewer(a: string, b: string): boolean {
+    const va = parseVersion(a);
+    const vb = parseVersion(b);
+    if (!va) return false;
+    if (!vb) return true;
+    for (let i = 0; i < 3; i++) {
+        if (va[i] !== vb[i]) return va[i] > vb[i];
+    }
+    return false;
 }
 
 const HIDDEN = new Set(["chore", "ci", "docs", "build", "test", "refactor"]);
@@ -71,12 +114,15 @@ Existing installs update themselves automatically via Sparkle.
 > Shifty is not notarized yet. On first launch macOS may block it. Right-click the app and choose **Open**, or run \`xattr -dr com.apple.quarantine /Applications/Shifty.app\`.`;
 }
 
-/**  Build the Markdown notes from the commits over a git range. */
-async function buildNotes(range: string): Promise<string> {
+/** Commit subjects over a git range. */
+async function subjectsIn(range: string): Promise<string[]> {
     console.log(`Diffing ${range}`);
     const log = await git("log", range, "--format=%s");
-    const subjects = log ? log.split("\n") : [];
+    return log ? log.split("\n") : [];
+}
 
+/**  Build the Markdown notes from commit subjects. */
+function buildNotes(subjects: string[]): string {
     const buckets = {
         features: [] as string[],
         fixes: [] as string[],
@@ -206,24 +252,30 @@ async function publish(tag: string, body: string): Promise<Release> {
 }
 
 /**
- * Upsert the rolling draft. PATCH never touches the tag, so a version
- * you bumped by hand in the UI survives later merges.
+ * Upsert the rolling draft for `tag`. An existing draft's tag is only ever
+ * raised, so a version you bumped by hand in the UI survives later merges,
+ * but a feat merged after a fix-only draft still makes it a minor release.
  */
-async function upsertDraft(body: string) {
+async function upsertDraft(tag: string, body: string) {
     const draft = await existingDraft();
     if (draft) {
+        const raise = isNewer(tag, draft.tag_name);
         await check(
             await fetch(`${API}/releases/${draft.id}`, {
                 method: "PATCH",
                 headers,
-                body: JSON.stringify({ body }),
+                body: JSON.stringify(
+                    raise ? { tag_name: tag, name: tag, body } : { body },
+                ),
             }),
             "Update draft",
         );
-        console.log(`Updated draft ${draft.id} (${draft.tag_name}).`);
+        console.log(
+            raise
+                ? `Raised draft ${draft.id} from ${draft.tag_name} to ${tag}.`
+                : `Updated draft ${draft.id} (${draft.tag_name}).`,
+        );
     } else {
-        const latest = await latestTag().catch(() => "");
-        const tag = nextPatch(latest);
         await check(
             await fetch(`${API}/releases`, {
                 method: "POST",
@@ -240,6 +292,8 @@ async function upsertDraft(body: string) {
         console.log(`Created draft ${tag}.`);
     }
 }
+
+export { bumpFor, isNewer, nextVersion };
 
 if (import.meta.main) {
     const args = Deno.args;
@@ -262,9 +316,11 @@ if (import.meta.main) {
     if (doDraft) {
         const since = await latestTag().catch(() => "");
         const range = since ? `${since}..HEAD` : "HEAD";
-        const notes = await buildNotes(range);
-        console.log("----- draft notes -----\n" + notes);
-        await upsertDraft(notes);
+        const subjects = await subjectsIn(range);
+        const tag = nextVersion(since, bumpFor(subjects));
+        const notes = buildNotes(subjects);
+        console.log(`----- draft notes (${tag}) -----\n` + notes);
+        await upsertDraft(tag, notes);
     }
 
     if (out || doPublish) {
@@ -282,7 +338,7 @@ if (import.meta.main) {
             `${tag}^`,
         );
         const range = prev ? `${prev}..${tag}` : tag;
-        const notes = await buildNotes(range);
+        const notes = buildNotes(await subjectsIn(range));
         console.log("----- release notes -----\n" + notes);
 
         if (out) {
