@@ -157,6 +157,7 @@ do {
     AlarmRule(trigger: .beforeClockOut(minutes: 10)),
     AlarmRule(trigger: .atTime(at(15)), isEnabled: false),
   ]
+  m.breakStart = at(14)
   m.save(to: defaults)
 
   let loaded = ShiftModel.load(from: defaults)
@@ -164,6 +165,7 @@ do {
   expectEqual(loaded.shiftLength, 7.5)
   expectEqual(loaded.breaks, m.breaks)
   expectEqual(loaded.alarms, m.alarms)
+  expectEqual(loaded.breakStart, at(14), "break in progress survives a restart")
 
   let empty = ShiftModel.load(from: UserDefaults(suiteName: suite + "-none")!)
   check(empty.alarms.isEmpty && empty.breaks.isEmpty, "missing data loads defaults")
@@ -197,6 +199,68 @@ expectEqual(ShiftSummary.duration(3600 + 5 * 60), "1 hr 5 min")
 expectEqual(ShiftSummary.relative(at(17, 30), now: at(14, 18)), "in 3 hr 12 min")
 expectEqual(ShiftSummary.relative(at(17), now: at(17, 0).addingTimeInterval(20)), "now")
 expectEqual(ShiftSummary.relative(at(17), now: at(17, 12)), "12 min ago")
+
+// MARK: Break in progress
+
+do {
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.startBreak(now: at(12))
+  check(m.isOnBreak, "on break")
+  m.startBreak(now: at(12, 5))
+  expectEqual(m.breakStart, at(12), "starting again keeps the first start")
+  expectEqual(m.clockOut(now: at(12, 20)), at(17, 20), "clock out moves while on break")
+  expectEqual(m.clockOut(now: at(12, 45)), at(17, 45))
+  check(m.breaks.isEmpty, "not saved until it ends")
+
+  m.endBreak(now: at(12, 30))
+  check(!m.isOnBreak, "break ended")
+  expectEqual(m.breaks.map(\.inDate), [at(12)], "ended break is saved")
+  expectEqual(m.breaks.map(\.outDate), [at(12, 30)])
+  expectEqual(m.clockOut(now: at(15)), at(17, 30), "saved break stops moving")
+
+  m.startBreak(now: at(14))
+  m.endBreak(now: at(14).addingTimeInterval(20))
+  expectEqual(m.breaks.count, 1, "a break ended in the same minute is dropped")
+}
+do {
+  let m = ShiftModel()
+  m.clockInTime = at(9, day: -1)
+  m.startBreak(now: at(16, day: -1))
+  m.rollOverIfStale(now: at(8), calendar: cal)
+  check(!m.isOnBreak, "a break left running overnight is dropped")
+  expectEqual(m.clockInTime, at(9), "and the shift rolls over")
+}
+do {
+  let now = at(12, 10)
+  expectEqual(
+    AlarmPlanner.action(fireDate: at(17), pending: at(17), snoozed: false, held: true, now: now),
+    .cancelPending, "clock-out alarms wait for the break to end")
+  expectEqual(
+    AlarmPlanner.action(fireDate: at(17), pending: at(12, 12), snoozed: true, held: true, now: now),
+    .keep, "a snooze still rings during a break")
+  check(AlarmRule(trigger: .beforeClockOut(minutes: 5)).followsClockOut, "follows clock out")
+  check(!AlarmRule(trigger: .atTime(at(15))).followsClockOut, "set time doesn't")
+}
+
+// MARK: Menu bar text
+
+do {
+  expectEqual(MenuBarDisplay.compact(2 * 3600 + 15 * 60), "2h 15m")
+  expectEqual(MenuBarDisplay.compact(45 * 60), "45m")
+  expectEqual(MenuBarDisplay.compact(20), "1m", "rounds up before clock out")
+  expectEqual(MenuBarDisplay.timeLeft.title(clockOut: at(17), now: at(14, 50)), "2h 10m")
+  check(MenuBarDisplay.clockOut.title(clockOut: at(17), now: at(14)) != nil, "clock-out time")
+  check(MenuBarDisplay.iconOnly.title(clockOut: at(17), now: at(14)) == nil, "icon only")
+  check(MenuBarDisplay.timeLeft.title(clockOut: at(17), now: at(17, 1)) == nil, "shift over")
+
+  let suite = "shifty-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: suite)!
+  defer { defaults.removePersistentDomain(forName: suite) }
+  expectEqual(Preferences(defaults: defaults).menuBarDisplay, .clockOut, "default")
+  Preferences(defaults: defaults).menuBarDisplay = .timeLeft
+  expectEqual(Preferences(defaults: defaults).menuBarDisplay, .timeLeft, "saved")
+}
 
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

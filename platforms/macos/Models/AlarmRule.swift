@@ -23,6 +23,12 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     }
   }
 
+  /// Whether it rings relative to clock out, which isn't known while you're
+  /// on a break.
+  var followsClockOut: Bool {
+    if case .beforeClockOut = trigger { true } else { false }
+  }
+
   var title: String {
     switch trigger {
     case .beforeClockOut(0): "Time to clock out"
@@ -45,9 +51,13 @@ enum AlarmAction: Equatable {
 enum AlarmPlanner {
   /// Decides how to bring one enabled rule's pending alarm in line with its
   /// current fire date. Past fire dates are never scheduled: an alarm that
-  /// already rang stays quiet unless clock out moves later than now.
-  static func action(fireDate: Date, pending: Date?, snoozed: Bool, now: Date) -> AlarmAction {
-    if fireDate <= now { return snoozed ? .keep : .cancelPending }
+  /// already rang stays quiet unless clock out moves later than now. A
+  /// `held` alarm (one that follows clock out, during a break) waits until
+  /// the break ends and clock out is known again.
+  static func action(
+    fireDate: Date, pending: Date?, snoozed: Bool, held: Bool = false, now: Date
+  ) -> AlarmAction {
+    if held || fireDate <= now { return snoozed ? .keep : .cancelPending }
     return pending == fireDate ? .keep : .schedule(fireDate)
   }
 }

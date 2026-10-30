@@ -21,10 +21,13 @@ jobs:
 
             - uses: jdx/mise-action@v3
               with:
-                  install_args: zig
+                  install_args: zig deno
 
             - name: Test
               run: zig build test
+
+            - name: Test release scripts
+              run: deno test --allow-run --allow-env .github/scripts
 
             - name: Build TUI + CLI
               run: zig build tui cli
