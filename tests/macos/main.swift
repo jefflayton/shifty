@@ -262,5 +262,29 @@ do {
   expectEqual(Preferences(defaults: defaults).menuBarDisplay, .timeLeft, "saved")
 }
 
+// MARK: Clock-out link
+
+do {
+  expectEqual(Preferences.link(from: "https://example.com/clock")?.absoluteString,
+    "https://example.com/clock")
+  expectEqual(Preferences.link(from: "  example.com/clock ")?.absoluteString,
+    "https://example.com/clock", "bare address gets https")
+  expectEqual(Preferences.link(from: "http://timeclock")?.absoluteString, "http://timeclock",
+    "intranet host")
+  check(Preferences.link(from: "") == nil, "empty")
+  check(Preferences.link(from: "not a link") == nil, "spaces")
+  check(Preferences.link(from: "https://") == nil, "no host")
+
+  let suite = "shifty-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: suite)!
+  defer { defaults.removePersistentDomain(forName: suite) }
+  check(Preferences(defaults: defaults).clockOutLink == nil, "no link by default")
+  Preferences(defaults: defaults).clockOutLink = URL(string: "https://example.com")
+  expectEqual(Preferences(defaults: defaults).clockOutLink, URL(string: "https://example.com"),
+    "saved")
+  Preferences(defaults: defaults).clockOutLink = nil
+  check(Preferences(defaults: defaults).clockOutLink == nil, "cleared")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

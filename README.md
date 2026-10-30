@@ -82,6 +82,9 @@ until then. Set-time alarms still ring, so one can remind you when to come back.
 When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
 **Stop**. A notification is scheduled as a backup in case Shifty isn't running.
 
+To clock out from the alarm, set **Settings → Clock-Out Link…** to your timeclock page. Alarms then
+show a **Clock Out** button that opens it and stops the alarm.
+
 ## CLI
 
 ```

@@ -89,6 +89,11 @@ struct PopoverView: View {
           Toggle(
             "Open at Login",
             isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
+          Divider()
+          Button("Clock-Out Link…") {
+            // Let the menu close first; a modal from inside it doesn't take keys.
+            DispatchQueue.main.async { ClockOutLinkPrompt.run(preferences: preferences) }
+          }
         }
         MenuRowButton("Quit Shifty", shortcut: "⌘Q") { NSApp.terminate(nil) }
       }

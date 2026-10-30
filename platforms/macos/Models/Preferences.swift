@@ -44,12 +44,33 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(menuBarDisplay.rawValue, forKey: Self.menuBarDisplayKey) }
   }
 
+  /// Where you clock out, like a timeclock page. Alarms show a button that
+  /// opens it.
+  var clockOutLink: URL? {
+    didSet { defaults.set(clockOutLink?.absoluteString, forKey: Self.clockOutLinkKey) }
+  }
+
   @ObservationIgnored private let defaults: UserDefaults
   static let menuBarDisplayKey = "menuBarDisplay"
+  static let clockOutLinkKey = "clockOutLink"
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
+    clockOutLink = defaults.string(forKey: Self.clockOutLinkKey).flatMap(Self.link(from:))
+  }
+
+  /// The link typed into settings, or nil if it isn't one. A bare
+  /// "example.com/clock" gets https.
+  static func link(from text: String) -> URL? {
+    let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !text.contains(where: \.isWhitespace) else { return nil }
+    let full = text.contains("://") || text.hasPrefix("mailto:") ? text : "https://\(text)"
+    guard let url = URL(string: full), let scheme = url.scheme, !scheme.isEmpty else { return nil }
+    if ["http", "https"].contains(scheme.lowercased()), url.host()?.isEmpty ?? true {
+      return nil
+    }
+    return url
   }
 }
