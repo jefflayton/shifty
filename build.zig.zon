@@ -13,5 +13,9 @@
             .url = "git+https://github.com/rockorager/libvaxis?ref=main#cca454be4e002dbe1a386ff0fd3420ea21813fb5",
             .hash = "vaxis-0.6.0-BWNV_DYXCgBP-oydkwMvwclWtjMrMAmSmg7cO6wtYFno",
         },
+        .sqlite = .{
+            .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
+            .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
+        },
     },
 }

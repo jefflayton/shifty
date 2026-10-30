@@ -18,6 +18,39 @@ pub fn build(b: *Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_tests.step);
 
+    // The shared database. Separate from core so the shift math stays free
+    // of SQLite for anything that only needs a clock-out time.
+    const sqlite = b.dependency("sqlite", .{});
+    const sqlite_h = b.addTranslateC(.{
+        .root_source_file = sqlite.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const store = b.createModule(.{
+        .root_source_file = b.path("src/store/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    store.addImport("core", core);
+    store.addImport("c", sqlite_h.createModule());
+    store.addCSourceFile(.{
+        .file = sqlite.path("sqlite3.c"),
+        .flags = &.{
+            "-std=c99",
+            // Each connection is used from one thread at a time.
+            "-DSQLITE_THREADSAFE=2",
+            // "name" is an identifier, never a string literal.
+            "-DSQLITE_DQS=0",
+            "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+            "-DSQLITE_OMIT_DEPRECATED",
+            "-DSQLITE_OMIT_SHARED_CACHE",
+        },
+    });
+
+    const store_tests = b.addTest(.{ .root_module = store });
+    test_step.dependOn(&b.addRunArtifact(store_tests).step);
+
     const macos_step = buildMacOS(b, optimize, core);
     b.getInstallStep().dependOn(macos_step);
 
