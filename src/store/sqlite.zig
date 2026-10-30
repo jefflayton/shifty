@@ -57,6 +57,11 @@ pub const Db = struct {
         return .{ .handle = handle orelse return error.Io };
     }
 
+    /// Rows changed by the last INSERT, UPDATE, or DELETE.
+    pub fn changes(db: Db) i64 {
+        return c.sqlite3_changes64(db.handle);
+    }
+
     pub fn errmsg(db: Db) []const u8 {
         return std.mem.span(c.sqlite3_errmsg(db.handle));
     }

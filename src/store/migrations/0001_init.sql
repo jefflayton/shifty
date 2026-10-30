@@ -53,6 +53,7 @@ create table links (
     project_id blob not null references projects (id),
     workspace_id blob references workspaces (id),
     created_ts integer not null,
+    updated_ts integer not null,
     unique (provider, kind, external_id)
 ) strict;
 
@@ -67,6 +68,8 @@ create table shifts (
     tz text,
     target_secs integer not null check (target_secs > 0),
     out_ts integer,
+    created_ts integer not null,
+    updated_ts integer not null,
     deleted_ts integer,
     check (out_ts is null or out_ts > in_ts)
 ) strict;
@@ -77,6 +80,8 @@ create table breaks (
     shift_id blob not null references shifts (id),
     in_ts integer not null,
     out_ts integer,
+    created_ts integer not null,
+    updated_ts integer not null,
     deleted_ts integer,
     check (out_ts is null or out_ts > in_ts)
 ) strict;
@@ -108,6 +113,7 @@ where out_ts is null and deleted_ts is null;
 create unique index one_open_entry on entries ((1))
 where out_ts is null and deleted_ts is null;
 
+create index breaks_by_shift on breaks (shift_id, in_ts) where deleted_ts is null;
 create index entries_by_time on entries (in_ts) where deleted_ts is null;
 create index entries_by_project on entries (project_id, in_ts)
 where deleted_ts is null;
@@ -121,6 +127,8 @@ create table alarm_rules (
     -- local wall clock, so "ring at 4:30" follows you across zones
     time_of_day_secs integer,
     enabled integer not null default 1 check (enabled in (0, 1)),
+    created_ts integer not null,
+    updated_ts integer not null,
     deleted_ts integer,
     check (
         (kind = 'before_clock_out' and minutes >= 0 and time_of_day_secs is null)
@@ -135,5 +143,6 @@ create table alarm_rules (
 -- Frontend-only prefs (menu bar display mode) stay in UserDefaults.
 create table settings (
     key text primary key not null,
-    value text not null
+    value text not null,
+    updated_ts integer not null
 ) strict;

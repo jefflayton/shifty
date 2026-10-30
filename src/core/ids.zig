@@ -1,5 +1,6 @@
-//! Row ids: UUIDv7, so ids sort by creation time and clients can mint them
-//! offline without a server handing out integers.
+//! Row ids: UUIDv7, so clients can mint them offline without a server
+//! handing out integers. They sort by creation time only to the millisecond;
+//! order rows by a timestamp, not by id.
 
 const std = @import("std");
 const Io = std.Io;

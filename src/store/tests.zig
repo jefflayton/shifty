@@ -225,3 +225,197 @@ test "defaultPath" {
     defer gpa.free(override);
     try testing.expectEqualStrings("/tmp/dev.db", override);
 }
+
+// ── Shifts and breaks ───────────────────────────────────────────────────────
+
+const h = std.time.s_per_hour;
+
+test "shifts - clock in, break, clock out" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(0));
+    try testing.expectError(error.Conflict, s.startShift(8 * h, at(10)));
+
+    const shift = (try s.currentShift(a)).?;
+    try testing.expect(shift.id.eql(shift_id));
+    try testing.expectEqualStrings("America/Chicago", shift.tz.?);
+    try testing.expectEqual(8 * h, store.clockOut(shift, &.{}, 0));
+
+    // A running break pushes clock out as it goes.
+    _ = try s.startBreak(4 * h);
+    try testing.expectError(error.Conflict, s.startBreak(4 * h + 10));
+    try testing.expectEqual(8 * h + 600, store.clockOut(shift, try s.breaks(a, shift_id), 4 * h + 600));
+    _ = (try s.endBreak(5 * h)).?;
+    try testing.expectEqual(9 * h, store.clockOut(shift, try s.breaks(a, shift_id), 6 * h));
+
+    try testing.expect((try s.endShift(9 * h)).?.eql(shift_id));
+    try testing.expectEqual(null, try s.currentShift(a));
+    try testing.expectError(error.NotFound, s.startBreak(10 * h));
+
+    // Clocked out, so a new shift can start.
+    _ = try s.startShift(8 * h, at(24 * h));
+}
+
+test "shifts - break shorter than a minute is dropped" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(0));
+    _ = try s.startBreak(100);
+    try testing.expectEqual(null, try s.endBreak(159));
+    try testing.expectEqual(0, (try s.breaks(arena.allocator(), shift_id)).len);
+}
+
+test "shifts - break and clock out stop the running entry" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    _ = try s.startShift(8 * h, at(0));
+    _ = try s.startEntry(.{ .source = .tui }, at(0));
+    _ = try s.startBreak(2 * h);
+    try testing.expectEqual(null, try s.runningEntry(a));
+    _ = try s.endBreak(3 * h);
+
+    _ = try s.startEntry(.{ .source = .tui }, at(3 * h));
+    _ = try s.startBreak(5 * h); // left running
+    _ = try s.endShift(9 * h);
+    try testing.expectEqual(null, try s.runningEntry(a));
+
+    const entries = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(2, entries.len);
+    try testing.expectEqual(2 * h, entries[0].out_ts.?);
+    try testing.expectEqual(5 * h, entries[1].out_ts.?);
+}
+
+test "shifts - edit, planned breaks, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(9 * h));
+    try s.editShift(shift_id, .{ .in_ts = 8 * h }, 9 * h);
+    try s.editShift(shift_id, .{ .target_secs = 7 * h }, 9 * h);
+    const shift = (try s.currentShift(a)).?;
+    try testing.expectEqual(8 * h, shift.in_ts);
+    try testing.expectEqual(7 * h, shift.target_secs);
+    try testing.expectError(error.NotFound, s.editShift(.v7(io), .{ .target_secs = h }, 0));
+
+    const lunch = try s.addBreak(shift_id, 12 * h, 13 * h, 9 * h);
+    try testing.expectError(error.Conflict, s.addBreak(shift_id, 14 * h, 13 * h, 9 * h));
+    try testing.expectEqual(16 * h, store.clockOut(shift, try s.breaks(a, shift_id), 9 * h));
+
+    try s.editBreak(lunch, 12 * h, 12 * h + 1800, 9 * h);
+    try testing.expectEqual(15 * h + 1800, store.clockOut(shift, try s.breaks(a, shift_id), 9 * h));
+
+    try s.deleteBreak(lunch, 9 * h);
+    try testing.expectError(error.NotFound, s.deleteBreak(lunch, 9 * h));
+    try testing.expectEqual(0, (try s.breaks(a, shift_id)).len);
+}
+
+test "shifts - a forgotten shift closes at its clock out" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(0));
+    _ = try s.startBreak(4 * h); // forgotten
+
+    // Not stale yet: the running break still counts, so clock out is "now".
+    try testing.expect(!try s.closeStaleShift(a, 10 * h));
+    try testing.expect((try s.currentShift(a)) != null);
+
+    // 12h after the forgotten break started it's dropped, but the shift's
+    // plain 8h clock out isn't 12h past yet.
+    try testing.expect(!try s.closeStaleShift(a, 16 * h + 1));
+    try testing.expectEqual(0, (try s.breaks(a, shift_id)).len);
+    try testing.expect((try s.currentShift(a)) != null);
+
+    try testing.expect(try s.closeStaleShift(a, 20 * h + 1));
+    try testing.expectEqual(null, try s.currentShift(a));
+    const ended = try s.shiftsBetween(a, 0, 24 * h);
+    try testing.expectEqual(1, ended.len);
+    try testing.expectEqual(8 * h, ended[0].out_ts.?);
+
+    try testing.expect(!try s.closeStaleShift(a, 40 * h));
+}
+
+// ── Alarms, settings, links ─────────────────────────────────────────────────
+
+test "alarm rules" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const ten = try s.addAlarmRule(.{ .before_clock_out = 10 }, 0);
+    const lunch = try s.addAlarmRule(.{ .at_time = 12 * h }, 0);
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .at_time = 25 * h }, 0));
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .before_clock_out = -1 }, 0));
+
+    try s.setAlarmEnabled(lunch, false, 1);
+    var rules = try s.alarmRules(a);
+    try testing.expectEqual(2, rules.len);
+    try testing.expect(rules[0].id.eql(ten));
+    try testing.expectEqual(10, rules[0].trigger.before_clock_out);
+    try testing.expect(rules[0].enabled);
+    try testing.expectEqual(12 * h, rules[1].trigger.at_time);
+    try testing.expect(!rules[1].enabled);
+
+    try s.deleteAlarmRule(ten, 2);
+    rules = try s.alarmRules(a);
+    try testing.expectEqual(1, rules.len);
+    try testing.expectError(error.NotFound, s.setAlarmEnabled(ten, true, 3));
+}
+
+test "settings" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try testing.expectEqual(null, try s.setting(a, "clock_out_link"));
+    try s.setSetting("clock_out_link", "https://example.com", 0);
+    try s.setSetting("clock_out_link", "https://example.com/clock", 1);
+    try testing.expectEqualStrings("https://example.com/clock", (try s.setting(a, "clock_out_link")).?);
+    try s.setSetting("clock_out_link", null, 2);
+    try testing.expectEqual(null, try s.setting(a, "clock_out_link"));
+}
+
+test "links - resolve, re-point, validate" {
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const web = try s.createProject(.{ .name = "web" }, 0);
+    const api = try s.createProject(.{ .name = "api" }, 0);
+    const main = try s.createWorkspace(web, "main", 0);
+    const situ_id = "01A0F5C4929E71CA888CD75111AC0F15";
+
+    try testing.expectEqual(null, try s.resolveLink("situ", "project", situ_id));
+    try s.link("situ", "project", situ_id, .{ .project_id = web, .workspace_id = main }, 0);
+    var t = (try s.resolveLink("situ", "project", situ_id)).?;
+    try testing.expect(t.project_id.eql(web));
+    try testing.expect(t.workspace_id.?.eql(main));
+
+    try s.link("situ", "project", situ_id, .{ .project_id = api }, 1);
+    t = (try s.resolveLink("situ", "project", situ_id)).?;
+    try testing.expect(t.project_id.eql(api));
+    try testing.expectEqual(null, t.workspace_id);
+
+    try testing.expectError(error.Mismatch, s.link("situ", "workspace", "x", .{ .project_id = api, .workspace_id = main }, 2));
+    try testing.expectEqual(null, try s.resolveLink("situ", "workspace", "x"));
+}

@@ -63,6 +63,65 @@ pub const Entry = struct {
     note: ?[]const u8,
 };
 
+pub const Shift = struct {
+    id: Uuid,
+    in_ts: i64,
+    utc_offset_secs: i64,
+    tz: ?[]const u8,
+    /// Worked time the shift is for, e.g. 8h; breaks push clock out later.
+    target_secs: i64,
+    /// When you actually clocked out; null while on shift.
+    out_ts: ?i64,
+};
+
+pub const Break = struct {
+    id: Uuid,
+    shift_id: Uuid,
+    in_ts: i64,
+    /// null while on it.
+    out_ts: ?i64,
+};
+
+pub const AlarmRule = struct {
+    id: Uuid,
+    trigger: Trigger,
+    enabled: bool,
+
+    pub const Trigger = union(enum) {
+        /// Rings this many minutes before clock out; 0 rings at clock out.
+        before_clock_out: i64,
+        /// Rings at this local time of day, in seconds since midnight.
+        at_time: i64,
+    };
+};
+
+/// What a link (or an entry) points at.
+pub const Target = struct {
+    project_id: Uuid,
+    workspace_id: ?Uuid = null,
+};
+
+/// A shift's expected clock out: `target_secs` of work after clock in, pushed
+/// later by breaks. A break in progress counts as ending at `now`.
+pub fn clockOut(shift: Shift, brks: []const Break, now: i64) i64 {
+    // A shift with more breaks than this isn't a shift.
+    var buf: [64]core.shift.Interval = undefined;
+    var n: usize = 0;
+    for (brks) |b| {
+        if (n == buf.len) break;
+        buf[n] = .{ .in_ts = b.in_ts, .out_ts = b.out_ts orelse @max(now, b.in_ts) };
+        n += 1;
+    }
+    return core.shift.clockIn(shift.target_secs, shift.in_ts, buf[0..n]);
+}
+
+/// A break shorter than this was a mis-click, not a break.
+pub const min_break_secs = 60;
+
+/// A shift whose clock out is this far past is over, and a break running
+/// this long was forgotten.
+pub const stale_after_secs = 12 * std.time.s_per_hour;
+
 pub const NewProject = struct {
     name: []const u8,
     client_id: ?Uuid = null,
@@ -258,15 +317,7 @@ pub const Store = struct {
         try self.begin();
         errdefer self.rollback();
 
-        var project_id = e.project_id;
-        if (e.workspace_id) |ws| {
-            const owner = try self.oneId("SELECT project_id FROM workspaces WHERE id = ?", .{blob(&ws)}) orelse
-                return error.NotFound;
-            if (project_id) |p| {
-                if (!p.eql(owner)) return error.Mismatch;
-            } else project_id = owner;
-        }
-
+        const project_id = try self.projectFor(e.project_id, e.workspace_id);
         _ = try self.closeRunning(at.ts);
 
         const new: Uuid = .v7(self.io);
@@ -283,6 +334,16 @@ pub const Store = struct {
 
         try self.commit();
         return new;
+    }
+
+    /// The project `workspace_id` belongs to, checked against `project_id`
+    /// if both are given.
+    fn projectFor(self: *Store, project_id: ?Uuid, workspace_id: ?Uuid) Error!?Uuid {
+        const ws = workspace_id orelse return project_id;
+        const owner = try self.oneId("SELECT project_id FROM workspaces WHERE id = ?", .{blob(&ws)}) orelse
+            return error.NotFound;
+        if (project_id) |p| if (!p.eql(owner)) return error.Mismatch;
+        return owner;
     }
 
     /// Stops the running entry at `now`. Returns its id, or null if nothing
@@ -352,6 +413,312 @@ pub const Store = struct {
             .note = try stmt.optText(arena, 8),
         });
         return out.items;
+    }
+
+    // ── Shifts and breaks ─────────────────────────────────────────────────
+
+    /// Clocks in. Fails with `Conflict` if a shift is already open.
+    pub fn startShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO shifts (id, in_ts, utc_offset_secs, tz, target_secs, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        , .{ blob(&new), at.ts, at.utc_offset_secs, at.tz, target_secs, at.ts, at.ts });
+        return new;
+    }
+
+    /// The open shift, if any. Allocated in `arena`.
+    pub fn currentShift(self: *Store, arena: Allocator) Error!?Shift {
+        const rows = try self.queryShifts(arena,
+            \\WHERE out_ts IS NULL AND deleted_ts IS NULL
+        , .{});
+        return if (rows.len == 0) null else rows[0];
+    }
+
+    /// Shifts overlapping `[from, to)`, the open one included, oldest first.
+    /// Allocated in `arena`.
+    pub fn shiftsBetween(self: *Store, arena: Allocator, from: i64, to: i64) Error![]Shift {
+        return self.queryShifts(arena,
+            \\WHERE deleted_ts IS NULL AND in_ts < ? AND (out_ts IS NULL OR out_ts > ?)
+            \\ORDER BY in_ts
+        , .{ to, from });
+    }
+
+    fn queryShifts(self: *Store, arena: Allocator, comptime where: []const u8, values: anytype) Error![]Shift {
+        var stmt = try self.db.prepare(
+            \\SELECT id, in_ts, utc_offset_secs, tz, target_secs, out_ts FROM shifts
+        ++ "\n" ++ where);
+        defer stmt.deinit();
+        try stmt.bindAll(values);
+        var out: std.ArrayList(Shift) = .empty;
+        while (try stmt.step()) try out.append(arena, .{
+            .id = try id(stmt, 0),
+            .in_ts = stmt.int(1),
+            .utc_offset_secs = stmt.int(2),
+            .tz = try stmt.optText(arena, 3),
+            .target_secs = stmt.int(4),
+            .out_ts = stmt.optInt(5),
+        });
+        return out.items;
+    }
+
+    /// Edits a shift's clock in or length; null fields are left alone.
+    pub fn editShift(self: *Store, shift_id: Uuid, edit: struct { in_ts: ?i64 = null, target_secs: ?i64 = null }, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE shifts SET in_ts = coalesce(?, in_ts), target_secs = coalesce(?, target_secs),
+            \\                  updated_ts = ?
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{ edit.in_ts, edit.target_secs, now, blob(&shift_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Clocks out of the open shift at `now`, ending the running break and
+    /// entry with it. Returns the shift's id, or null if none was open.
+    pub fn endShift(self: *Store, now: i64) Error!?Uuid {
+        try self.begin();
+        errdefer self.rollback();
+        const ended = try self.closeShift(now);
+        try self.commit();
+        return ended;
+    }
+
+    fn closeShift(self: *Store, out_ts: i64) Error!?Uuid {
+        var stmt = try self.db.prepare(
+            \\SELECT id, in_ts FROM shifts WHERE out_ts IS NULL AND deleted_ts IS NULL
+        );
+        defer stmt.deinit();
+        if (!try stmt.step()) return null;
+        const shift_id = try id(stmt, 0);
+        const in_ts = stmt.int(1);
+
+        _ = try self.closeBreak(out_ts);
+        _ = try self.closeRunning(out_ts);
+        // Clocked out the second it started: nothing to keep.
+        const sql = if (out_ts > in_ts)
+            "UPDATE shifts SET out_ts = ?, updated_ts = ?1 WHERE id = ?"
+        else
+            "UPDATE shifts SET deleted_ts = ?, updated_ts = ?1 WHERE id = ?";
+        try self.db.exec(sql, .{ out_ts, blob(&shift_id) });
+        return shift_id;
+    }
+
+    /// Housekeeping for a shift nobody clocked out of: once its expected
+    /// clock out is `stale_after_secs` past, it ends there. A break running
+    /// that long was forgotten, not taken, so it's dropped first. Returns
+    /// whether a shift was closed.
+    pub fn closeStaleShift(self: *Store, arena: Allocator, now: i64) Error!bool {
+        try self.begin();
+        errdefer self.rollback();
+
+        try self.db.exec(
+            \\UPDATE breaks SET deleted_ts = ?1, updated_ts = ?1
+            \\WHERE out_ts IS NULL AND deleted_ts IS NULL AND in_ts < ?1 - ?2
+        , .{ now, stale_after_secs });
+
+        const shift = try self.currentShift(arena) orelse {
+            try self.commit();
+            return false;
+        };
+        const out = clockOut(shift, try self.breaks(arena, shift.id), now);
+        const stale = out < now - stale_after_secs;
+        if (stale) _ = try self.closeShift(out);
+        try self.commit();
+        return stale;
+    }
+
+    /// A shift's breaks, oldest first. Allocated in `arena`.
+    pub fn breaks(self: *Store, arena: Allocator, shift_id: Uuid) Error![]Break {
+        var stmt = try self.db.prepare(
+            \\SELECT id, in_ts, out_ts FROM breaks
+            \\WHERE shift_id = ? AND deleted_ts IS NULL
+            \\ORDER BY in_ts
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{blob(&shift_id)});
+        var out: std.ArrayList(Break) = .empty;
+        while (try stmt.step()) try out.append(arena, .{
+            .id = try id(stmt, 0),
+            .shift_id = shift_id,
+            .in_ts = stmt.int(1),
+            .out_ts = stmt.optInt(2),
+        });
+        return out.items;
+    }
+
+    /// Goes on break from the open shift, stopping the running entry.
+    /// `NotFound` if off shift, `Conflict` if already on break.
+    pub fn startBreak(self: *Store, now: i64) Error!Uuid {
+        try self.begin();
+        errdefer self.rollback();
+
+        const shift_id = try self.oneId(
+            \\SELECT id FROM shifts WHERE out_ts IS NULL AND deleted_ts IS NULL
+        , .{}) orelse return error.NotFound;
+        _ = try self.closeRunning(now);
+
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO breaks (id, shift_id, in_ts, created_ts, updated_ts) VALUES (?, ?, ?, ?3, ?3)
+        , .{ blob(&new), blob(&shift_id), now });
+        try self.commit();
+        return new;
+    }
+
+    /// Ends the running break. Returns its id, or null if none was running
+    /// or it was shorter than `min_break_secs` and dropped.
+    pub fn endBreak(self: *Store, now: i64) Error!?Uuid {
+        try self.begin();
+        errdefer self.rollback();
+        const ended = try self.closeBreak(now);
+        try self.commit();
+        return ended;
+    }
+
+    fn closeBreak(self: *Store, now: i64) Error!?Uuid {
+        var stmt = try self.db.prepare(
+            \\SELECT id, in_ts FROM breaks WHERE out_ts IS NULL AND deleted_ts IS NULL
+        );
+        defer stmt.deinit();
+        if (!try stmt.step()) return null;
+        const brk = try id(stmt, 0);
+        const in_ts = stmt.int(1);
+
+        if (now - in_ts >= min_break_secs) {
+            try self.db.exec("UPDATE breaks SET out_ts = ?, updated_ts = ?1 WHERE id = ?", .{ now, blob(&brk) });
+            return brk;
+        }
+        try self.db.exec("UPDATE breaks SET deleted_ts = ?, updated_ts = ?1 WHERE id = ?", .{ now, blob(&brk) });
+        return null;
+    }
+
+    /// Records a break with both ends, e.g. a planned lunch. `Conflict` if
+    /// it ends before it starts.
+    pub fn addBreak(self: *Store, shift_id: Uuid, in_ts: i64, out_ts: i64, now: i64) Error!Uuid {
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO breaks (id, shift_id, in_ts, out_ts, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?5, ?5)
+        , .{ blob(&new), blob(&shift_id), in_ts, out_ts, now });
+        return new;
+    }
+
+    pub fn editBreak(self: *Store, break_id: Uuid, in_ts: i64, out_ts: i64, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE breaks SET in_ts = ?, out_ts = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
+        , .{ in_ts, out_ts, now, blob(&break_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    pub fn deleteBreak(self: *Store, break_id: Uuid, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE breaks SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&break_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    // ── Alarms and settings ───────────────────────────────────────────────
+
+    pub fn addAlarmRule(self: *Store, trigger: AlarmRule.Trigger, now: i64) Error!Uuid {
+        const new: Uuid = .v7(self.io);
+        const minutes: ?i64, const tod: ?i64 = switch (trigger) {
+            .before_clock_out => |m| .{ m, null },
+            .at_time => |t| .{ null, t },
+        };
+        try self.db.exec(
+            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?5, ?5)
+        , .{ blob(&new), @tagName(trigger), minutes, tod, now });
+        return new;
+    }
+
+    /// All alarm rules, enabled or not, oldest first. Allocated in `arena`.
+    pub fn alarmRules(self: *Store, arena: Allocator) Error![]AlarmRule {
+        var stmt = try self.db.prepare(
+            \\SELECT id, kind, minutes, time_of_day_secs, enabled FROM alarm_rules
+            \\WHERE deleted_ts IS NULL ORDER BY created_ts, rowid
+        );
+        defer stmt.deinit();
+        var out: std.ArrayList(AlarmRule) = .empty;
+        while (try stmt.step()) {
+            const Kind = @typeInfo(AlarmRule.Trigger).@"union".tag_type.?;
+            const kind = std.meta.stringToEnum(Kind, stmt.bytes(1)) orelse return error.Corrupt;
+            try out.append(arena, .{
+                .id = try id(stmt, 0),
+                .trigger = switch (kind) {
+                    .before_clock_out => .{ .before_clock_out = stmt.int(2) },
+                    .at_time => .{ .at_time = stmt.int(3) },
+                },
+                .enabled = stmt.int(4) != 0,
+            });
+        }
+        return out.items;
+    }
+
+    pub fn setAlarmEnabled(self: *Store, rule_id: Uuid, enabled: bool, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE alarm_rules SET enabled = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
+        , .{ enabled, now, blob(&rule_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    pub fn deleteAlarmRule(self: *Store, rule_id: Uuid, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE alarm_rules SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&rule_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// A shared setting (`default_shift_secs`, `clock_out_link`, ...), if set.
+    /// Allocated in `arena`.
+    pub fn setting(self: *Store, arena: Allocator, key: []const u8) Error!?[]const u8 {
+        var stmt = try self.db.prepare("SELECT value FROM settings WHERE key = ?");
+        defer stmt.deinit();
+        try stmt.bindAll(.{key});
+        return if (try stmt.step()) try stmt.text(arena, 0) else null;
+    }
+
+    /// Sets a shared setting; null removes it.
+    pub fn setSetting(self: *Store, key: []const u8, value: ?[]const u8, now: i64) Error!void {
+        if (value) |v| try self.db.exec(
+            \\INSERT INTO settings (key, value, updated_ts) VALUES (?, ?, ?)
+            \\ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_ts = excluded.updated_ts
+        , .{ key, v, now }) else try self.db.exec("DELETE FROM settings WHERE key = ?", .{key});
+    }
+
+    // ── Links to other tools ──────────────────────────────────────────────
+
+    /// Points another tool's id (e.g. Situ's `project_id`) at a project, or
+    /// re-points it if already linked.
+    pub fn link(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8, target: Target, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        _ = try self.projectFor(target.project_id, target.workspace_id);
+
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO links (id, provider, kind, external_id, project_id, workspace_id,
+            \\                   created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
+            \\ON CONFLICT (provider, kind, external_id) DO UPDATE SET
+            \\    project_id = excluded.project_id, workspace_id = excluded.workspace_id,
+            \\    updated_ts = excluded.updated_ts
+        , .{ blob(&new), provider, kind, external_id, blob(&target.project_id), optBlob(&target.workspace_id), now });
+        try self.commit();
+    }
+
+    /// What another tool's id is linked to, if anything.
+    pub fn resolveLink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8) Error!?Target {
+        var stmt = try self.db.prepare(
+            \\SELECT l.project_id, l.workspace_id FROM links l
+            \\JOIN projects p ON p.id = l.project_id
+            \\LEFT JOIN workspaces w ON w.id = l.workspace_id
+            \\WHERE l.provider = ? AND l.kind = ? AND l.external_id = ?
+            \\  AND p.deleted_ts IS NULL AND w.deleted_ts IS NULL
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{ provider, kind, external_id });
+        if (!try stmt.step()) return null;
+        return .{ .project_id = try id(stmt, 0), .workspace_id = try optId(stmt, 1) };
     }
 };
 
