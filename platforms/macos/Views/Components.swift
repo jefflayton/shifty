@@ -139,3 +139,42 @@ struct MenuRowButton: View {
     .onHover { hovered = $0 }
   }
 }
+
+/// A menu-style row that opens a submenu, for settings that are set once and
+/// don't need room in the popover.
+struct MenuRowMenu<Content: View>: View {
+  let title: String
+  @ViewBuilder var content: Content
+  @State private var hovered = false
+
+  init(_ title: String, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.content = content()
+  }
+
+  var body: some View {
+    Menu {
+      content
+    } label: {
+      HStack {
+        Text(title)
+        Spacer()
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(hovered ? .white : .secondary)
+      }
+      .contentShape(Rectangle())
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
+      .background(
+        hovered ? Color.accentColor : .clear,
+        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+      )
+      .foregroundStyle(hovered ? .white : .primary)
+    }
+    .menuStyle(.button)
+    .buttonStyle(.plain)
+    .menuIndicator(.hidden)
+    .onHover { hovered = $0 }
+  }
+}

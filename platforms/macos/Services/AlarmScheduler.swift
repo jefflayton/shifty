@@ -3,7 +3,8 @@ import Observation
 
 /// Keeps AlarmController in step with the shift. Any change that moves clock
 /// out (a new break, a different clock in) reschedules the alarms that
-/// follow it, and every change is saved.
+/// follow it, and every change is saved. During a break, clock out keeps
+/// moving, so the alarms that follow it wait for the break to end.
 @MainActor
 final class AlarmScheduler {
   private let model: ShiftModel
@@ -30,8 +31,13 @@ final class AlarmScheduler {
     model.rollOverIfStale(now: now)
     model.save()
 
-    let clockOut = model.clockOut
-    let body = "Clock out at \(clockOut.formatted(date: .omitted, time: .shortened))"
+    let clockOut = model.clockOut(now: now)
+    let body =
+      if let breakStart = model.breakStart {
+        "On break since \(breakStart.formatted(date: .omitted, time: .shortened))"
+      } else {
+        "Clock out at \(clockOut.formatted(date: .omitted, time: .shortened))"
+      }
     var live = Set<String>()
 
     for rule in model.alarms where rule.isEnabled {
@@ -41,7 +47,8 @@ final class AlarmScheduler {
       let pending = controller.pendingAlarm(id: id)
       let snoozed = controller.isSnoozed(id: id)
       let action = AlarmPlanner.action(
-        fireDate: fireDate, pending: pending?.fireDate, snoozed: snoozed, now: now)
+        fireDate: fireDate, pending: pending?.fireDate, snoozed: snoozed,
+        held: model.isOnBreak && rule.followsClockOut, now: now)
       switch action {
       case .schedule(let date):
         controller.schedule(id: id, title: rule.title, body: body, at: date)

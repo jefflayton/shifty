@@ -7,10 +7,14 @@ struct PopoverView: View {
   private let updater: SPUUpdater
 
   @Bindable var model: ShiftModel
+  @Bindable var preferences: Preferences
+  let loginItem: LoginItem
 
-  init(updater: SPUUpdater, model: ShiftModel) {
+  init(updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem) {
     self.updater = updater
     self.model = model
+    self.preferences = preferences
+    self.loginItem = loginItem
 
     // Create our view model for our CheckForUpdatesView
     self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
@@ -47,9 +51,20 @@ struct PopoverView: View {
       }
 
       FormSection("Breaks") {
-        AddButton(help: "Add a break") { model.breaks.append(Interval()) }
+        HStack(spacing: 4) {
+          if !model.isOnBreak {
+            Button("Start Break") { model.startBreak() }
+              .buttonStyle(.borderless)
+              .font(.subheadline)
+              .foregroundStyle(.tint)
+              .help("Start a break now; end it when you're back")
+          }
+          AddButton(help: "Add a break") { model.breaks.append(Interval()) }
+        }
       } content: {
-        if model.breaks.isEmpty {
+        if let start = model.breakStart {
+          OngoingBreakRow(start: start) { model.endBreak() }
+        } else if model.breaks.isEmpty {
           Text("No breaks").foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -67,6 +82,14 @@ struct PopoverView: View {
         Divider().padding(.bottom, 4)
         MenuRowButton("Check for Updates…", action: updater.checkForUpdates)
           .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
+        MenuRowMenu("Settings") {
+          Picker("Menu Bar Shows", selection: $preferences.menuBarDisplay) {
+            ForEach(MenuBarDisplay.allCases) { Text($0.label).tag($0) }
+          }
+          Toggle(
+            "Open at Login",
+            isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
+        }
         MenuRowButton("Quit Shifty", shortcut: "⌘Q") { NSApp.terminate(nil) }
       }
       .padding(.horizontal, -6)
@@ -76,6 +99,8 @@ struct PopoverView: View {
     .onAppear {
       // Nothing observes the clock, so check for a finished shift on open.
       model.rollOverIfStale()
+      // Login items can also be changed in System Settings.
+      loginItem.refresh()
     }
   }
 }
@@ -85,10 +110,11 @@ struct ShiftSummaryView: View {
   let model: ShiftModel
 
   var body: some View {
-    let clockOut = model.clockOut
-    let breaks = model.breaks
-
+    // Inside the timeline: during a break, clock out moves with the clock.
     TimelineView(.periodic(from: .now, by: 30)) { context in
+      let clockOut = model.clockOut(now: context.date)
+      let breaks = model.breaks(now: context.date)
+
       VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .lastTextBaseline) {
           VStack(alignment: .leading, spacing: 0) {
@@ -127,8 +153,35 @@ struct ShiftSummaryView: View {
         .foregroundStyle(.secondary)
         .monospacedDigit()
       }
+      .animation(.snappy, value: clockOut)
     }
-    .animation(.snappy, value: clockOut)
+  }
+}
+
+/// The break you're on now: when it started, how long it's been, and a way
+/// to end it.
+struct OngoingBreakRow: View {
+  let start: Date
+  let onEnd: () -> Void
+
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: 30)) { context in
+      HStack(spacing: 6) {
+        Image(systemName: "cup.and.saucer.fill")
+          .foregroundStyle(.secondary)
+          .help("On break")
+        Text("Since \(start, style: .time)")
+        Spacer()
+        Text(ShiftSummary.duration(context.date.timeIntervalSince(start)))
+          .foregroundStyle(.secondary)
+          .monospacedDigit()
+          .fixedSize()
+        Button("End", action: onEnd)
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          .help("End the break now")
+      }
+    }
   }
 }
 

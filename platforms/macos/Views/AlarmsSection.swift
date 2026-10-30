@@ -29,6 +29,7 @@ struct AlarmsSection: View {
         AlarmRow(
           rule: $rule,
           fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut),
+          paused: model.isOnBreak && rule.followsClockOut,
           onRemove: {
             let id = rule.id
             model.alarms.removeAll { $0.id == id }
@@ -47,6 +48,8 @@ struct AlarmsSection: View {
 struct AlarmRow: View {
   @Binding var rule: AlarmRule
   let fireDate: Date
+  /// Waiting for a break to end, when clock out is known again.
+  let paused: Bool
   let onRemove: () -> Void
 
   var body: some View {
@@ -74,7 +77,12 @@ struct AlarmRow: View {
       Spacer()
 
       // A set-time alarm's picker already shows when it rings.
-      if case .beforeClockOut = rule.trigger {
+      if paused {
+        Text("After break")
+          .foregroundStyle(.secondary)
+          .fixedSize()
+          .opacity(rule.isEnabled ? 1 : 0.5)
+      } else if case .beforeClockOut = rule.trigger {
         Text(fireDate, style: .time)
           .foregroundStyle(.secondary)
           .monospacedDigit()

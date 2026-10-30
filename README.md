@@ -62,6 +62,12 @@ Set your shift length, clock-in time (**Now** sets it to the current time), and 
 when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
 rolls over to today without its breaks.
 
+For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
+Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
+
+The menu bar shows your clock-out time next to the icon. Under **Settings**, choose what it
+shows (clock-out time, time left, or just the icon) and whether Shifty opens at login.
+
 ### Alarms
 
 Add alarms from the **+** next to *Alarms*:
@@ -69,6 +75,9 @@ Add alarms from the **+** next to *Alarms*:
 - **At clock out**, or **N min before clock out**: these follow your clock-out time, so adding an
   unexpected break moves them later, even re-arming one that already rang.
 - **At a set time**: a fixed time of day during your shift.
+
+During a break, alarms that follow clock out wait for it to end, since clock out isn't known
+until then. Set-time alarms still ring, so one can remind you when to come back.
 
 When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
 **Stop**. A notification is scheduled as a backup in case Shifty isn't running.

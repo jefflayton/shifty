@@ -14,7 +14,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   var popover: NSPopover!
   var item: NSStatusItem!
   let model = ShiftModel.load()
+  let preferences = Preferences()
+  let loginItem = LoginItem()
   private var alarmScheduler: AlarmScheduler!
+  private var statusItemController: StatusItemController!
 
   private var updateController: SPUStandardUpdaterController!
 
@@ -34,19 +37,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     setupMenu()
 
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-
-    let symbol =
-      NSImage(
-        systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
-        accessibilityDescription: "Shifty")
-      ?? NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: "Shifty")
-    item.button?.image = symbol
-
+    statusItemController = StatusItemController(
+      item: item, model: model, preferences: preferences)
     item.button?.action = #selector(toggle)
 
     popover = NSPopover()
     let host = NSHostingController(
-      rootView: PopoverView(updater: updateController.updater, model: model))
+      rootView: PopoverView(
+        updater: updateController.updater, model: model, preferences: preferences,
+        loginItem: loginItem))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
