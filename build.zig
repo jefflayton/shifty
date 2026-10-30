@@ -56,13 +56,14 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
     });
+    integrations.addImport("store", store);
     const integrations_tests = b.addTest(.{ .root_module = integrations });
     test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
 
     const macos_step = buildMacOS(b, optimize, core);
     b.getInstallStep().dependOn(macos_step);
 
-    const tui = buildTui(b, target, optimize, core);
+    const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
     test_step.dependOn(tui.tests);
     const tui_step = tui.step;
     const cli = buildCli(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
@@ -120,7 +121,7 @@ fn buildTui(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    core: *Build.Module,
+    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
 ) struct { step: *Build.Step, tests: *Build.Step } {
     const tui_step = b.step("tui", "Build the TUI");
 
@@ -129,7 +130,9 @@ fn buildTui(
         .target = target,
         .optimize = optimize,
     });
-    mod.addImport("core", core);
+    mod.addImport("core", deps.core);
+    mod.addImport("store", deps.store);
+    mod.addImport("integrations", deps.integrations);
 
     const vaxis = b.dependency("vaxis", .{
         .target = target,

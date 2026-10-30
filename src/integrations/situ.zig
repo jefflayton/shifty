@@ -6,6 +6,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
+const store = @import("store");
+
 pub const provider = "situ";
 pub const file_name = "situ.toml";
 
@@ -31,6 +33,23 @@ pub fn find(io: Io, arena: Allocator, dir: []const u8) Allocator.Error!?Marker {
         return m;
     }
     return null;
+}
+
+/// What the repo is linked to, if anything: its workspace's link, else its
+/// project's.
+pub fn linked(db: *store.Store, m: Marker) store.Error!?store.Target {
+    if (m.workspace_id) |w| if (try db.resolveLink(provider, "workspace", w)) |t| return t;
+    if (m.project_id) |p| if (try db.resolveLink(provider, "project", p)) |t| return t;
+    return null;
+}
+
+/// Points the repo's ids at `target`: its project at the project, and its
+/// workspace at the workspace too, if `target` names one.
+pub fn link(db: *store.Store, m: Marker, target: store.Target, now: i64) (store.Error || error{ NoProjectId, NoWorkspaceId })!void {
+    const pid = m.project_id orelse return error.NoProjectId;
+    if (target.workspace_id != null and m.workspace_id == null) return error.NoWorkspaceId;
+    try db.link(provider, "project", pid, .{ .project_id = target.project_id }, now);
+    if (target.workspace_id != null) try db.link(provider, "workspace", m.workspace_id.?, target, now);
 }
 
 /// Reads top-level `project_id = "..."` and `workspace_id = "..."`. Just
@@ -115,4 +134,27 @@ test "find - walks up to the marker" {
     const m = (try find(io, a, deep)).?;
     try testing.expectEqualStrings(repo, m.root);
     try testing.expectEqualStrings("p", m.project_id.?);
+}
+
+test "link / linked - workspace link wins over project link" {
+    const io = testing.io;
+    var db: store.Store = try .open(io, ":memory:");
+    defer db.deinit();
+    const web = try db.createProject(.{ .name = "web" }, 0);
+    const main = try db.createWorkspace(web, "main", 0);
+    const other = try db.createProject(.{ .name = "other" }, 0);
+
+    const m: Marker = .{ .root = "/r", .project_id = "p", .workspace_id = "w" };
+    try testing.expectEqual(null, try linked(&db, m));
+
+    try link(&db, m, .{ .project_id = other }, 0);
+    try testing.expect((try linked(&db, m)).?.project_id.eql(other));
+
+    try link(&db, m, .{ .project_id = web, .workspace_id = main }, 1);
+    const t = (try linked(&db, m)).?;
+    try testing.expect(t.workspace_id.?.eql(main));
+
+    const no_ws: Marker = .{ .root = "/r", .project_id = "p" };
+    try testing.expectError(error.NoWorkspaceId, link(&db, no_ws, .{ .project_id = web, .workspace_id = main }, 2));
+    try testing.expectError(error.NoProjectId, link(&db, .{ .root = "/r" }, .{ .project_id = web }, 2));
 }

@@ -419,3 +419,33 @@ test "links - resolve, re-point, validate" {
     try testing.expectError(error.Mismatch, s.link("situ", "workspace", "x", .{ .project_id = api, .workspace_id = main }, 2));
     try testing.expectEqual(null, try s.resolveLink("situ", "workspace", "x"));
 }
+
+test "entries - set and clear a note" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const e = try s.startEntry(.{ .source = .tui }, at(0));
+    try s.setEntryNote(e, "pairing", 10);
+    try testing.expectEqualStrings("pairing", (try s.runningEntry(a)).?.note.?);
+    try s.setEntryNote(e, null, 20);
+    try testing.expectEqual(null, (try s.runningEntry(a)).?.note);
+    try testing.expectError(error.NotFound, s.setEntryNote(.v7(io), "x", 30));
+}
+
+test "shifts - starting an entry ends the break" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(0));
+    _ = try s.startBreak(2 * h);
+    _ = try s.startEntry(.{ .source = .cli }, at(3 * h));
+    const brks = try s.breaks(a, shift_id);
+    try testing.expectEqual(1, brks.len);
+    try testing.expectEqual(3 * h, brks[0].out_ts.?);
+}

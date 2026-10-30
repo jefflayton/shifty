@@ -9,7 +9,11 @@ const core = @import("core");
 const Uuid = core.Uuid;
 const local = core.local;
 const time = core.time;
+const fmt = core.fmt;
+const clock = fmt.clock;
+const dur = fmt.dur;
 const store = @import("store");
+const Names = store.report.Names;
 const Store = store.Store;
 const situ = @import("integrations").situ;
 
@@ -55,8 +59,8 @@ const Ctx = struct {
     now: local.Stamp,
     tz_buf: local.TzBuf,
 
-    fn fail(c: *Ctx, comptime fmt: []const u8, args: anytype) Error {
-        c.err.print("shifty: " ++ fmt ++ "\n", args) catch {};
+    fn fail(c: *Ctx, comptime msg: []const u8, args: anytype) Error {
+        c.err.print("shifty: " ++ msg ++ "\n", args) catch {};
         return error.Reported;
     }
 };
@@ -145,7 +149,7 @@ fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
     if (start_time) |t| {
         // Today at that time, or yesterday if that's still to come: at 1 AM,
         // `-s 10pm` means last night.
-        at.ts = dayStart(c.now.ts, c.now.utc_offset_secs) + t.toTs();
+        at.ts = fmt.dayStart(c.now.ts, c.now.utc_offset_secs) + t.toTs();
         if (at.ts > c.now.ts) at.ts -= std.time.s_per_day;
         at.utc_offset_secs = local.utcOffset(at.ts);
     }
@@ -218,7 +222,7 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
     if (spec) |s| {
         target = try resolve(c, s);
     } else if (try findMarker(c)) |m| {
-        target = try linkedTarget(c, m);
+        target = try situ.linked(&c.db, m);
         if (target == null) unlinked = m;
     }
 
@@ -261,67 +265,42 @@ fn log(c: *Ctx, args: []const [:0]const u8) !void {
     }
 
     const now = c.now.ts;
-    const today = dayStart(now, c.now.utc_offset_secs);
+    const today = fmt.dayStart(now, c.now.utc_offset_secs);
     const from = today - (days - 1) * std.time.s_per_day;
     const entries = try c.db.entriesBetween(c.arena, from, now + 1);
     if (entries.len == 0) return c.out.writeAll(if (days == 1) "Nothing tracked today.\n" else "Nothing tracked this week.\n");
 
-    const projects = try c.db.projects(c.arena);
-    const clients = try c.db.clients(c.arena);
-    var by_project: std.AutoArrayHashMapUnmanaged(?[16]u8, i64) = .empty;
-    var total: i64 = 0;
-
+    const names: Names = try .load(&c.db, c.arena);
     var day: ?i64 = null;
     for (entries) |e| {
         const in_ts = @max(e.in_ts, from);
-        const out_ts = @min(e.out_ts orelse now, now);
-        const secs = @max(0, out_ts - in_ts);
-        total += secs;
-        const key: ?[16]u8 = if (e.project_id) |p| p.bytes else null;
-        const slot = try by_project.getOrPutValue(c.arena, key, 0);
-        slot.value_ptr.* += secs;
-
-        const d = dayStart(in_ts, e.utc_offset_secs);
+        const d = fmt.dayStart(in_ts, e.utc_offset_secs);
         if (day != d) {
-            try c.out.print("{s}{f}\n", .{ if (day == null) "" else "\n", date(in_ts, e.utc_offset_secs) });
+            try c.out.print("{s}{f}\n", .{ if (day == null) "" else "\n", fmt.date(in_ts, e.utc_offset_secs) });
             day = d;
         }
         try c.out.print("  {f} – ", .{clock(in_ts, e.utc_offset_secs)});
-        if (e.out_ts == null) try c.out.writeAll("     now") else try c.out.print("{f}", .{clock(out_ts, e.utc_offset_secs)});
-        try c.out.print("  {s: >7}  {s}", .{ try padDur(c, secs), try label(c, e.project_id, e.workspace_id) });
+        if (e.out_ts) |out| try c.out.print("{f}", .{clock(out, e.utc_offset_secs)}) else try c.out.writeAll("     now");
+        try c.out.print("  {s: >7}  {s}", .{ try padDur(c, store.report.clipped(e, from, now)), try names.label(c.arena, e.project_id, e.workspace_id) });
         if (e.note) |n| try c.out.print("  {s}", .{n});
         try c.out.writeAll("\n");
     }
 
-    var by_client: std.AutoArrayHashMapUnmanaged(?[16]u8, i64) = .empty;
-    var any_client = false;
-
+    const totals = try store.report.totals(c.arena, names, entries, from, now);
     try c.out.writeAll("\nBy project\n");
-    var it_p = by_project.iterator();
-    while (it_p.next()) |kv| {
-        const p: ?Uuid = if (kv.key_ptr.*) |b| .{ .bytes = b } else null;
-        const cl: ?store.Client = blk: {
-            const proj = findById(store.Project, projects, p orelse break :blk null) orelse break :blk null;
-            break :blk findById(store.Client, clients, proj.client_id orelse break :blk null);
-        };
-        try c.out.print("  {s: >7}  {s}", .{ try padDur(c, kv.value_ptr.*), try label(c, p, null) });
-        if (cl) |x| try c.out.print("  ({s})", .{x.name});
+    for (totals.by_project) |t| {
+        try c.out.print("  {s: >7}  {s}", .{ try padDur(c, t.secs), try names.label(c.arena, t.id, null) });
+        if (names.clientOf(t.id)) |cl| try c.out.print("  ({s})", .{cl.name});
         try c.out.writeAll("\n");
-
-        any_client = any_client or cl != null;
-        const slot = try by_client.getOrPutValue(c.arena, if (cl) |x| x.id.bytes else null, 0);
-        slot.value_ptr.* += kv.value_ptr.*;
     }
-
-    if (any_client) {
+    if (totals.any_client) {
         try c.out.writeAll("\nBy client\n");
-        var it_c = by_client.iterator();
-        while (it_c.next()) |kv| {
-            const name = if (kv.key_ptr.*) |b| findById(store.Client, clients, .{ .bytes = b }).?.name else "(no client)";
-            try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, kv.value_ptr.*), name });
+        for (totals.by_client) |t| {
+            const name = if (t.id) |cid| names.client(cid).?.name else "(no client)";
+            try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, t.secs), name });
         }
     }
-    try c.out.print("\n  {s: >7}  total\n", .{try padDur(c, total)});
+    try c.out.print("\n  {s: >7}  total\n", .{try padDur(c, totals.total)});
 }
 
 // ── Organization ────────────────────────────────────────────────────────────
@@ -403,27 +382,18 @@ fn client(c: *Ctx, args: []const [:0]const u8) !void {
 fn link(c: *Ctx, args: []const [:0]const u8) !void {
     if (args.len != 1) return c.fail("usage: shifty link <project>[/<workspace>]", .{});
     const m = try findMarker(c) orelse return c.fail("not in a Situ repo (no {s} here or above)", .{situ.file_name});
-    const pid = m.project_id orelse return c.fail("{s}/{s} has no project_id", .{ m.root, situ.file_name });
     const target = try resolve(c, args[0]);
-
-    try c.db.link(situ.provider, "project", pid, .{ .project_id = target.project_id }, c.now.ts);
-    if (target.workspace_id != null) {
-        const wid = m.workspace_id orelse return c.fail("{s}/{s} has no workspace_id", .{ m.root, situ.file_name });
-        try c.db.link(situ.provider, "workspace", wid, target, c.now.ts);
-    }
+    situ.link(&c.db, m, target, c.now.ts) catch |e| switch (e) {
+        error.NoProjectId => return c.fail("{s}/{s} has no project_id", .{ m.root, situ.file_name }),
+        error.NoWorkspaceId => return c.fail("{s}/{s} has no workspace_id", .{ m.root, situ.file_name }),
+        else => return e,
+    };
     try c.out.print("Linked {s} to {s}.\n", .{ m.root, try label(c, target.project_id, target.workspace_id) });
 }
 
 fn findMarker(c: *Ctx) !?situ.Marker {
     const cwd = std.process.currentPathAlloc(c.io, c.arena) catch return null;
     return situ.find(c.io, c.arena, cwd);
-}
-
-/// The most specific link: the Situ workspace, then its project.
-fn linkedTarget(c: *Ctx, m: situ.Marker) !?store.Target {
-    if (m.workspace_id) |w| if (try c.db.resolveLink(situ.provider, "workspace", w)) |t| return t;
-    if (m.project_id) |p| if (try c.db.resolveLink(situ.provider, "project", p)) |t| return t;
-    return null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -475,76 +445,15 @@ fn running(brks: []const store.Break) ?store.Break {
     return null;
 }
 
-/// `project/workspace`, `project`, or `(unassigned)`. Allocated in the arena.
+/// `project/workspace`, `project`, or `(unassigned)`.
 fn label(c: *Ctx, project_id: ?Uuid, workspace_id: ?Uuid) ![]const u8 {
-    const pid = project_id orelse return "(unassigned)";
-    const p = findById(store.Project, try c.db.projects(c.arena), pid);
-    const pname = if (p) |pp| pp.name else "(archived)";
-    if (workspace_id) |wid| if (findById(store.Workspace, try c.db.workspaces(c.arena, pid), wid)) |w| {
-        return std.fmt.allocPrint(c.arena, "{s}/{s}", .{ pname, w.name });
-    };
-    return pname;
-}
-
-/// A time of day like `09:05 AM`, at the given UTC offset.
-const Clock = struct {
-    ts: i64,
-
-    pub fn format(t: Clock, w: *Io.Writer) Io.Writer.Error!void {
-        const s = try time.Time.fromTs(t.ts).toStr();
-        try w.writeAll(&s);
-    }
-};
-
-fn clock(ts: i64, utc_offset_secs: i64) Clock {
-    return .{ .ts = ts + utc_offset_secs };
-}
-
-/// `2h 05m`, `45m`, `0m`.
-const Dur = struct {
-    secs: i64,
-
-    pub fn format(d: Dur, w: *Io.Writer) Io.Writer.Error!void {
-        const mins: u64 = @intCast(@divFloor(@max(d.secs, 0), 60));
-        var buf: [32]u8 = undefined;
-        const s = if (mins < 60)
-            std.fmt.bufPrint(&buf, "{d}m", .{mins}) catch unreachable
-        else
-            std.fmt.bufPrint(&buf, "{d}h {d:0>2}m", .{ mins / 60, mins % 60 }) catch unreachable;
-        try w.writeAll(s);
-    }
-};
-
-fn dur(secs: i64) Dur {
-    return .{ .secs = secs };
+    const names: Names = try .load(&c.db, c.arena);
+    return names.label(c.arena, project_id, workspace_id);
 }
 
 /// A duration as a string, for padding with `{s: >7}` (`{f}` can't pad).
 fn padDur(c: *Ctx, secs: i64) ![]const u8 {
     return std.fmt.allocPrint(c.arena, "{f}", .{dur(secs)});
-}
-
-/// `Fri Oct 30`, the local date at `ts`.
-const Date = struct {
-    ts: i64,
-
-    pub fn format(d: Date, w: *Io.Writer) Io.Writer.Error!void {
-        const days = @divFloor(d.ts, std.time.s_per_day);
-        const es: std.time.epoch.EpochDay = .{ .day = @intCast(days) };
-        const md = es.calculateYearDay().calculateMonthDay();
-        const weekdays = [_][]const u8{ "Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed" };
-        const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-        try w.print("{s} {s} {d}", .{ weekdays[@intCast(@mod(days, 7))], months[md.month.numeric() - 1], md.day_index + 1 });
-    }
-};
-
-fn date(ts: i64, utc_offset_secs: i64) Date {
-    return .{ .ts = ts + utc_offset_secs };
-}
-
-/// Local midnight at or before `ts`, as a unix time.
-fn dayStart(ts: i64, utc_offset_secs: i64) i64 {
-    return ts - @mod(ts + utc_offset_secs, std.time.s_per_day);
 }
 
 fn noArgs(c: *Ctx, comptime cmd: []const u8, args: []const [:0]const u8) !void {
@@ -578,27 +487,6 @@ const Args = struct {
 };
 
 const testing = std.testing;
-
-test "dayStart" {
-    const h = std.time.s_per_hour;
-    // 2026-10-30 15:00 UTC is 08:00 in UTC-7; local midnight is 07:00 UTC.
-    const ts: i64 = 1793372400;
-    try testing.expectEqual(ts - 8 * h, dayStart(ts, -7 * h));
-    try testing.expectEqual(ts - 15 * h, dayStart(ts, 0));
-}
-
-test "Dur" {
-    var buf: [32]u8 = undefined;
-    try testing.expectEqualStrings("0m", try std.fmt.bufPrint(&buf, "{f}", .{dur(59)}));
-    try testing.expectEqualStrings("45m", try std.fmt.bufPrint(&buf, "{f}", .{dur(45 * 60)}));
-    try testing.expectEqualStrings("2h 05m", try std.fmt.bufPrint(&buf, "{f}", .{dur(2 * 3600 + 5 * 60)}));
-}
-
-test "Date" {
-    var buf: [32]u8 = undefined;
-    try testing.expectEqualStrings("Fri Oct 30", try std.fmt.bufPrint(&buf, "{f}", .{date(1793372400, 0)}));
-    try testing.expectEqualStrings("Thu Jan 1", try std.fmt.bufPrint(&buf, "{f}", .{date(0, 0)}));
-}
 
 test "isCommand" {
     try testing.expect(isCommand("start"));

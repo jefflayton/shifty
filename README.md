@@ -157,7 +157,21 @@ Starting with no project inside a Situ repo (one with a
 
 ## TUI
 
-`shifty-tui` calculates the clock-out time live as you type.
+`shifty-tui` opens on your day: the shift and its clock out, what you're tracking, today's
+entries, and totals by project and client. It reads the same database as the CLI and reloads
+every second, so a `shifty start` in another terminal shows up right away.
+
+| Key | Action |
+| --- | --- |
+| `s` | Start tracking: type to filter projects and workspaces, `↑`/`↓` to choose, `enter` to start. Inside a linked Situ repo, that repo's project comes first |
+| `x` | Stop tracking |
+| `n` | Add or edit the running entry's note |
+| `b` | Start or end a break |
+| `i` / `o` | Clock in now / clock out (asks first) |
+| `c` | Open the calculator; `esc` comes back |
+| `q` / `ctrl+c` | Quit |
+
+The calculator works out a clock-out time live as you type, starting from the current shift.
 
 | Key | Action |
 | --- | --- |

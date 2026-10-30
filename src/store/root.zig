@@ -13,6 +13,7 @@ const Uuid = core.Uuid;
 const Stamp = core.local.Stamp;
 
 pub const sqlite = @import("sqlite.zig");
+pub const report = @import("report.zig");
 const Blob = sqlite.Blob;
 
 pub const Error = error{
@@ -310,15 +311,34 @@ pub const Store = struct {
         return out.items;
     }
 
+    /// Every active workspace, by project then name. Allocated in `arena`.
+    pub fn allWorkspaces(self: *Store, arena: Allocator) Error![]Workspace {
+        var stmt = try self.db.prepare(
+            \\SELECT id, project_id, name FROM workspaces
+            \\WHERE archived_ts IS NULL AND deleted_ts IS NULL
+            \\ORDER BY project_id, name COLLATE NOCASE
+        );
+        defer stmt.deinit();
+        var out: std.ArrayList(Workspace) = .empty;
+        while (try stmt.step()) try out.append(arena, .{
+            .id = try id(stmt, 0),
+            .project_id = try id(stmt, 1),
+            .name = try stmt.text(arena, 2),
+        });
+        return out.items;
+    }
+
     // ── Entries ───────────────────────────────────────────────────────────
 
     /// Stops the running entry, if any, and starts a new one at `at`.
+    /// Starting work ends a break in progress.
     pub fn startEntry(self: *Store, e: NewEntry, at: Stamp) Error!Uuid {
         try self.begin();
         errdefer self.rollback();
 
         const project_id = try self.projectFor(e.project_id, e.workspace_id);
         _ = try self.closeRunning(at.ts);
+        _ = try self.closeBreak(at.ts);
 
         const new: Uuid = .v7(self.io);
         try self.db.exec(
@@ -334,6 +354,14 @@ pub const Store = struct {
 
         try self.commit();
         return new;
+    }
+
+    /// Replaces an entry's note; null clears it.
+    pub fn setEntryNote(self: *Store, entry_id: Uuid, note: ?[]const u8, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE entries SET note = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
+        , .{ note, now, blob(&entry_id) });
+        if (self.db.changes() == 0) return error.NotFound;
     }
 
     /// The project `workspace_id` belongs to, checked against `project_id`
@@ -756,5 +784,6 @@ fn optId(stmt: sqlite.Stmt, col: c_int) Error!?Uuid {
 }
 
 test {
+    _ = @import("report.zig");
     _ = @import("tests.zig");
 }
