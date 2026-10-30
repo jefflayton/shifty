@@ -51,13 +51,21 @@ pub fn build(b: *Build) void {
     const store_tests = b.addTest(.{ .root_module = store });
     test_step.dependOn(&b.addRunArtifact(store_tests).step);
 
+    const integrations = b.createModule(.{
+        .root_source_file = b.path("src/integrations/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const integrations_tests = b.addTest(.{ .root_module = integrations });
+    test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
+
     const macos_step = buildMacOS(b, optimize, core);
     b.getInstallStep().dependOn(macos_step);
 
     const tui = buildTui(b, target, optimize, core);
     test_step.dependOn(tui.tests);
     const tui_step = tui.step;
-    const cli = buildCli(b, target, optimize, core);
+    const cli = buildCli(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
     test_step.dependOn(cli.tests);
 
     const all = b.step("all", "Build all applicable apps");
@@ -76,7 +84,7 @@ fn buildCli(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    core: *Build.Module,
+    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
 ) struct { step: *Build.Step, tests: *Build.Step } {
     const cli_step = b.step("cli", "Build the CLI");
 
@@ -85,7 +93,9 @@ fn buildCli(
         .target = target,
         .optimize = optimize,
     });
-    mod.addImport("core", core);
+    mod.addImport("core", deps.core);
+    mod.addImport("store", deps.store);
+    mod.addImport("integrations", deps.integrations);
 
     const exe = b.addExecutable(.{
         .name = "shifty",

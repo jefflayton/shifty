@@ -103,6 +103,58 @@ $ shifty -s 9am -b 12pm 12:30pm
 Clock Out: 05:30 PM
 ```
 
+### Tracking time
+
+Commands record shifts, breaks, and time per project in a local database that every Shifty
+frontend shares: `~/Library/Application Support/Shifty/shifty.db` on macOS,
+`$XDG_DATA_HOME/shifty/shifty.db` elsewhere, or `$SHIFTY_DB` if set.
+
+```
+status                     What's running: shift, break, timer
+in [-s <time>] [-l <len>]  Clock in (default: now, 8h)
+out                        Clock out
+break                      Start or end a break
+start [<project>[/<workspace>]] [-n <note>]
+                           Track time. With no project, use the
+                           linked Situ repo you're in, if any
+stop                       Stop tracking
+log [--week]               Time by project, today or the last 7 days
+projects                   List projects and their workspaces
+project add <name> [--client <name>] [--color <#rrggbb>]
+workspace add <project> <name>
+clients                    List clients
+client add <name>
+link <project>[/<workspace>]
+                           Link the Situ repo you're in to a project
+```
+
+```sh
+$ shifty client add Acme
+$ shifty project add web --client Acme
+$ shifty workspace add web main
+$ shifty in -s 9am
+Clocked in at 09:00 AM. Clock out at 05:00 PM.
+$ shifty start web/main -n "API review"
+Tracking web/main since 10:55 AM.
+$ shifty log
+Fri Oct 30
+  10:55 AM – 12:40 PM   1h 45m  web/main  API review
+  12:40 PM –      now   3h 15m  internal
+
+By project
+   1h 45m  web  (Acme)
+   3h 15m  internal
+
+By client
+   1h 45m  Acme
+   3h 15m  (no client)
+
+   5h 00m  total
+```
+
+Starting with no project inside a Situ repo (one with a
+`situ.toml`) tracks whatever `shifty link` pointed that repo at.
+
 ## TUI
 
 `shifty-tui` calculates the clock-out time live as you type.
