@@ -32,7 +32,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     NSApp.setActivationPolicy(.accessory)
 
-    alarmScheduler = AlarmScheduler(model: model, controller: .shared)
+    alarmScheduler = AlarmScheduler(
+      model: model, preferences: preferences, controller: .shared)
 
     setupMenu()
 

@@ -12,6 +12,8 @@ final class AlarmController: ObservableObject {
     let title: String
     var body: String
     var fireDate: Date
+    /// Where to clock out, shown as a button when it rings.
+    var link: URL? = nil
   }
 
   @Published private(set) var ringing: [Alarm] = []
@@ -62,14 +64,16 @@ final class AlarmController: ObservableObject {
     UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
   }
 
-  func schedule(id: String, title: String, body: String, at date: Date) {
-    schedule(id: id, title: title, body: body, at: date, snoozed: false)
+  func schedule(id: String, title: String, body: String, link: URL? = nil, at date: Date) {
+    schedule(id: id, title: title, body: body, link: link, at: date, snoozed: false)
   }
 
-  private func schedule(id: String, title: String, body: String, at date: Date, snoozed: Bool) {
+  private func schedule(
+    id: String, title: String, body: String, link: URL?, at date: Date, snoozed: Bool
+  ) {
     cancel(id: id)
 
-    let alarm = Alarm(id: id, title: title, body: body, fireDate: date)
+    let alarm = Alarm(id: id, title: title, body: body, fireDate: date, link: link)
     pending[id] = Pending(alarm: alarm, timer: makeTimer(id: id, at: date), snoozed: snoozed)
     scheduleBackstop(for: alarm)
 
@@ -131,13 +135,20 @@ final class AlarmController: ObservableObject {
     refreshRingingState()
   }
 
+  /// Opens the alarm's clock-out link and stops it.
+  func clockOut(id: String) {
+    guard let link = ringing.first(where: { $0.id == id })?.link else { return }
+    NSWorkspace.shared.open(link)
+    stop(id: id)
+  }
+
   func snooze(id: String) {
     guard let a = ringing.first(where: { $0.id == id }) else { return }
     ringing.removeAll { $0.id == id }
     refreshRingingState()
     schedule(
-      id: id, title: a.title, body: a.body, at: Date().addingTimeInterval(snoozeInterval),
-      snoozed: true)
+      id: id, title: a.title, body: a.body, link: a.link,
+      at: Date().addingTimeInterval(snoozeInterval), snoozed: true)
   }
 
   private func refreshRingingState() {

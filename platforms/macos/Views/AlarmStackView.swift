@@ -22,11 +22,30 @@ struct AlarmStackView: View {
             Button("Snooze") { controller.snooze(id: alarm.id) }
               .keyboardShortcut("s", modifiers: [])
 
-            Button("Stop") { controller.stop(id: alarm.id) }
-              .keyboardShortcut(.defaultAction)
-              .buttonStyle(.borderedProminent)
+            // With a link, clocking out is the main action.
+            if alarm.link != nil {
+              Button("Stop") { controller.stop(id: alarm.id) }
+                .keyboardShortcut(.cancelAction)
+            } else {
+              Button("Stop") { controller.stop(id: alarm.id) }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
           }
           .controlSize(.large)
+
+          if let link = alarm.link {
+            Button {
+              controller.clockOut(id: alarm.id)
+            } label: {
+              Label("Clock Out", systemImage: "arrow.up.forward.square")
+                .frame(maxWidth: .infinity)
+            }
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .help("Open \(link.host() ?? link.absoluteString) and stop the alarm")
+          }
         }
         .padding(14)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))

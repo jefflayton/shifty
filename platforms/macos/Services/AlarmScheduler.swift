@@ -8,10 +8,12 @@ import Observation
 @MainActor
 final class AlarmScheduler {
   private let model: ShiftModel
+  private let preferences: Preferences
   private let controller: AlarmController
 
-  init(model: ShiftModel, controller: AlarmController) {
+  init(model: ShiftModel, preferences: Preferences, controller: AlarmController) {
     self.model = model
+    self.preferences = preferences
     self.controller = controller
     controller.removeStaleBackstops()
     observe()
@@ -44,6 +46,7 @@ final class AlarmScheduler {
       let id = rule.id.uuidString
       live.insert(id)
       let fireDate = rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut)
+      let link = preferences.clockOutLink
       let pending = controller.pendingAlarm(id: id)
       let snoozed = controller.isSnoozed(id: id)
       let action = AlarmPlanner.action(
@@ -51,13 +54,16 @@ final class AlarmScheduler {
         held: model.isOnBreak && rule.followsClockOut, now: now)
       switch action {
       case .schedule(let date):
-        controller.schedule(id: id, title: rule.title, body: body, at: date)
+        controller.schedule(id: id, title: rule.title, body: body, link: link, at: date)
       case .cancelPending:
         controller.cancelPending(id: id)
       case .keep:
-        // Same time, but clock out (in the body) or the title may have moved.
-        if let pending, !snoozed, pending.title != rule.title || pending.body != body {
-          controller.schedule(id: id, title: rule.title, body: body, at: fireDate)
+        // Same time, but clock out (in the body), the title, or the link may
+        // have changed.
+        if let pending, !snoozed,
+          pending.title != rule.title || pending.body != body || pending.link != link
+        {
+          controller.schedule(id: id, title: rule.title, body: body, link: link, at: fireDate)
         }
       }
     }
