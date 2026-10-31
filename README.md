@@ -54,7 +54,8 @@ zig build test-macos        # menu bar app model tests (macOS only)
 ```
 
 Set `SHIFTY_OPEN_ON_LAUNCH=1` to open the menu bar popover at launch, e.g.
-`open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`.
+`open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`, or `SHIFTY_OPEN_TIMESHEET=1` to open the
+timesheet window. Set `SHIFTY_DB` to a scratch path to keep a dev build off your real data.
 
 ## Menu bar
 
@@ -66,6 +67,11 @@ Click **Clock In** to start tracking the shift for real. Once you're clocked in,
 bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
 up in the others within a couple of seconds. **Clock Out** ends it. Until you clock in, the
 popover is just a calculator. Alarm rules and the clock-out link are shared the same way.
+
+Under **Tracking**, pick the project you're working on to start a timer. Picking one while the
+timer has no project assigns it, time so far included; picking a different project stops the
+timer and starts a new one, so earlier time stays with its project. **Stop** stops it. It's the
+same timer as `shifty start` and the TUI's, and a break or clock out stops it.
 
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
@@ -89,6 +95,18 @@ When an alarm rings, Shifty plays its alarm sound and shows a window with **Snoo
 
 To clock out from the alarm, set **Settings → Clock-Out Link…** to your timeclock page. Alarms then
 show a **Clock Out** button that opens it and stops the alarm.
+
+### Timesheet and projects
+
+**Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Switch
+screens from its toolbar:
+
+- **Timesheet**: a week of tracked time. The strip at the top shows each day's hours by project;
+  click a day to jump to it. Add time after the fact with **+**, and edit times, projects, and
+  notes in place.
+- **Projects**: rename a project by editing its name, click its color to pick another, and delete
+  it from the trash button or its right-click menu. Deleting a project keeps its time, with no
+  project.
 
 ## CLI
 
@@ -126,6 +144,9 @@ stop                       Stop tracking
 log [--week]               Time by project, today or the last 7 days
 projects                   List projects and their workspaces
 project add <name> [--client <name>] [--color <#rrggbb>]
+project rename <name> <new name>
+project color <name> <#rrggbb|none>
+project delete <name>     Its time stays, unassigned
 workspace add <project> <name>
 clients                    List clients
 client add <name>

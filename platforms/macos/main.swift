@@ -13,6 +13,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
+  lazy var mainWindow = store.map { MainWindow(store: $0) }
+  lazy var tracking = store.map { store in
+    let tracking = TrackingModel(store: store)
+    // Starting a timer ends a break in progress.
+    tracking.didChange = { [weak self] in
+      self?.model.pull()
+      if self?.mainWindow?.isVisible == true { self?.mainWindow?.reload() }
+    }
+    return tracking
+  }
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
   private var storeVersion: Int64?
@@ -47,13 +57,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let host = NSHostingController(
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
-        loginItem: loginItem))
+        loginItem: loginItem, tracking: tracking,
+        openTimesheet: mainWindow == nil ? nil : { [weak self] in self?.showMainWindow() }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
     host.sizingOptions = .preferredContentSize
     popover.contentViewController = host
     popover.behavior = .transient
+
+    // Development: open the main window without clicking.
+    if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
+      // Active first, like a click on the popover, then the window.
+      NSApp.activate()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow?.show() }
+    }
 
     // Development: open the popover without clicking the status item.
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
@@ -89,6 +107,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     storeVersion = version
     model.pull()
     preferences.pull()
+    tracking?.reload()
+    if mainWindow?.isVisible == true { mainWindow?.reload() }
+  }
+
+  func showMainWindow() {
+    popover.close()
+    mainWindow?.show()
+  }
+
+  /// Clicking the Dock icon with the window closed (or minimized) shows it.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
+    -> Bool
+  {
+    if !flag { mainWindow?.show() }
+    return true
   }
 
   @objc func toggle() {
@@ -110,9 +143,31 @@ func setupMenu() {
   let appMenu = NSMenu()
   appItem.submenu = appMenu
   appMenu.addItem(
+    withTitle: "About Shifty",
+    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+  appMenu.addItem(.separator())
+  appMenu.addItem(
+    withTitle: "Hide Shifty", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+  let hideOthers = appMenu.addItem(
+    withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
+    keyEquivalent: "h")
+  hideOthers.keyEquivalentModifierMask = [.command, .option]
+  appMenu.addItem(
+    withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+    keyEquivalent: "")
+  appMenu.addItem(.separator())
+  appMenu.addItem(
     withTitle: "Quit Shifty",
     action: #selector(NSApplication.terminate(_:)),
     keyEquivalent: "q")
+
+  let fileItem = NSMenuItem()
+  fileItem.title = "File"
+  mainMenu.addItem(fileItem)
+  let fileMenu = NSMenu(title: "File")
+  fileItem.submenu = fileMenu
+  fileMenu.addItem(
+    withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
   let editItem = NSMenuItem()
   editItem.title = "Edit"
@@ -137,6 +192,22 @@ func setupMenu() {
   editMenu.addItem(
     withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
     keyEquivalent: "a")
+
+  let windowItem = NSMenuItem()
+  windowItem.title = "Window"
+  mainMenu.addItem(windowItem)
+  let windowMenu = NSMenu(title: "Window")
+  windowItem.submenu = windowMenu
+  windowMenu.addItem(
+    withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
+    keyEquivalent: "m")
+  windowMenu.addItem(
+    withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+  windowMenu.addItem(.separator())
+  windowMenu.addItem(
+    withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)),
+    keyEquivalent: "")
+  NSApp.windowsMenu = windowMenu
 
   NSApp.mainMenu = mainMenu
 }

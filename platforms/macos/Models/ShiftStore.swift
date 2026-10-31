@@ -129,10 +129,193 @@ final class ShiftStore {
     try check(result)
   }
 
+  // MARK: Timesheet
+
+  struct Timesheet: Decodable, Equatable {
+    var entries: [Entry] = []
+    var clients: [Client] = []
+    var projects: [Project] = []
+    var workspaces: [Workspace] = []
+  }
+
+  struct Entry: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var projectId: UUID?
+    var workspaceId: UUID?
+    var inTs: Int64
+    var outTs: Int64?
+    var source: String
+    var note: String?
+
+    var start: Date { date(inTs) }
+    /// nil while it's running.
+    var end: Date? { outTs.map(date) }
+  }
+
+  struct Client: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var name: String
+  }
+
+  struct Project: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var clientId: UUID?
+    var name: String
+    var color: String?
+  }
+
+  struct Workspace: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var projectId: UUID
+    var name: String
+  }
+
+  /// The entries overlapping `range`, and the names they refer to.
+  func timesheet(_ range: DateInterval) throws -> Timesheet {
+    try json(Timesheet()) { shifty_timesheet_json(handle, ts(range.start), ts(range.end), $0, $1) }
+  }
+
+  /// Time recorded after the fact. A workspace implies its project.
+  func addEntry(
+    project: UUID?, workspace: UUID?, start: Date, end: Date, note: String? = nil
+  ) throws -> UUID {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_add_entry(handle, p, w, ts(start), ts(end), note, &out))
+    }
+    return UUID(out)
+  }
+
+  /// Replaces an entry's project, times, and note. A nil `end` keeps a
+  /// running entry running.
+  func editEntry(
+    _ id: UUID, project: UUID?, workspace: UUID?, start: Date, end: Date?, note: String?,
+    now: Date = Date()
+  ) throws {
+    try withIds(project, workspace) { p, w in
+      try check(
+        shifty_edit_entry(
+          handle, ShiftyId(id), p, w, ts(start), end.map(ts) ?? 0, end == nil ? 1 : 0, note,
+          ts(now)))
+    }
+  }
+
+  /// Starts tracking now, stopping the running entry and ending a break in
+  /// progress. A workspace implies its project.
+  @discardableResult
+  func startEntry(project: UUID?, workspace: UUID?, note: String? = nil, now: Date = Date())
+    throws -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_start_entry(handle, p, w, note, ts(now), &out))
+    }
+    return UUID(out)
+  }
+
+  /// Stops the running entry. Returns whether one was running.
+  @discardableResult
+  func stopEntry(now: Date = Date()) throws -> Bool {
+    let result = shifty_stop_entry(handle, ts(now))
+    if result == SHIFTY_NONE { return false }
+    try check(result)
+    return true
+  }
+
+  func deleteEntry(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_entry(handle, ShiftyId(id), ts(now)))
+  }
+
+  func createProject(name: String, client: UUID? = nil, color: String? = nil, now: Date = Date())
+    throws -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(client, nil) { c, _ in
+      try check(shifty_create_project(handle, name, c, color, ts(now), &out))
+    }
+    return UUID(out)
+  }
+
+  // MARK: Projects
+
+  struct Projects: Decodable, Equatable {
+    var projects: [Project] = []
+    var clients: [Client] = []
+    var workspaces: [Workspace] = []
+    var usage: [Usage] = []
+  }
+
+  /// How much a project has been used, all time.
+  struct Usage: Decodable, Equatable {
+    var projectId: UUID
+    var entries: Int
+    var seconds: Int64
+    var lastTs: Int64
+
+    /// When its latest entry started.
+    var lastUsed: Date { date(lastTs) }
+  }
+
+  /// Every active project with its usage, a running entry counted up to
+  /// `now`.
+  func projects(now: Date = Date()) throws -> Projects {
+    try json(Projects()) { shifty_projects_json(handle, ts(now), $0, $1) }
+  }
+
+  /// Replaces a project's name, client, and color (`#rrggbb`, nil for none).
+  func editProject(_ id: UUID, name: String, client: UUID?, color: String?, now: Date = Date())
+    throws
+  {
+    try withIds(client, nil) { c, _ in
+      try check(shifty_edit_project(handle, ShiftyId(id), name, c, color, ts(now)))
+    }
+  }
+
+  /// Deletes a project and its workspaces. Its time stays, unassigned.
+  func deleteProject(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_project(handle, ShiftyId(id), ts(now)))
+  }
+
+  /// Passes optional ids to C as pointers, nil as NULL.
+  private func withIds(
+    _ a: UUID?, _ b: UUID?,
+    _ body: (UnsafePointer<ShiftyId>?, UnsafePointer<ShiftyId>?) throws -> Void
+  ) throws {
+    var ia = a.map(ShiftyId.init)
+    var ib = b.map(ShiftyId.init)
+    try withOptionalPointer(&ia) { pa in
+      try withOptionalPointer(&ib) { pb in try body(pa, pb) }
+    }
+  }
+
+  private func withOptionalPointer<T>(
+    _ value: inout T?, _ body: (UnsafePointer<T>?) throws -> Void
+  ) throws {
+    if value == nil { return try body(nil) }
+    try withUnsafePointer(to: &value!) { try body($0) }
+  }
+
   // MARK: Helpers
 
   private func check(_ result: ShiftyResult) throws {
     if result != SHIFTY_OK { throw Error(result: result) }
+  }
+
+  /// Calls a C function that returns JSON, and decodes it; `empty` if it
+  /// returns nothing.
+  private func json<T: Decodable>(
+    _ empty: T,
+    _ call: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>, UnsafeMutablePointer<Int>) ->
+      ShiftyResult
+  ) throws -> T {
+    var ptr: UnsafeMutablePointer<CChar>?
+    var len = 0
+    try check(call(&ptr, &len))
+    defer { shifty_free(ptr, len) }
+    guard let ptr else { return empty }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(T.self, from: Data(bytes: ptr, count: len))
   }
 
   /// Calls a C list function, growing the buffer until everything fits.

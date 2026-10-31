@@ -425,5 +425,183 @@ do {
   expectEqual(prefs.clockOutLink, URL(string: "https://tui.example"), "link set elsewhere")
 }
 
+// MARK: Timesheet
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let tui = try! ShiftStore(path: path)
+  // Wednesday Oct 28; gregorian weeks start Sunday Oct 25.
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  expectEqual(t.weekStart, at(0, day: -3), "week starts Sunday")
+  expectEqual(t.days.count, 7)
+
+  let web = try! store.createProject(name: "web", color: "#ff8800")
+  let entry = try! tui.addEntry(project: web, workspace: nil, start: at(9), end: at(10), note: "standup")
+  _ = try! tui.addEntry(project: nil, workspace: nil, start: at(13, day: 1), end: at(14, day: 1))
+  _ = try! tui.addEntry(project: nil, workspace: nil, start: at(9, day: 7), end: at(10, day: 7))
+  t.reload()
+  expectEqual(t.entries(on: at(0)).map(\.id), [entry], "Wednesday's entry")
+  expectEqual(t.entries(on: at(0, day: 1)).count, 1, "Thursday's entry")
+  expectEqual(t.total(now: at(23, day: 3)), 2 * 3600, "next week's entry isn't counted")
+  expectEqual(t.label(project: web, workspace: nil), "web")
+
+  // A new hour goes after the day's last entry; today's ends now.
+  expectEqual(t.slot(on: at(0), now: at(12)).0, at(10), "after the last entry")
+  expectEqual(t.slot(on: at(0, day: 2), now: at(12)).0, at(9, day: 2), "9 AM on an empty day")
+  let today = t.slot(on: at(0, day: 3), now: at(15, 8, day: 3))
+  expectEqual(today.1, at(15, 15, day: 3), "today's ends now, to the quarter hour")
+
+  var e = t.sheet.entries.first { $0.id == entry }!
+  t.setEnd(e, to: at(10, 30))
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.end, at(10, 30), "end saved")
+
+  // Moving the start past the end makes a 23h entry: kept as a draft.
+  e = t.sheet.entries.first { $0.id == entry }!
+  t.setStart(e, to: at(11))
+  check(t.drafts[entry] != nil, "invalid times stay a draft")
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.start, at(9), "store unchanged")
+  t.setEnd(e, to: at(11, 45))
+  check(t.drafts[entry] == nil, "fixed draft is saved")
+  e = t.sheet.entries.first { $0.id == entry }!
+  expectEqual(e.start, at(11))
+  expectEqual(e.end, at(11, 45))
+
+  t.setEnd(e, to: at(1))
+  expectEqual(
+    t.sheet.entries.first { $0.id == entry }!.end, at(1, day: 1),
+    "an end before the start is past midnight")
+
+  t.setNote(e, to: "  ")
+  check(t.sheet.entries.first { $0.id == entry }!.note == nil, "blank note clears it")
+
+  let api = t.createProject(named: "api")!
+  expectEqual(t.createProject(named: "API"), api, "same name, same project")
+  t.setProject(t.sheet.entries.first { $0.id == entry }!, project: api, workspace: nil)
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.projectId, api)
+  expectEqual(t.totalsByProject(now: at(23, day: 3)).first?.project, api, "most time first")
+
+  let added = t.addEntry(on: at(0, day: 2), now: at(12))!
+  t.delete(t.sheet.entries.first { $0.id == added }!)
+  check(!t.sheet.entries.contains { $0.id == added }, "deleted")
+
+  let start = t.weekStart
+  t.nextWeek()
+  expectEqual(t.weekStart, at(0, day: 4))
+  expectEqual(t.sheet.entries.count, 1, "next week's entry")
+  t.previousWeek()
+  expectEqual(t.weekStart, start)
+
+  // A running entry from elsewhere: stop it from the timesheet.
+  t.showWeek(containing: Date())
+  _ = try! tui.startShift(at: Date().addingTimeInterval(-3600), lengthSeconds: 8 * 3600)
+  t.reload()
+  let running = t.addEntry(on: Date())
+  check(running != nil, "added today")
+}
+
+// MARK: Projects
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let p = ProjectsModel(store: store)
+  p.reload()
+  check(p.projects.isEmpty, "no projects yet")
+
+  let web = p.create(named: " web ")!
+  let api = p.create(named: "api")!
+  expectEqual(p.create(named: "WEB"), web, "same name, same project")
+  check(p.create(named: "  ") == nil, "blank name")
+  expectEqual(p.projects.map(\.name), ["api", "web"])
+  // Created in the same millisecond, so their order isn't fixed.
+  expectEqual(Set([p.rank(of: web), p.rank(of: api)]), [0, 1], "a rank each")
+
+  _ = try! store.addEntry(project: web, workspace: nil, start: at(9), end: at(11))
+  _ = try! store.addEntry(project: web, workspace: nil, start: at(9, day: 1), end: at(9, 30, day: 1))
+  p.reload()
+  expectEqual(p.usage(of: web)?.seconds, 9000)
+  expectEqual(p.usage(of: web)?.entries, 2)
+  expectEqual(p.usage(of: web)?.lastUsed, at(9, day: 1))
+  check(p.usage(of: api) == nil, "unused")
+
+  check(p.rename(p.project(web)!, to: "Website"), "renamed")
+  expectEqual(p.project(web)?.name, "Website")
+  check(!p.rename(p.project(web)!, to: "API"), "name taken")
+  check(p.error != nil, "says why")
+  check(!p.rename(p.project(web)!, to: " "), "blank refused")
+  expectEqual(p.project(web)?.name, "Website", "unchanged")
+  check(p.rename(p.project(web)!, to: "website"), "own name, new case")
+  check(p.error == nil, "error clears")
+
+  p.setColor(p.project(web)!, to: "#3B82F6")
+  expectEqual(p.project(web)?.color, "#3B82F6")
+  p.setColor(p.project(web)!, to: nil)
+  expectEqual(p.project(web)?.color, nil, "back to default")
+
+  p.delete(p.project(web)!)
+  expectEqual(p.projects.map(\.id), [api], "deleted")
+  let day = try! store.timesheet(DateInterval(start: at(0), end: at(0, day: 2)))
+  expectEqual(day.entries.count, 2, "its time stays")
+  check(day.entries.allSatisfy { $0.projectId == nil }, "unassigned")
+}
+
+// MARK: Tracking
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let cli = try! ShiftStore(path: path)
+  let t = TrackingModel(store: store)
+  var changes = 0
+  t.didChange = { changes += 1 }
+  t.reload(now: at(9))
+  check(t.running == nil, "not tracking")
+
+  let web = try! store.createProject(name: "web")
+  let api = try! store.createProject(name: "api")
+
+  // Nothing running: picking a project starts it.
+  t.choose(project: web, workspace: nil, now: at(9))
+  t.reload(now: at(9, 30))
+  expectEqual(t.running?.projectId, web, "started")
+  expectEqual(t.running?.source, "menubar")
+  expectEqual(changes, 1)
+  let first = t.running!.id
+
+  // Another project: the old timer stops and keeps its time.
+  t.choose(project: api, workspace: nil, now: at(10))
+  t.reload(now: at(10, 30))
+  expectEqual(t.running?.projectId, api, "switched")
+  check(t.running?.id != first, "new timer")
+  let sheet = try! store.timesheet(DateInterval(start: at(0), end: at(0, day: 1)))
+  expectEqual(sheet.entries.first { $0.id == first }?.end, at(10), "old one stopped")
+
+  // Same project again: nothing changes.
+  let current = t.running!.id
+  t.choose(project: api, workspace: nil, now: at(11))
+  expectEqual(t.running?.id, current, "same project, same timer")
+
+  // A timer with no project, started elsewhere, gets the project.
+  _ = try! cli.startEntry(project: nil, workspace: nil, now: at(12))
+  t.reload(now: at(12, 30))
+  check(t.running?.projectId == nil, "unassigned timer")
+  let unassigned = t.running!.id
+  t.choose(project: web, workspace: nil, now: at(12, 45))
+  expectEqual(t.running?.id, unassigned, "assigned in place")
+  expectEqual(t.running?.projectId, web)
+  expectEqual(t.running?.start, at(12), "keeps its start")
+
+  t.stop(now: at(13))
+  t.reload(now: at(13, 30))
+  check(t.running == nil, "stopped")
+
+  expectEqual(t.createProject(named: "WEB"), web, "same name, same project")
+  expectEqual(t.label(project: web, workspace: nil), "web")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

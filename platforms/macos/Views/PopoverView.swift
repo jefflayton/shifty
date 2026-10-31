@@ -9,12 +9,21 @@ struct PopoverView: View {
   @Bindable var model: ShiftModel
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
+  /// The running timer; nil without the store.
+  let tracking: TrackingModel?
+  /// Opens the main window; nil without the store.
+  let openTimesheet: (() -> Void)?
 
-  init(updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem) {
+  init(
+    updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
+    tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil
+  ) {
     self.updater = updater
     self.model = model
     self.preferences = preferences
     self.loginItem = loginItem
+    self.tracking = tracking
+    self.openTimesheet = openTimesheet
 
     // Create our view model for our CheckForUpdatesView
     self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
@@ -67,6 +76,10 @@ struct PopoverView: View {
         }
       }
 
+      if let tracking {
+        TrackingSection(tracking: tracking)
+      }
+
       FormSection("Breaks") {
         HStack(spacing: 4) {
           if !model.isOnBreak {
@@ -97,6 +110,9 @@ struct PopoverView: View {
 
       VStack(alignment: .leading, spacing: 2) {
         Divider().padding(.bottom, 4)
+        if let openTimesheet {
+          MenuRowButton("Open Timesheet…", action: openTimesheet)
+        }
         MenuRowButton("Check for Updates…", action: updater.checkForUpdates)
           .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
         MenuRowMenu("Settings") {
@@ -118,9 +134,14 @@ struct PopoverView: View {
     }
     .padding(14)
     .frame(width: 320)
+    // A break or clock out stops the timer. The shift saves to the store in
+    // a task queued when it changed, so read after that.
+    .onChange(of: model.breakStart) { Task { @MainActor in tracking?.reload() } }
+    .onChange(of: model.isClockedIn) { Task { @MainActor in tracking?.reload() } }
     .onAppear {
       // Nothing observes the clock, so check for a finished shift on open.
       model.rollOverIfStale()
+      tracking?.reload()
       // Login items can also be changed in System Settings.
       loginItem.refresh()
     }

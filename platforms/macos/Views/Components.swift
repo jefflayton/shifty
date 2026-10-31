@@ -29,24 +29,34 @@ struct FormSection<Accessory: View, Content: View>: View {
       }
       .padding(.horizontal, 6)
 
-      VStack(spacing: 0) {
-        Group(subviews: content) { rows in
-          ForEach(rows) { row in
-            if row.id != rows.first?.id {
-              Divider().padding(.leading, 10)
-            }
-            row
-              .padding(.horizontal, 10)
-              .frame(minHeight: 34)
+      GroupedRows { content }
+    }
+  }
+}
+
+/// Rows on a shared rounded fill, separated by hairlines.
+struct GroupedRows<Content: View>: View {
+  var minRowHeight: CGFloat = 34
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Group(subviews: content) { rows in
+        ForEach(rows) { row in
+          if row.id != rows.first?.id {
+            Divider().padding(.leading, 10)
           }
+          row
+            .padding(.horizontal, 10)
+            .frame(minHeight: minRowHeight)
         }
       }
-      .background(.quinary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .strokeBorder(.quaternary.opacity(0.6), lineWidth: 0.5)
-      )
     }
+    .background(.quinary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(.quaternary.opacity(0.6), lineWidth: 0.5)
+    )
   }
 }
 
