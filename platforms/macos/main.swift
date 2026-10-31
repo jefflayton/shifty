@@ -4,18 +4,18 @@ import Sparkle
 import SwiftUI
 import UserNotifications
 
-func log(_ items: Any..., separator: String = " ", terminator: String = "\n") {
-  let body = items.map { "\($0)" }.joined(separator: separator)
-  print("[swift.menubar]", body, terminator: terminator)
-}
-
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
   var popover: NSPopover!
   var item: NSStatusItem!
-  let model = ShiftModel.load()
-  let preferences = Preferences()
+  /// The database the CLI and TUI share. Without it the app still works,
+  /// as a calculator only.
+  let store = AppDelegate.openStore()
+  lazy var model = ShiftModel.load(store: store)
+  lazy var preferences = Preferences(store: store)
   let loginItem = LoginItem()
+  private var storeWatcher: Timer?
+  private var storeVersion: Int64?
   private var alarmScheduler: AlarmScheduler!
   private var statusItemController: StatusItemController!
 
@@ -34,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     alarmScheduler = AlarmScheduler(
       model: model, preferences: preferences, controller: .shared)
+    watchStore()
 
     setupMenu()
 
@@ -59,6 +60,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       // Wait for the status item to be placed in the menu bar.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
     }
+  }
+
+  private static func openStore() -> ShiftStore? {
+    do {
+      return try ShiftStore()
+    } catch {
+      log("open store:", error)
+      return nil
+    }
+  }
+
+  /// Picks up what the TUI and CLI write. The store's data version moves
+  /// only for other processes' writes, so the app's own don't loop back.
+  private func watchStore() {
+    guard let store else { return }
+    storeVersion = try? store.dataVersion()
+    let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+      Task { @MainActor in self?.checkStore() }
+    }
+    timer.tolerance = 1
+    RunLoop.main.add(timer, forMode: .common)
+    storeWatcher = timer
+  }
+
+  private func checkStore() {
+    guard let store, let version = try? store.dataVersion(), version != storeVersion else { return }
+    storeVersion = version
+    model.pull()
+    preferences.pull()
   }
 
   @objc func toggle() {

@@ -5,10 +5,13 @@ const Io = std.Io;
 const core = @import("core");
 const time = core.time;
 
+const commands = @import("commands.zig");
+
 const usage =
     \\Usage: shifty [options]
+    \\       shifty <command> [args]
     \\
-    \\Calculate your clock-out time.
+    \\Calculate your clock-out time, or track time with a command.
     \\
     \\Options:
     \\  -s, --start <time>         Clock-in time (default: now)
@@ -19,7 +22,7 @@ const usage =
     \\                             e.g. -b 12pm 12:30pm
     \\  -h, --help                 Show this help
     \\
-;
+++ commands.usage;
 
 const default_shift_secs = 8 * std.time.s_per_hour;
 
@@ -43,14 +46,25 @@ pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
 
     var stdout_buf: [256]u8 = undefined;
-    var stdout_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buf);
+    var stdout_writer: Io.File.Writer = .initStreaming(.stdout(), io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     var stderr_buf: [256]u8 = undefined;
-    var stderr_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buf);
+    var stderr_writer: Io.File.Writer = .initStreaming(.stderr(), io, &stderr_buf);
     const stderr = &stderr_writer.interface;
 
     const args = try init.minimal.args.toSlice(arena);
+
+    if (args.len > 1 and commands.isCommand(args[1])) {
+        commands.run(init, stdout, stderr, args[1..]) catch |err| switch (err) {
+            error.Reported => {
+                try stderr_writer.flush();
+                std.process.exit(1);
+            },
+            else => return err,
+        };
+        return stdout_writer.flush();
+    }
 
     var diag: Diag = .{};
     const opts = parseArgs(arena, args[1..], &diag) catch |err| {
@@ -140,6 +154,10 @@ fn testParse(args: []const [:0]const u8) ArgError!Options {
     var opts = try parseArgs(arena.allocator(), args, &diag);
     opts.breaks = &.{}; // owned by the arena
     return opts;
+}
+
+test {
+    _ = commands;
 }
 
 test "parseArgs - defaults" {

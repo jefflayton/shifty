@@ -9,7 +9,8 @@ struct Interval: Identifiable, Codable, Equatable {
 
   var isValid: Bool { ShiftTimes.isValid(self) }
 
-  init(inDate: Date, outDate: Date) {
+  init(id: UUID = UUID(), inDate: Date, outDate: Date) {
+    self.id = id
     self.inDate = inDate
     self.outDate = outDate
   }

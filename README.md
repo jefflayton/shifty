@@ -62,6 +62,11 @@ Set your shift length, clock-in time (**Now** sets it to the current time), and 
 when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
 rolls over to today without its breaks.
 
+Click **Clock In** to start tracking the shift for real. Once you're clocked in, from the menu
+bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
+up in the others within a couple of seconds. **Clock Out** ends it. Until you clock in, the
+popover is just a calculator. Alarm rules and the clock-out link are shared the same way.
+
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
@@ -103,9 +108,75 @@ $ shifty -s 9am -b 12pm 12:30pm
 Clock Out: 05:30 PM
 ```
 
+### Tracking time
+
+Commands record shifts, breaks, and time per project in a local database that every Shifty
+frontend shares: `~/Library/Application Support/Shifty/shifty.db` on macOS,
+`$XDG_DATA_HOME/shifty/shifty.db` elsewhere, or `$SHIFTY_DB` if set.
+
+```
+status                     What's running: shift, break, timer
+in [-s <time>] [-l <len>]  Clock in (default: now, 8h)
+out                        Clock out
+break                      Start or end a break
+start [<project>[/<workspace>]] [-n <note>]
+                           Track time. With no project, use the
+                           linked Situ repo you're in, if any
+stop                       Stop tracking
+log [--week]               Time by project, today or the last 7 days
+projects                   List projects and their workspaces
+project add <name> [--client <name>] [--color <#rrggbb>]
+workspace add <project> <name>
+clients                    List clients
+client add <name>
+link <project>[/<workspace>]
+                           Link the Situ repo you're in to a project
+```
+
+```sh
+$ shifty client add Acme
+$ shifty project add web --client Acme
+$ shifty workspace add web main
+$ shifty in -s 9am
+Clocked in at 09:00 AM. Clock out at 05:00 PM.
+$ shifty start web/main -n "API review"
+Tracking web/main since 10:55 AM.
+$ shifty log
+Fri Oct 30
+  10:55 AM – 12:40 PM   1h 45m  web/main  API review
+  12:40 PM –      now   3h 15m  internal
+
+By project
+   1h 45m  web  (Acme)
+   3h 15m  internal
+
+By client
+   1h 45m  Acme
+   3h 15m  (no client)
+
+   5h 00m  total
+```
+
+Starting with no project inside a Situ repo (one with a
+`situ.toml`) tracks whatever `shifty link` pointed that repo at.
+
 ## TUI
 
-`shifty-tui` calculates the clock-out time live as you type.
+`shifty-tui` opens on your day: the shift and its clock out, what you're tracking, today's
+entries, and totals by project and client. It reads the same database as the CLI and reloads
+every second, so a `shifty start` in another terminal shows up right away.
+
+| Key | Action |
+| --- | --- |
+| `s` | Start tracking: type to filter projects and workspaces, `↑`/`↓` to choose, `enter` to start. Inside a linked Situ repo, that repo's project comes first |
+| `x` | Stop tracking |
+| `n` | Add or edit the running entry's note |
+| `b` | Start or end a break |
+| `i` / `o` | Clock in now / clock out (asks first) |
+| `c` | Open the calculator; `esc` comes back |
+| `q` / `ctrl+c` | Quit |
+
+The calculator works out a clock-out time live as you type, starting from the current shift.
 
 | Key | Action |
 | --- | --- |
