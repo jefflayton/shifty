@@ -30,6 +30,9 @@ pub const usage =
     \\  log [--week]               Time by project, today or the last 7 days
     \\  projects                   List projects and their workspaces
     \\  project add <name> [--client <name>] [--color <#rrggbb>]
+    \\  project rename <name> <new name>
+    \\  project color <name> <#rrggbb|none>
+    \\  project delete <name>     Its time stays, unassigned
     \\  workspace add <project> <name>
     \\  clients                    List clients
     \\  client add <name>
@@ -318,8 +321,55 @@ fn listProjects(c: *Ctx, args: []const [:0]const u8) !void {
     }
 }
 
+const project_usage =
+    \\usage: shifty project add <name> [--client <name>] [--color <#rrggbb>]
+    \\       shifty project rename <name> <new name>
+    \\       shifty project color <name> <#rrggbb|none>
+    \\       shifty project delete <name>
+;
+
 fn project(c: *Ctx, args: []const [:0]const u8) !void {
-    if (args.len == 0 or !std.mem.eql(u8, args[0], "add")) return c.fail("usage: shifty project add <name> [--client <name>] [--color <#rrggbb>]", .{});
+    const Sub = enum { add, rename, color, delete };
+    const sub = if (args.len > 0) std.meta.stringToEnum(Sub, args[0]) else null;
+    switch (sub orelse return c.fail(project_usage, .{})) {
+        .add => try addProject(c, args),
+        .rename => {
+            if (args.len != 3) return c.fail("usage: shifty project rename <name> <new name>", .{});
+            const projects = try c.db.projects(c.arena);
+            const p = try namedProject(c, projects, args[1]);
+            const n = try validName(c, args[2]);
+            if (try findByName(c, store.Project, projects, n, "project")) |other| {
+                if (!other.id.eql(p.id)) return c.fail("there's already a project named '{s}'", .{other.name});
+            }
+            try c.db.editProject(p.id, .{ .name = n, .client_id = p.client_id, .color = p.color }, c.now.ts);
+            try c.out.print("Renamed {s} to {s}.\n", .{ p.name, n });
+        },
+        .color => {
+            if (args.len != 3) return c.fail("usage: shifty project color <name> <#rrggbb|none>", .{});
+            const p = try namedProject(c, try c.db.projects(c.arena), args[1]);
+            const color: ?[]const u8 = if (std.mem.eql(u8, args[2], "none")) null else args[2];
+            if (color) |v| if (!isColor(v)) return c.fail("invalid color '{s}'; use #rrggbb or none", .{v});
+            try c.db.editProject(p.id, .{ .name = p.name, .client_id = p.client_id, .color = color }, c.now.ts);
+            if (color) |v|
+                try c.out.print("{s} is now {s}.\n", .{ p.name, v })
+            else
+                try c.out.print("{s} is back to its default color.\n", .{p.name});
+        },
+        .delete => {
+            if (args.len != 2) return c.fail("usage: shifty project delete <name>", .{});
+            const p = try namedProject(c, try c.db.projects(c.arena), args[1]);
+            try c.db.deleteProject(p.id, c.now.ts);
+            try c.out.print("Deleted {s}. Its time stays, with no project.\n", .{p.name});
+        },
+    }
+}
+
+fn namedProject(c: *Ctx, projects: []const store.Project, name: []const u8) !store.Project {
+    return try findByName(c, store.Project, projects, name, "project") orelse
+        return c.fail("no project named '{s}'", .{name});
+}
+
+fn addProject(c: *Ctx, args: []const [:0]const u8) !void {
     var name: ?[]const u8 = null;
     var client_name: ?[]const u8 = null;
     var color: ?[]const u8 = null;

@@ -316,6 +316,45 @@ export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*co
     return .ok;
 }
 
+export fn shifty_edit_project(h: *Handle, project_id: Id, name: [*:0]const u8, client_id: ?*const Id, color: ?[*:0]const u8, now: i64) Result {
+    h.store.editProject(id(project_id), .{ .name = std.mem.span(name), .client_id = optId(client_id), .color = optStr(color) }, now) catch |e| return result(e);
+    return .ok;
+}
+
+export fn shifty_delete_project(h: *Handle, project_id: Id, now: i64) Result {
+    h.store.deleteProject(id(project_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Every active project with what it's used for, to manage them.
+const Projects = struct {
+    projects: []const store.Project,
+    clients: []const store.Client,
+    workspaces: []const store.Workspace,
+    usage: []const Store.ProjectUsage,
+};
+
+/// Writes every active project, client, and workspace, and each project's
+/// usage, as UTF-8 JSON into a new buffer; release it with `shifty_free`.
+export fn shifty_projects_json(h: *Handle, now: i64, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const names: store.report.Names = store.report.Names.load(&h.store, a) catch |e| return result(e);
+    const value: Projects = .{
+        .projects = names.projects,
+        .clients = names.clients,
+        .workspaces = names.workspaces,
+        .usage = h.store.projectUsage(a, now) catch |e| return result(e),
+    };
+    const json = std.json.Stringify.valueAlloc(gpa, value, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
 const testing = std.testing;
 
 test "C API - shift, breaks, alarms, settings" {
@@ -399,4 +438,38 @@ test "C API - timesheet JSON and entry edits" {
 
     try testing.expectEqual(Result.ok, shifty_delete_entry(s, e, 20));
     try testing.expectEqual(Result.not_found, shifty_delete_entry(s, e, 21));
+}
+
+test "C API - manage projects" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var web: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    var e: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_add_entry(s, &web, null, 3600, 7200, null, &e));
+    try testing.expectEqual(Result.ok, shifty_edit_project(s, web, "Website", null, "#3b82f6", 1));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_projects_json(s, 10000, &ptr, &len));
+    const Parsed = struct {
+        projects: []const struct { name: []const u8, color: ?[]const u8 },
+        usage: []const struct { project_id: []const u8, entries: i64, seconds: i64, last_ts: i64 },
+    };
+    {
+        defer shifty_free(ptr, len);
+        const parsed = try std.json.parseFromSlice(Parsed, testing.allocator, ptr.?[0..len], .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try testing.expectEqualStrings("Website", parsed.value.projects[0].name);
+        try testing.expectEqualStrings("#3b82f6", parsed.value.projects[0].color.?);
+        try testing.expectEqual(3600, parsed.value.usage[0].seconds);
+        try testing.expectEqualStrings(&Uuid.toStr(.{ .bytes = web.bytes }), parsed.value.usage[0].project_id);
+    }
+
+    try testing.expectEqual(Result.ok, shifty_delete_project(s, web, 2));
+    try testing.expectEqual(Result.not_found, shifty_delete_project(s, web, 3));
+    try testing.expectEqual(Result.not_found, shifty_edit_project(s, web, "x", null, null, 3));
 }

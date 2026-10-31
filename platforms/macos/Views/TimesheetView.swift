@@ -379,7 +379,7 @@ struct ProjectPicker: View {
       Button("New Project…") {
         // Let the menu close first; a modal from inside it doesn't take keys.
         DispatchQueue.main.async {
-          if let id = NewProjectPrompt.run(model: model) {
+          if let id = NewProjectPrompt.run(create: model.createProject(named:)) {
             model.setProject(entry, project: id, workspace: nil)
           }
         }
@@ -508,18 +508,19 @@ enum TimesheetFormat {
 enum ProjectColor {
   /// For projects without a color of their own, picked by age so a
   /// project keeps its color as others are added. Mid tones that hold up
-  /// in light and dark.
-  static let palette: [Color] = ([
-    0x4A90E2, 0xF08A3C, 0x34A770, 0x9B6BE0, 0xE0598B, 0x22A6A6, 0xD9A520, 0x7D8BA6,
-  ] as [UInt32]).map(rgb)
+  /// in light and dark. Also the swatches offered when picking one.
+  static let paletteHex = [
+    "#4A90E2", "#F08A3C", "#34A770", "#9B6BE0", "#E0598B", "#22A6A6", "#D9A520", "#7D8BA6",
+  ]
+  static let palette: [Color] = paletteHex.map { parse($0)! }
 
   /// Unassigned time.
   static let none = Color.secondary.opacity(0.45)
 
-  static func color(_ project: UUID?, in model: TimesheetModel) -> Color {
+  static func color(_ project: UUID?, in names: some ProjectNames) -> Color {
     guard let project else { return none }
-    if let own = model.project(project)?.color.flatMap(parse) { return own }
-    guard let rank = model.rank(of: project) else { return none }
+    if let own = names.project(project)?.color.flatMap(parse) { return own }
+    guard let rank = names.rank(of: project) else { return none }
     return palette[rank % palette.count]
   }
 
@@ -527,21 +528,26 @@ enum ProjectColor {
   static func parse(_ hex: String) -> Color? {
     guard hex.count == 7, hex.hasPrefix("#"), let v = UInt32(hex.dropFirst(), radix: 16)
     else { return nil }
-    return rgb(v)
-  }
-
-  private static func rgb(_ v: UInt32) -> Color {
-    Color(
+    return Color(
       red: Double((v >> 16) & 0xff) / 255, green: Double((v >> 8) & 0xff) / 255,
       blue: Double(v & 0xff) / 255)
   }
+
+  /// `color` as `#RRGGBB`, in sRGB.
+  static func hex(_ color: Color) -> String? {
+    guard let c = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+    func byte(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+    return String(
+      format: "#%02X%02X%02X", byte(c.redComponent), byte(c.greenComponent), byte(c.blueComponent))
+  }
 }
 
-/// Asks for a new project's name. Returns its id, or an existing project's
-/// if one already has that name.
+/// Asks for a new project's name and passes it to `create`, which returns
+/// the project's id (an existing one if the name is taken).
 @MainActor
 enum NewProjectPrompt {
-  static func run(model: TimesheetModel) -> UUID? {
+  @discardableResult
+  static func run(create: (String) -> UUID?) -> UUID? {
     let alert = NSAlert()
     alert.messageText = "New Project"
     alert.informativeText = "Time tracked against it shows up in the TUI and CLI too."
@@ -552,6 +558,6 @@ enum NewProjectPrompt {
     alert.accessoryView = field
     alert.window.initialFirstResponder = field
     guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-    return model.createProject(named: field.stringValue)
+    return create(field.stringValue)
   }
 }

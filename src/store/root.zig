@@ -335,6 +335,66 @@ pub const Store = struct {
         return out.items;
     }
 
+    /// Renames a project, moves it to another client, or changes its color
+    /// (`#rrggbb`; null for none).
+    pub fn editProject(self: *Store, project_id: Uuid, edit: NewProject, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE projects SET name = ?, client_id = ?, color = ?, updated_ts = ?
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{ edit.name, optBlob(&edit.client_id), edit.color, now, blob(&project_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Deletes a project and its workspaces. Its time stays, unassigned, so
+    /// deleting a project never loses hours.
+    pub fn deleteProject(self: *Store, project_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        try self.db.exec(
+            \\UPDATE projects SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&project_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.db.exec(
+            \\UPDATE workspaces SET deleted_ts = ?, updated_ts = ?1
+            \\WHERE project_id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&project_id) });
+        try self.db.exec(
+            \\UPDATE entries SET project_id = NULL, workspace_id = NULL, updated_ts = ?
+            \\WHERE project_id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&project_id) });
+        try self.commit();
+    }
+
+    pub const ProjectUsage = struct {
+        project_id: Uuid,
+        entries: i64,
+        /// All time, a running entry counted up to `now`.
+        seconds: i64,
+        /// When its latest entry started.
+        last_ts: i64,
+    };
+
+    /// How much each active project has been used, for projects with any
+    /// time. Allocated in `arena`.
+    pub fn projectUsage(self: *Store, arena: Allocator, now: i64) Error![]ProjectUsage {
+        var stmt = try self.db.prepare(
+            \\SELECT e.project_id, count(*), sum(max(0, coalesce(e.out_ts, ?) - e.in_ts)), max(e.in_ts)
+            \\FROM entries e JOIN projects p ON p.id = e.project_id
+            \\WHERE e.deleted_ts IS NULL AND p.deleted_ts IS NULL
+            \\GROUP BY e.project_id
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{now});
+        var out: std.ArrayList(ProjectUsage) = .empty;
+        while (try stmt.step()) try out.append(arena, .{
+            .project_id = try id(stmt, 0),
+            .entries = stmt.int(1),
+            .seconds = stmt.int(2),
+            .last_ts = stmt.int(3),
+        });
+        return out.items;
+    }
+
     // ── Entries ───────────────────────────────────────────────────────────
 
     /// Stops the running entry, if any, and starts a new one at `at`.

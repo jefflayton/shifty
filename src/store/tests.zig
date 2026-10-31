@@ -535,3 +535,58 @@ test "entries - add after the fact, edit, delete" {
     day = try s.entriesBetween(a, 0, 24 * h);
     try testing.expectEqual(1, day.len);
 }
+
+test "projects - rename, recolor, delete keeps the time" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const acme = try s.createClient("Acme", 0);
+    const web = try s.createProject(.{ .name = "web" }, 0);
+    const main = try s.createWorkspace(web, "main", 0);
+    const other = try s.createProject(.{ .name = "other" }, 0);
+    try s.link("situ", "workspace", "w1", .{ .project_id = web, .workspace_id = main }, 0);
+
+    _ = try s.addEntry(.{ .workspace_id = main, .source = .manual }, at(h), 2 * h);
+    _ = try s.addEntry(.{ .project_id = web, .source = .manual }, at(3 * h), 5 * h);
+    _ = try s.startEntry(.{ .project_id = web, .source = .tui }, at(6 * h));
+    _ = try s.addEntry(.{ .project_id = other, .source = .manual }, at(h), 90 * 60);
+
+    var usage = try s.projectUsage(a, 7 * h);
+    try testing.expectEqual(2, usage.len);
+    const web_usage = if (usage[0].project_id.eql(web)) usage[0] else usage[1];
+    try testing.expectEqual(3, web_usage.entries);
+    try testing.expectEqual(4 * h, web_usage.seconds);
+    try testing.expectEqual(6 * h, web_usage.last_ts);
+
+    try s.editProject(web, .{ .name = "Website", .client_id = acme, .color = "#3b82f6" }, 10);
+    var ps = try s.projects(a);
+    try testing.expectEqualStrings("Website", ps[1].name);
+    try testing.expectEqualStrings("#3b82f6", ps[1].color.?);
+    try testing.expect(ps[1].client_id.?.eql(acme));
+
+    try s.deleteProject(web, 20);
+    try testing.expectError(error.NotFound, s.deleteProject(web, 21));
+    try testing.expectError(error.NotFound, s.editProject(web, .{ .name = "x" }, 21));
+    ps = try s.projects(a);
+    try testing.expectEqual(1, ps.len);
+    try testing.expectEqual(0, (try s.workspaces(a, web)).len);
+    try testing.expectEqual(null, try s.resolveLink("situ", "workspace", "w1"));
+
+    // Its time is still there, unassigned; the running entry keeps running.
+    const day = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(4, day.len);
+    var unassigned: usize = 0;
+    for (day) |e| {
+        if (e.project_id == null) {
+            try testing.expectEqual(null, e.workspace_id);
+            unassigned += 1;
+        }
+    }
+    try testing.expectEqual(3, unassigned);
+    try testing.expectEqual(null, (try s.runningEntry(a)).?.out_ts);
+    usage = try s.projectUsage(a, 7 * h);
+    try testing.expectEqual(1, usage.len);
+}

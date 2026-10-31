@@ -6,11 +6,13 @@ import SwiftUI
 /// menu bar alone when the window closes.
 @MainActor
 final class MainWindow: NSObject, NSWindowDelegate {
-  private let model: TimesheetModel
+  private let timesheet: TimesheetModel
+  private let projects: ProjectsModel
   private var window: NSWindow?
 
-  init(model: TimesheetModel) {
-    self.model = model
+  init(store: ShiftStore) {
+    timesheet = TimesheetModel(store: store)
+    projects = ProjectsModel(store: store)
   }
 
   var isVisible: Bool { window?.isVisible ?? false }
@@ -18,7 +20,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
   func show() {
     let window = self.window ?? makeWindow()
     self.window = window
-    model.reload()
+    reload()
     let wasAccessory = NSApp.activationPolicy() != .regular
     NSApp.setActivationPolicy(.regular)
     window.makeKeyAndOrderFront(nil)
@@ -55,19 +57,29 @@ final class MainWindow: NSObject, NSWindowDelegate {
       backing: .buffered, defer: false)
     window.title = "Shifty"
     window.isReleasedWhenClosed = false
-    window.contentViewController = NSHostingController(rootView: TimesheetView(model: model))
+    let host = NSHostingController(rootView: MainView(timesheet: timesheet, projects: projects))
+    // Let the views' .toolbar fill the window's.
+    host.sceneBridgingOptions = [.toolbars]
+    window.contentViewController = host
+    window.toolbarStyle = .unified
+    // The toolbar's switcher says which screen this is.
+    window.titleVisibility = .hidden
     window.delegate = self
     window.center()
     window.setFrameAutosaveName("MainWindow")
     return window
   }
 
-  func reload() { model.reload() }
+  /// Both screens are cheap to read, so both stay current.
+  func reload() {
+    timesheet.reload()
+    projects.reload()
+  }
 
   func windowDidBecomeKey(_ notification: Notification) {
     // Pick up time the popover's breaks stopped, which the store watcher
     // doesn't see (it only notices other processes).
-    model.reload()
+    reload()
   }
 
   func windowWillClose(_ notification: Notification) {

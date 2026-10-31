@@ -13,7 +13,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
-  lazy var mainWindow = store.map { MainWindow(model: TimesheetModel(store: $0)) }
+  lazy var mainWindow = store.map { MainWindow(store: $0) }
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
   private var storeVersion: Int64?

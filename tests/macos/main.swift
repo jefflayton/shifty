@@ -501,5 +501,52 @@ do {
   check(running != nil, "added today")
 }
 
+// MARK: Projects
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let p = ProjectsModel(store: store)
+  p.reload()
+  check(p.projects.isEmpty, "no projects yet")
+
+  let web = p.create(named: " web ")!
+  let api = p.create(named: "api")!
+  expectEqual(p.create(named: "WEB"), web, "same name, same project")
+  check(p.create(named: "  ") == nil, "blank name")
+  expectEqual(p.projects.map(\.name), ["api", "web"])
+  expectEqual(p.rank(of: web), 0, "oldest first")
+  expectEqual(p.rank(of: api), 1)
+
+  _ = try! store.addEntry(project: web, workspace: nil, start: at(9), end: at(11))
+  _ = try! store.addEntry(project: web, workspace: nil, start: at(9, day: 1), end: at(9, 30, day: 1))
+  p.reload()
+  expectEqual(p.usage(of: web)?.seconds, 9000)
+  expectEqual(p.usage(of: web)?.entries, 2)
+  expectEqual(p.usage(of: web)?.lastUsed, at(9, day: 1))
+  check(p.usage(of: api) == nil, "unused")
+
+  check(p.rename(p.project(web)!, to: "Website"), "renamed")
+  expectEqual(p.project(web)?.name, "Website")
+  check(!p.rename(p.project(web)!, to: "API"), "name taken")
+  check(p.error != nil, "says why")
+  check(!p.rename(p.project(web)!, to: " "), "blank refused")
+  expectEqual(p.project(web)?.name, "Website", "unchanged")
+  check(p.rename(p.project(web)!, to: "website"), "own name, new case")
+  check(p.error == nil, "error clears")
+
+  p.setColor(p.project(web)!, to: "#3B82F6")
+  expectEqual(p.project(web)?.color, "#3B82F6")
+  p.setColor(p.project(web)!, to: nil)
+  expectEqual(p.project(web)?.color, nil, "back to default")
+
+  p.delete(p.project(web)!)
+  expectEqual(p.projects.map(\.id), [api], "deleted")
+  let day = try! store.timesheet(DateInterval(start: at(0), end: at(0, day: 2)))
+  expectEqual(day.entries.count, 2, "its time stays")
+  check(day.entries.allSatisfy { $0.projectId == nil }, "unassigned")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

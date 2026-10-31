@@ -119,4 +119,17 @@ ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
                                    const ShiftyId *client_id, const char *color, int64_t now,
                                    ShiftyId *out);
 
+// ── Projects ────────────────────────────────────────────────────────────────
+
+// Every active project, client, and workspace, plus each project's usage, as
+// UTF-8 JSON: {"projects":[...],"clients":[...],"workspaces":[...],"usage":
+// [{"project_id","entries","seconds","last_ts"}]}. A running entry counts up
+// to `now`. Release with shifty_free.
+ShiftyResult shifty_projects_json(ShiftyStore *store, int64_t now, char **out, size_t *len);
+// Replaces a project's name, client, and color ('#rrggbb', or NULL for none).
+ShiftyResult shifty_edit_project(ShiftyStore *store, ShiftyId project_id, const char *name,
+                                 const ShiftyId *client_id, const char *color, int64_t now);
+// Deletes a project and its workspaces. Its time stays, unassigned.
+ShiftyResult shifty_delete_project(ShiftyStore *store, ShiftyId project_id, int64_t now);
+
 #endif // SHIFTY_H

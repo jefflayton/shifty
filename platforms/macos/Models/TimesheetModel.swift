@@ -4,7 +4,7 @@ import Observation
 /// A week of time entries from the store, for the main window's timesheet:
 /// add time after the fact (a meeting, offline work), fix times, reassign
 /// projects. The CLI and TUI write the same entries.
-@Observable final class TimesheetModel {
+@Observable final class TimesheetModel: ProjectNames {
   /// Midnight starting the week shown.
   private(set) var weekStart: Date
   private(set) var sheet = ShiftStore.Timesheet()
@@ -125,12 +125,7 @@ import Observation
     }
   }
 
-  /// A project's place among all projects, oldest first, for picking it a
-  /// color that stays put as projects are added. Ids are UUIDv7, so they
-  /// sort by creation.
-  func rank(of project: UUID) -> Int? {
-    sheet.projects.map(\.id).sorted { $0.uuidString < $1.uuidString }.firstIndex(of: project)
-  }
+  func rank(of project: UUID) -> Int? { sheet.projects.rank(of: project) }
 
   func project(_ id: UUID) -> ShiftStore.Project? { sheet.projects.first { $0.id == id } }
   func client(_ id: UUID) -> ShiftStore.Client? { sheet.clients.first { $0.id == id } }
