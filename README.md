@@ -54,7 +54,8 @@ zig build test-macos        # menu bar app model tests (macOS only)
 ```
 
 Set `SHIFTY_OPEN_ON_LAUNCH=1` to open the menu bar popover at launch, e.g.
-`open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`.
+`open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`, or `SHIFTY_OPEN_TIMESHEET=1` to open the
+timesheet window. Set `SHIFTY_DB` to a scratch path to keep a dev build off your real data.
 
 ## Menu bar
 

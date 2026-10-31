@@ -129,6 +129,118 @@ final class ShiftStore {
     try check(result)
   }
 
+  // MARK: Timesheet
+
+  struct Timesheet: Decodable, Equatable {
+    var entries: [Entry] = []
+    var clients: [Client] = []
+    var projects: [Project] = []
+    var workspaces: [Workspace] = []
+  }
+
+  struct Entry: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var projectId: UUID?
+    var workspaceId: UUID?
+    var inTs: Int64
+    var outTs: Int64?
+    var source: String
+    var note: String?
+
+    var start: Date { date(inTs) }
+    /// nil while it's running.
+    var end: Date? { outTs.map(date) }
+  }
+
+  struct Client: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var name: String
+  }
+
+  struct Project: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var clientId: UUID?
+    var name: String
+    var color: String?
+  }
+
+  struct Workspace: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var projectId: UUID
+    var name: String
+  }
+
+  /// The entries overlapping `range`, and the names they refer to.
+  func timesheet(_ range: DateInterval) throws -> Timesheet {
+    var ptr: UnsafeMutablePointer<CChar>?
+    var len = 0
+    try check(shifty_timesheet_json(handle, ts(range.start), ts(range.end), &ptr, &len))
+    defer { shifty_free(ptr, len) }
+    guard let ptr else { return Timesheet() }
+    let data = Data(bytes: ptr, count: len)
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(Timesheet.self, from: data)
+  }
+
+  /// Time recorded after the fact. A workspace implies its project.
+  func addEntry(
+    project: UUID?, workspace: UUID?, start: Date, end: Date, note: String? = nil
+  ) throws -> UUID {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_add_entry(handle, p, w, ts(start), ts(end), note, &out))
+    }
+    return UUID(out)
+  }
+
+  /// Replaces an entry's project, times, and note. A nil `end` keeps a
+  /// running entry running.
+  func editEntry(
+    _ id: UUID, project: UUID?, workspace: UUID?, start: Date, end: Date?, note: String?,
+    now: Date = Date()
+  ) throws {
+    try withIds(project, workspace) { p, w in
+      try check(
+        shifty_edit_entry(
+          handle, ShiftyId(id), p, w, ts(start), end.map(ts) ?? 0, end == nil ? 1 : 0, note,
+          ts(now)))
+    }
+  }
+
+  func deleteEntry(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_entry(handle, ShiftyId(id), ts(now)))
+  }
+
+  func createProject(name: String, client: UUID? = nil, color: String? = nil, now: Date = Date())
+    throws -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(client, nil) { c, _ in
+      try check(shifty_create_project(handle, name, c, color, ts(now), &out))
+    }
+    return UUID(out)
+  }
+
+  /// Passes optional ids to C as pointers, nil as NULL.
+  private func withIds(
+    _ a: UUID?, _ b: UUID?,
+    _ body: (UnsafePointer<ShiftyId>?, UnsafePointer<ShiftyId>?) throws -> Void
+  ) throws {
+    var ia = a.map(ShiftyId.init)
+    var ib = b.map(ShiftyId.init)
+    try withOptionalPointer(&ia) { pa in
+      try withOptionalPointer(&ib) { pb in try body(pa, pb) }
+    }
+  }
+
+  private func withOptionalPointer<T>(
+    _ value: inout T?, _ body: (UnsafePointer<T>?) throws -> Void
+  ) throws {
+    if value == nil { return try body(nil) }
+    try withUnsafePointer(to: &value!) { try body($0) }
+  }
+
   // MARK: Helpers
 
   private func check(_ result: ShiftyResult) throws {

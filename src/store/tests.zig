@@ -497,3 +497,41 @@ test "dataVersion - moves when another connection commits" {
     _ = try tui.createClient("their write", 0);
     try testing.expect(try app.dataVersion() != v0);
 }
+
+test "entries - add after the fact, edit, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const web = try s.createProject(.{ .name = "web" }, 0);
+    const main = try s.createWorkspace(web, "main", 0);
+    const other = try s.createProject(.{ .name = "other" }, 0);
+
+    const running = try s.startEntry(.{ .source = .tui }, at(5 * h));
+    const meeting = try s.addEntry(.{ .project_id = web, .source = .manual, .note = "standup" }, at(h), 2 * h);
+    try testing.expect((try s.runningEntry(a)).?.id.eql(running));
+
+    try s.editEntry(meeting, .{ .project_id = null, .workspace_id = main, .in_ts = h, .out_ts = 3 * h, .note = null }, 10);
+    var day = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(2, day.len);
+    try testing.expect(day[0].project_id.?.eql(web));
+    try testing.expect(day[0].workspace_id.?.eql(main));
+    try testing.expectEqual(3 * h, day[0].out_ts.?);
+    try testing.expectEqual(null, day[0].note);
+    try testing.expectEqual(.manual, day[0].source);
+
+    try testing.expectError(error.Mismatch, s.editEntry(meeting, .{ .project_id = other, .workspace_id = main, .in_ts = h, .out_ts = 3 * h, .note = null }, 11));
+    try testing.expectError(error.Conflict, s.editEntry(meeting, .{ .project_id = web, .workspace_id = null, .in_ts = 3 * h, .out_ts = 2 * h, .note = null }, 11));
+    try testing.expectError(error.Conflict, s.addEntry(.{ .source = .manual }, at(4 * h), 4 * h));
+
+    // Giving the running entry an end stops it.
+    try s.editEntry(running, .{ .project_id = other, .workspace_id = null, .in_ts = 5 * h, .out_ts = 6 * h, .note = null }, 12);
+    try testing.expectEqual(null, try s.runningEntry(a));
+
+    try s.deleteEntry(meeting, 13);
+    try testing.expectError(error.NotFound, s.deleteEntry(meeting, 14));
+    day = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(1, day.len);
+}

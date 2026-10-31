@@ -13,6 +13,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
+  lazy var mainWindow = store.map { MainWindow(model: TimesheetModel(store: $0)) }
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
   private var storeVersion: Int64?
@@ -47,13 +48,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let host = NSHostingController(
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
-        loginItem: loginItem))
+        loginItem: loginItem,
+        openTimesheet: mainWindow == nil ? nil : { [weak self] in self?.showMainWindow() }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
     host.sizingOptions = .preferredContentSize
     popover.contentViewController = host
     popover.behavior = .transient
+
+    // Development: open the main window without clicking.
+    if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
+      DispatchQueue.main.async { self.mainWindow?.show() }
+    }
 
     // Development: open the popover without clicking the status item.
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
@@ -89,6 +96,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     storeVersion = version
     model.pull()
     preferences.pull()
+    if mainWindow?.isVisible == true { mainWindow?.reload() }
+  }
+
+  func showMainWindow() {
+    popover.close()
+    mainWindow?.show()
+  }
+
+  /// Clicking the Dock icon with the window closed (or minimized) shows it.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
+    -> Bool
+  {
+    if !flag { mainWindow?.show() }
+    return true
   }
 
   @objc func toggle() {
@@ -137,6 +158,18 @@ func setupMenu() {
   editMenu.addItem(
     withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
     keyEquivalent: "a")
+
+  let windowItem = NSMenuItem()
+  windowItem.title = "Window"
+  mainMenu.addItem(windowItem)
+  let windowMenu = NSMenu(title: "Window")
+  windowItem.submenu = windowMenu
+  windowMenu.addItem(
+    withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+  windowMenu.addItem(
+    withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
+    keyEquivalent: "m")
+  NSApp.windowsMenu = windowMenu
 
   NSApp.mainMenu = mainMenu
 }

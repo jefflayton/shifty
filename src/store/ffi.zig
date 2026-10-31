@@ -234,6 +234,88 @@ export fn shifty_set_setting(h: *Handle, key: [*:0]const u8, value: ?[*:0]const 
     return .ok;
 }
 
+// ── Timesheet ───────────────────────────────────────────────────────────────
+
+/// What a timesheet shows for `[from, to)`: the entries overlapping it and
+/// every active client, project, and workspace to name them.
+const Timesheet = struct {
+    entries: []const store.Entry,
+    clients: []const store.Client,
+    projects: []const store.Project,
+    workspaces: []const store.Workspace,
+};
+
+/// Writes the timesheet for `[from, to)` as UTF-8 JSON into a new buffer;
+/// release it with `shifty_free`.
+export fn shifty_timesheet_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const names: store.report.Names = store.report.Names.load(&h.store, a) catch |e| return result(e);
+    const sheet: Timesheet = .{
+        .entries = h.store.entriesBetween(a, from, to) catch |e| return result(e),
+        .clients = names.clients,
+        .projects = names.projects,
+        .workspaces = names.workspaces,
+    };
+    const json = std.json.Stringify.valueAlloc(gpa, sheet, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
+export fn shifty_free(ptr: ?[*]u8, len: usize) void {
+    if (ptr) |p| gpa.free(p[0..len]);
+}
+
+fn optId(i: ?*const Id) ?Uuid {
+    return if (i) |p| id(p.*) else null;
+}
+
+fn optStr(s: ?[*:0]const u8) ?[]const u8 {
+    return if (s) |p| std.mem.span(p) else null;
+}
+
+/// Records time after the fact. Null ids leave it unassigned (a workspace
+/// implies its project); a null note is none.
+export fn shifty_add_entry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, in_ts: i64, out_ts: i64, note: ?[*:0]const u8, out: *Id) Result {
+    var tz_buf: local.TzBuf = undefined;
+    const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
+    const new = h.store.addEntry(
+        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .manual, .note = optStr(note) },
+        .{ .ts = in_ts, .utc_offset_secs = local.utcOffset(in_ts), .tz = tz },
+        out_ts,
+    ) catch |e| return result(e);
+    out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// Replaces an entry's project, times, and note. `running` nonzero keeps a
+/// running entry running (`out_ts` is then ignored).
+export fn shifty_edit_entry(h: *Handle, entry_id: Id, project_id: ?*const Id, workspace_id: ?*const Id, in_ts: i64, out_ts: i64, running: i32, note: ?[*:0]const u8, now: i64) Result {
+    h.store.editEntry(id(entry_id), .{
+        .project_id = optId(project_id),
+        .workspace_id = optId(workspace_id),
+        .in_ts = in_ts,
+        .out_ts = if (running != 0) null else out_ts,
+        .note = optStr(note),
+    }, now) catch |e| return result(e);
+    return .ok;
+}
+
+export fn shifty_delete_entry(h: *Handle, entry_id: Id, now: i64) Result {
+    h.store.deleteEntry(id(entry_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*const Id, color: ?[*:0]const u8, now: i64, out: *Id) Result {
+    const new = h.store.createProject(.{ .name = std.mem.span(name), .client_id = optId(client_id), .color = optStr(color) }, now) catch |e| return result(e);
+    out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
 const testing = std.testing;
 
 test "C API - shift, breaks, alarms, settings" {
@@ -279,4 +361,42 @@ test "C API - shift, breaks, alarms, settings" {
 
     try testing.expectEqual(Result.ok, shifty_end_shift(s, 5000));
     try testing.expectEqual(Result.none, shifty_end_shift(s, 5001));
+}
+
+test "C API - timesheet JSON and entry edits" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var web: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, "#ff8800", 0, &web));
+    var e: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_add_entry(s, &web, null, 3600, 7200, "standup", &e));
+    try testing.expectEqual(Result.conflict, shifty_add_entry(s, null, null, 7200, 3600, null, &e));
+    try testing.expectEqual(Result.ok, shifty_edit_entry(s, e, &web, null, 3600, 5400, 0, null, 10));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_timesheet_json(s, 0, 86400, &ptr, &len));
+    defer shifty_free(ptr, len);
+    const json = ptr.?[0..len];
+
+    const Parsed = struct {
+        entries: []const struct { id: []const u8, project_id: ?[]const u8, in_ts: i64, out_ts: ?i64, source: []const u8, note: ?[]const u8 },
+        projects: []const struct { id: []const u8, name: []const u8, color: ?[]const u8 },
+    };
+    const parsed = try std.json.parseFromSlice(Parsed, testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const v = parsed.value;
+    try testing.expectEqual(1, v.entries.len);
+    try testing.expectEqual(5400, v.entries[0].out_ts.?);
+    try testing.expectEqualStrings("manual", v.entries[0].source);
+    try testing.expectEqual(null, v.entries[0].note);
+    try testing.expectEqualStrings(&Uuid.toStr(.{ .bytes = web.bytes }), v.entries[0].project_id.?);
+    try testing.expectEqualStrings("web", v.projects[0].name);
+    try testing.expectEqualStrings("#ff8800", v.projects[0].color.?);
+
+    try testing.expectEqual(Result.ok, shifty_delete_entry(s, e, 20));
+    try testing.expectEqual(Result.not_found, shifty_delete_entry(s, e, 21));
 }

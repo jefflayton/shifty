@@ -26,6 +26,12 @@ pub const Uuid = struct {
         return .{ .bytes = b };
     }
 
+    /// Writes the canonical string form, for apps reading the store's JSON.
+    pub fn jsonStringify(u: Uuid, jw: anytype) !void {
+        const s = u.toStr();
+        try jw.write(@as([]const u8, &s));
+    }
+
     pub fn eql(a: Uuid, b: Uuid) bool {
         return std.mem.eql(u8, &a.bytes, &b.bytes);
     }

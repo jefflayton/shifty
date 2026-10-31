@@ -363,6 +363,65 @@ pub const Store = struct {
         return new;
     }
 
+    /// Records time after the fact, like a meeting: an entry with both ends,
+    /// which leaves the running entry alone. `at` is when it started.
+    pub fn addEntry(self: *Store, e: NewEntry, at: Stamp, out_ts: i64) Error!Uuid {
+        try self.begin();
+        errdefer self.rollback();
+        const project_id = try self.projectFor(e.project_id, e.workspace_id);
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO entries (id, project_id, workspace_id, in_ts, utc_offset_secs, tz, out_ts,
+            \\                     source, note, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?10, ?10)
+        , .{
+            blob(&new),   optBlob(&project_id), optBlob(&e.workspace_id),
+            at.ts,        at.utc_offset_secs,   at.tz,
+            out_ts,       @tagName(e.source),   e.note,
+            self.nowTs(),
+        });
+        try self.commit();
+        return new;
+    }
+
+    /// Everything about an entry a timesheet can change.
+    pub const EntryEdit = struct {
+        /// Implied by `workspace_id` when null.
+        project_id: ?Uuid,
+        workspace_id: ?Uuid,
+        in_ts: i64,
+        /// null keeps a running entry running; a running entry given an end
+        /// stops.
+        out_ts: ?i64,
+        note: ?[]const u8,
+    };
+
+    /// Replaces an entry's project, times, and note. `Conflict` if it would
+    /// end before it starts.
+    pub fn editEntry(self: *Store, entry_id: Uuid, edit: EntryEdit, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        const project_id = try self.projectFor(edit.project_id, edit.workspace_id);
+        try self.db.exec(
+            \\UPDATE entries SET project_id = ?, workspace_id = ?, in_ts = ?, out_ts = ?, note = ?,
+            \\                   updated_ts = ?
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{ optBlob(&project_id), optBlob(&edit.workspace_id), edit.in_ts, edit.out_ts, edit.note, now, blob(&entry_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.commit();
+    }
+
+    pub fn deleteEntry(self: *Store, entry_id: Uuid, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE entries SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&entry_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    fn nowTs(self: *Store) i64 {
+        return Io.Clock.real.now(self.io).toSeconds();
+    }
+
     /// Replaces an entry's note; null clears it.
     pub fn setEntryNote(self: *Store, entry_id: Uuid, note: ?[]const u8, now: i64) Error!void {
         try self.db.exec(

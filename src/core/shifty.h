@@ -95,4 +95,28 @@ ShiftyResult shifty_setting(ShiftyStore *store, const char *key, char *buf, size
 ShiftyResult shifty_set_setting(ShiftyStore *store, const char *key, const char *value,
                                 int64_t now);
 
+// ── Timesheet ───────────────────────────────────────────────────────────────
+
+// The entries overlapping [from, to) plus every active client, project, and
+// workspace, as UTF-8 JSON: {"entries":[...],"clients":[...],"projects":[...],
+// "workspaces":[...]}. Ids are UUID strings. Release with shifty_free.
+ShiftyResult shifty_timesheet_json(ShiftyStore *store, int64_t from, int64_t to, char **out,
+                                   size_t *len);
+void shifty_free(char *ptr, size_t len);
+
+// Time recorded after the fact. NULL ids leave it unassigned; a workspace
+// implies its project.
+ShiftyResult shifty_add_entry(ShiftyStore *store, const ShiftyId *project_id,
+                              const ShiftyId *workspace_id, int64_t in_ts, int64_t out_ts,
+                              const char *note, ShiftyId *out);
+// Replaces an entry's project, times, and note. `running` nonzero keeps a
+// running entry running.
+ShiftyResult shifty_edit_entry(ShiftyStore *store, ShiftyId entry_id, const ShiftyId *project_id,
+                               const ShiftyId *workspace_id, int64_t in_ts, int64_t out_ts,
+                               int32_t running, const char *note, int64_t now);
+ShiftyResult shifty_delete_entry(ShiftyStore *store, ShiftyId entry_id, int64_t now);
+ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
+                                   const ShiftyId *client_id, const char *color, int64_t now,
+                                   ShiftyId *out);
+
 #endif // SHIFTY_H

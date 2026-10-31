@@ -425,5 +425,81 @@ do {
   expectEqual(prefs.clockOutLink, URL(string: "https://tui.example"), "link set elsewhere")
 }
 
+// MARK: Timesheet
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let tui = try! ShiftStore(path: path)
+  // Wednesday Oct 28; gregorian weeks start Sunday Oct 25.
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  expectEqual(t.weekStart, at(0, day: -3), "week starts Sunday")
+  expectEqual(t.days.count, 7)
+
+  let web = try! store.createProject(name: "web", color: "#ff8800")
+  let entry = try! tui.addEntry(project: web, workspace: nil, start: at(9), end: at(10), note: "standup")
+  _ = try! tui.addEntry(project: nil, workspace: nil, start: at(13, day: 1), end: at(14, day: 1))
+  _ = try! tui.addEntry(project: nil, workspace: nil, start: at(9, day: 7), end: at(10, day: 7))
+  t.reload()
+  expectEqual(t.entries(on: at(0)).map(\.id), [entry], "Wednesday's entry")
+  expectEqual(t.entries(on: at(0, day: 1)).count, 1, "Thursday's entry")
+  expectEqual(t.total(now: at(23, day: 3)), 2 * 3600, "next week's entry isn't counted")
+  expectEqual(t.label(project: web, workspace: nil), "web")
+
+  // A new hour goes after the day's last entry; today's ends now.
+  expectEqual(t.slot(on: at(0), now: at(12)).0, at(10), "after the last entry")
+  expectEqual(t.slot(on: at(0, day: 2), now: at(12)).0, at(9, day: 2), "9 AM on an empty day")
+  let today = t.slot(on: at(0, day: 3), now: at(15, 8, day: 3))
+  expectEqual(today.1, at(15, 15, day: 3), "today's ends now, to the quarter hour")
+
+  var e = t.sheet.entries.first { $0.id == entry }!
+  t.setEnd(e, to: at(10, 30))
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.end, at(10, 30), "end saved")
+
+  // Moving the start past the end makes a 23h entry: kept as a draft.
+  e = t.sheet.entries.first { $0.id == entry }!
+  t.setStart(e, to: at(11))
+  check(t.drafts[entry] != nil, "invalid times stay a draft")
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.start, at(9), "store unchanged")
+  t.setEnd(e, to: at(11, 45))
+  check(t.drafts[entry] == nil, "fixed draft is saved")
+  e = t.sheet.entries.first { $0.id == entry }!
+  expectEqual(e.start, at(11))
+  expectEqual(e.end, at(11, 45))
+
+  t.setEnd(e, to: at(1))
+  expectEqual(
+    t.sheet.entries.first { $0.id == entry }!.end, at(1, day: 1),
+    "an end before the start is past midnight")
+
+  t.setNote(e, to: "  ")
+  check(t.sheet.entries.first { $0.id == entry }!.note == nil, "blank note clears it")
+
+  let api = t.createProject(named: "api")!
+  expectEqual(t.createProject(named: "API"), api, "same name, same project")
+  t.setProject(t.sheet.entries.first { $0.id == entry }!, project: api, workspace: nil)
+  expectEqual(t.sheet.entries.first { $0.id == entry }!.projectId, api)
+  expectEqual(t.totalsByProject(now: at(23, day: 3)).first?.project, api, "most time first")
+
+  let added = t.addEntry(on: at(0, day: 2), now: at(12))!
+  t.delete(t.sheet.entries.first { $0.id == added }!)
+  check(!t.sheet.entries.contains { $0.id == added }, "deleted")
+
+  let start = t.weekStart
+  t.nextWeek()
+  expectEqual(t.weekStart, at(0, day: 4))
+  expectEqual(t.sheet.entries.count, 1, "next week's entry")
+  t.previousWeek()
+  expectEqual(t.weekStart, start)
+
+  // A running entry from elsewhere: stop it from the timesheet.
+  t.showWeek(containing: Date())
+  _ = try! tui.startShift(at: Date().addingTimeInterval(-3600), lengthSeconds: 8 * 3600)
+  t.reload()
+  let running = t.addEntry(on: Date())
+  check(running != nil, "added today")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)
