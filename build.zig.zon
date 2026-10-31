@@ -14,8 +14,8 @@
             .hash = "vaxis-0.6.0-BWNV_DYXCgBP-oydkwMvwclWtjMrMAmSmg7cO6wtYFno",
         },
         .sqlite = .{
-            .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
-            .hash = "N-V-__8AAH-mpwB7g3MnqYU-ooUBF1t99RP27dZ9addtMVXD",
+            .url = "https://www.sqlite.org/2025/sqlite-autoconf-3490200.tar.gz",
+            .hash = "N-V-__8AAIbawQDLlz_9rdZn0C7U12tTzhN81W2VCDkSGgtg",
         },
     },
 }
