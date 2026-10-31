@@ -62,6 +62,11 @@ Set your shift length, clock-in time (**Now** sets it to the current time), and 
 when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
 rolls over to today without its breaks.
 
+Click **Clock In** to start tracking the shift for real. Once you're clocked in, from the menu
+bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
+up in the others within a couple of seconds. **Clock Out** ends it. Until you clock in, the
+popover is just a calculator. Alarm rules and the clock-out link are shared the same way.
+
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 

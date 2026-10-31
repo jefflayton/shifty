@@ -5,7 +5,7 @@ extern fn swiftuiInit() void;
 extern fn swiftuiRun() void;
 
 comptime {
-    _ = @import("core/ffi.zig");
+    _ = @import("ffi.zig");
 }
 
 pub fn main(init: std.process.Init) !void {

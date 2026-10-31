@@ -449,3 +449,51 @@ test "shifts - starting an entry ends the break" {
     try testing.expectEqual(1, brks.len);
     try testing.expectEqual(3 * h, brks[0].out_ts.?);
 }
+
+test "putBreak / putAlarmRule - caller's ids, insert then replace" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift_id = try s.startShift(8 * h, at(0));
+    const b: core.Uuid = .v7At(5, @splat(1));
+    try s.putBreak(b, shift_id, 2 * h, null, 0);
+    try testing.expect((try s.breaks(a, shift_id))[0].out_ts == null);
+    try testing.expectError(error.Conflict, s.putBreak(.v7At(6, @splat(1)), shift_id, 3 * h, null, 0));
+    try s.putBreak(b, shift_id, 2 * h, 3 * h, 1);
+    var brks = try s.breaks(a, shift_id);
+    try testing.expectEqual(1, brks.len);
+    try testing.expect(brks[0].id.eql(b));
+    try testing.expectEqual(3 * h, brks[0].out_ts.?);
+
+    // A deleted break put again comes back.
+    try s.deleteBreak(b, 2);
+    try s.putBreak(b, shift_id, 2 * h, 4 * h, 3);
+    brks = try s.breaks(a, shift_id);
+    try testing.expectEqual(4 * h, brks[0].out_ts.?);
+
+    const r: core.Uuid = .v7At(7, @splat(2));
+    try s.putAlarmRule(.{ .id = r, .trigger = .{ .before_clock_out = 10 }, .enabled = true }, 0);
+    try s.putAlarmRule(.{ .id = r, .trigger = .{ .at_time = 9 * h }, .enabled = false }, 1);
+    const rules = try s.alarmRules(a);
+    try testing.expectEqual(1, rules.len);
+    try testing.expectEqual(9 * h, rules[0].trigger.at_time);
+    try testing.expect(!rules[0].enabled);
+}
+
+test "dataVersion - moves when another connection commits" {
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+    var app: Store = try .open(io, tmp.path);
+    defer app.deinit();
+    var tui: Store = try .open(io, tmp.path);
+    defer tui.deinit();
+
+    const v0 = try app.dataVersion();
+    _ = try app.createClient("own write", 0);
+    try testing.expectEqual(v0, try app.dataVersion());
+    _ = try tui.createClient("their write", 0);
+    try testing.expect(try app.dataVersion() != v0);
+}

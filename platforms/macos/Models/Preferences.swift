@@ -45,20 +45,63 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   }
 
   /// Where you clock out, like a timeclock page. Alarms show a button that
-  /// opens it.
+  /// opens it. Shared through the store, so the TUI and CLI can use it too.
   var clockOutLink: URL? {
-    didSet { defaults.set(clockOutLink?.absoluteString, forKey: Self.clockOutLinkKey) }
+    didSet {
+      if let store {
+        do {
+          try store.setSetting(Self.clockOutLinkSetting, clockOutLink?.absoluteString)
+        } catch {
+          log("save clock-out link:", error)
+        }
+      } else {
+        defaults.set(clockOutLink?.absoluteString, forKey: Self.clockOutLinkKey)
+      }
+    }
   }
 
   @ObservationIgnored private let defaults: UserDefaults
+  @ObservationIgnored private let store: ShiftStore?
   static let menuBarDisplayKey = "menuBarDisplay"
   static let clockOutLinkKey = "clockOutLink"
+  static let clockOutLinkSetting = "clock_out_link"
+  static let migratedKey = "clockOutLink.migratedToStore"
 
-  init(defaults: UserDefaults = .standard) {
+  init(defaults: UserDefaults = .standard, store: ShiftStore? = nil) {
     self.defaults = defaults
+    self.store = store
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
-    clockOutLink = defaults.string(forKey: Self.clockOutLinkKey).flatMap(Self.link(from:))
+
+    let saved = defaults.string(forKey: Self.clockOutLinkKey)
+    guard let store else {
+      clockOutLink = saved.flatMap(Self.link(from:))
+      return
+    }
+    do {
+      // A link saved before the store moves into it once.
+      if !defaults.bool(forKey: Self.migratedKey) {
+        if let saved, try store.setting(Self.clockOutLinkSetting) == nil {
+          try store.setSetting(Self.clockOutLinkSetting, saved)
+        }
+        defaults.set(true, forKey: Self.migratedKey)
+      }
+      clockOutLink = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
+    } catch {
+      log("load clock-out link:", error)
+      clockOutLink = saved.flatMap(Self.link(from:))
+    }
+  }
+
+  /// Picks up a link changed from the TUI or CLI.
+  func pull() {
+    guard let store else { return }
+    do {
+      let link = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
+      if link != clockOutLink { clockOutLink = link }
+    } catch {
+      log("load clock-out link:", error)
+    }
   }
 
   /// The link typed into settings, or nil if it isn't one. A bare

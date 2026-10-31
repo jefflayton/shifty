@@ -24,7 +24,24 @@ struct PopoverView: View {
     VStack(alignment: .leading, spacing: 16) {
       ShiftSummaryView(model: model)
 
-      FormSection("Shift") {
+      FormSection(model.isClockedIn ? "Shift · clocked in" : "Shift") {
+        // Without the store there's nothing to clock in to.
+        if model.store != nil {
+          if model.isClockedIn {
+            Button("Clock Out") { model.clockOutNow() }
+              .buttonStyle(.borderless)
+              .font(.subheadline)
+              .foregroundStyle(.tint)
+              .help("End the shift now; the TUI and CLI see it too")
+          } else {
+            Button("Clock In") { model.clockInNow() }
+              .buttonStyle(.borderless)
+              .font(.subheadline)
+              .foregroundStyle(.tint)
+              .help("Start the shift now and track it, shared with the TUI and CLI")
+          }
+        }
+      } content: {
         FormRow("Clock in") {
           HStack(spacing: 6) {
             DatePicker(

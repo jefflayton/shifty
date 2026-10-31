@@ -286,5 +286,144 @@ do {
   check(Preferences(defaults: defaults).clockOutLink == nil, "cleared")
 }
 
+// MARK: Store
+
+/// A fresh database file; a second ShiftStore on the same path stands in
+/// for the TUI or CLI.
+func tempStorePath() -> String {
+  NSTemporaryDirectory() + "shifty-tests-\(UUID().uuidString).db"
+}
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let tui = try! ShiftStore(path: path)
+
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(8)
+  m.breaks = [brk(at(12), at(12, 30))]
+  m.push(now: at(9))
+  check(try! store.currentShift() == nil, "a draft isn't saved as a shift")
+
+  m.clockInNow(now: at(9))
+  check(m.isClockedIn, "clocked in")
+  var shift = try! tui.currentShift()!
+  expectEqual(shift.clockIn, at(9), "clock in is now")
+  expectEqual(shift.lengthSeconds, 8 * 3600)
+  expectEqual(try! tui.breaks(of: shift.id).map(\.start), [at(12)], "planned break goes along")
+
+  m.shiftLength = 7.5
+  m.push(now: at(9, 5))
+  expectEqual(try! tui.currentShift()!.lengthSeconds, 7 * 3600 + 1800, "length writes through")
+
+  m.startBreak(now: at(10))
+  m.push(now: at(10))
+  var stored = try! tui.breaks(of: shift.id)
+  let running = stored.first { $0.end == nil }
+  check(running != nil, "break in progress is shared")
+  m.endBreak(now: at(10, 15))
+  m.push(now: at(10, 15))
+  stored = try! tui.breaks(of: shift.id)
+  expectEqual(stored.count, 2, "ended break keeps its row")
+  expectEqual(stored.first { $0.id == running?.id }?.end, at(10, 15))
+
+  m.breaks.removeAll { $0.inDate == at(12) }
+  m.push(now: at(10, 20))
+  expectEqual(try! tui.breaks(of: shift.id).count, 1, "removed break is deleted")
+
+  // The TUI edits the shift and starts a break; the app pulls it in.
+  try! tui.editShift(shift.id, clockIn: at(8, 30), lengthSeconds: 8 * 3600, now: at(11))
+  try! tui.putBreak(.init(id: UUID(), start: at(11), end: nil), shift: shift.id, now: at(11))
+  m.pull()
+  expectEqual(m.clockInTime, at(8, 30), "clock in from elsewhere")
+  expectEqual(m.shiftLength, 8)
+  expectEqual(m.breakStart, at(11), "break from elsewhere")
+  m.push(now: at(11, 1))
+  expectEqual(try! tui.breaks(of: shift.id).count, 2, "pulling then saving changes nothing")
+
+  // Clocking out elsewhere leaves the shift on screen as a draft.
+  try! tui.endShift(now: at(12))
+  m.pull()
+  check(!m.isClockedIn, "clocked out elsewhere")
+  check(!m.isOnBreak, "the break ended with the shift")
+  expectEqual(m.clockInTime, at(8, 30), "draft keeps the shift's values")
+
+  m.clockInNow(now: at(13))
+  shift = try! tui.currentShift()!
+  m.clockOutNow(now: at(17))
+  check(try! tui.currentShift() == nil, "clocked out here")
+  check(!m.isClockedIn, "not clocked in")
+}
+
+do {
+  // Someone else clocked in first: clocking in here shows their shift.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  _ = try! ShiftStore(path: path).startShift(at: at(7), lengthSeconds: 6 * 3600)
+  let m = ShiftModel()
+  m.store = store
+  m.clockInNow(now: at(9))
+  check(m.isClockedIn, "on the other shift")
+  expectEqual(m.clockInTime, at(7))
+  expectEqual(m.shiftLength, 6)
+}
+
+do {
+  // Alarm rules move into the store once, then live there.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let suite = "shifty-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: suite)!
+  defer { defaults.removePersistentDomain(forName: suite) }
+
+  let old = ShiftModel()
+  old.alarms = [
+    AlarmRule(trigger: .beforeClockOut(minutes: 10)),
+    AlarmRule(trigger: .atTime(at(15, 30)), isEnabled: false),
+  ]
+  old.save(to: defaults)
+
+  let store = try! ShiftStore(path: path)
+  let m = ShiftModel.load(from: defaults, store: store)
+  expectEqual(try! store.alarmRules().count, 2, "migrated")
+  check(m.alarms.elementsEqual(old.alarms, by: AlarmRule.sameRule), "same rules after loading")
+  check(defaults.bool(forKey: ShiftModel.migratedKey), "migration recorded")
+
+  m.alarms.removeAll()
+  m.save(to: defaults)
+  let again = ShiftModel.load(from: defaults, store: store)
+  check(again.alarms.isEmpty, "deleted rules don't come back from the old copy")
+
+  let rule = AlarmRule(trigger: .atTime(at(16, 45)))
+  expectEqual(AlarmRule(storeRow: rule.storeRow, calendar: cal).fireDate(clockIn: at(9), clockOut: at(17), calendar: cal), at(16, 45), "set time round-trips by time of day")
+}
+
+do {
+  // The clock-out link moves into the store once.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let suite = "shifty-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: suite)!
+  defer { defaults.removePersistentDomain(forName: suite) }
+  Preferences(defaults: defaults).clockOutLink = URL(string: "https://example.com/clock")
+
+  let store = try! ShiftStore(path: path)
+  expectEqual(Preferences(defaults: defaults, store: store).clockOutLink,
+    URL(string: "https://example.com/clock"), "migrated")
+  expectEqual(try! store.setting(Preferences.clockOutLinkSetting), "https://example.com/clock")
+
+  Preferences(defaults: defaults, store: store).clockOutLink = nil
+  check(Preferences(defaults: defaults, store: store).clockOutLink == nil,
+    "cleared link doesn't come back from the old copy")
+
+  let prefs = Preferences(defaults: defaults, store: store)
+  try! ShiftStore(path: path).setSetting(Preferences.clockOutLinkSetting, "https://tui.example")
+  prefs.pull()
+  expectEqual(prefs.clockOutLink, URL(string: "https://tui.example"), "link set elsewhere")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

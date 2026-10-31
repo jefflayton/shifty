@@ -34,10 +34,20 @@ pub fn build(b: *Build) void {
     });
     store.addImport("core", core);
     store.addImport("c", sqlite_h.createModule());
-    store.addCSourceFile(.{
+    // An object Zig merges into whatever links the store, including the
+    // macOS app's Zig object. Not a static library, whose members Apple's ld
+    // rejects as misaligned.
+    const sqlite_obj = b.addObject(.{
+        .name = "sqlite3",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    store.addObject(sqlite_obj);
+    sqlite_obj.root_module.addCSourceFile(.{
         .file = sqlite.path("sqlite3.c"),
         .flags = &.{
             "-std=c99",
+            // swiftc links the app without Zig's UBSan runtime.
+            "-fno-sanitize=undefined",
             // Each connection is used from one thread at a time.
             "-DSQLITE_THREADSAFE=2",
             // "name" is an identifier, never a string literal.
@@ -60,7 +70,7 @@ pub fn build(b: *Build) void {
     const integrations_tests = b.addTest(.{ .root_module = integrations });
     test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
 
-    const macos_step = buildMacOS(b, optimize, core);
+    const macos_step = buildMacOS(b, optimize, .{ .core = core, .store = store });
     b.getInstallStep().dependOn(macos_step);
 
     const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
@@ -163,7 +173,7 @@ fn buildTui(
 fn buildMacOS(
     b: *Build,
     optimize: std.builtin.OptimizeMode,
-    core: *Build.Module,
+    deps: struct { core: *Build.Module, store: *Build.Module },
 ) *Build.Step {
     const macos_step = b.step("macos", "Build the macOS app");
 
@@ -178,7 +188,8 @@ fn buildMacOS(
         .target = target,
         .optimize = optimize,
     });
-    mod.addImport("core", core);
+    mod.addImport("core", deps.core);
+    mod.addImport("store", deps.store);
 
     const app = "zig-out/Shifty.app";
     const bundle_path = app ++ "/Contents";
@@ -327,14 +338,14 @@ fn buildMacOS(
     // Tests for the app's model layer, linked against the Zig core through
     // the same C ABI the app uses.
     const test_macos = b.step("test-macos", "Run macOS model tests");
-    const ffi_obj = b.addObject(.{
-        .name = "shifty-ffi",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/ffi.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const ffi_mod = b.createModule(.{
+        .root_source_file = b.path("src/ffi.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    ffi_mod.addImport("core", deps.core);
+    ffi_mod.addImport("store", deps.store);
+    const ffi_obj = b.addObject(.{ .name = "shifty-ffi", .root_module = ffi_mod });
     const swift_tests = b.addSystemCommand(&.{
         "swiftc",
         "-target",

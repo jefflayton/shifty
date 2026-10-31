@@ -14,6 +14,7 @@ const Stamp = core.local.Stamp;
 
 pub const sqlite = @import("sqlite.zig");
 pub const report = @import("report.zig");
+pub const ffi = @import("ffi.zig");
 const Blob = sqlite.Blob;
 
 pub const Error = error{
@@ -224,6 +225,12 @@ pub const Store = struct {
         defer stmt.deinit();
         try stmt.bindAll(values);
         return if (try stmt.step()) try optId(stmt, 0) else null;
+    }
+
+    /// Changes when another connection commits, not this one: poll it to
+    /// notice the TUI or CLI writing while an app keeps the store open.
+    pub fn dataVersion(self: *Store) Error!i64 {
+        return try self.oneInt("PRAGMA data_version", .{}) orelse 0;
     }
 
     pub fn replicaId(self: *Store) Error!Uuid {
@@ -630,6 +637,23 @@ pub const Store = struct {
         return new;
     }
 
+    /// Creates or replaces a break under an id the caller chose, so a UI's
+    /// own ids for breaks carry through. `out_ts` null is the running break,
+    /// which stops the running entry, as `startBreak` does.
+    pub fn putBreak(self: *Store, break_id: Uuid, shift_id: Uuid, in_ts: i64, out_ts: ?i64, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        if (out_ts == null) _ = try self.closeRunning(@max(in_ts, now));
+        try self.db.exec(
+            \\INSERT INTO breaks (id, shift_id, in_ts, out_ts, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?5, ?5)
+            \\ON CONFLICT (id) DO UPDATE SET
+            \\    shift_id = excluded.shift_id, in_ts = excluded.in_ts, out_ts = excluded.out_ts,
+            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
+        , .{ blob(&break_id), blob(&shift_id), in_ts, out_ts, now });
+        try self.commit();
+    }
+
     pub fn editBreak(self: *Store, break_id: Uuid, in_ts: i64, out_ts: i64, now: i64) Error!void {
         try self.db.exec(
             \\UPDATE breaks SET in_ts = ?, out_ts = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
@@ -680,6 +704,22 @@ pub const Store = struct {
             });
         }
         return out.items;
+    }
+
+    /// Creates or replaces an alarm rule under an id the caller chose.
+    pub fn putAlarmRule(self: *Store, rule: AlarmRule, now: i64) Error!void {
+        const minutes: ?i64, const tod: ?i64 = switch (rule.trigger) {
+            .before_clock_out => |m| .{ m, null },
+            .at_time => |t| .{ null, t },
+        };
+        try self.db.exec(
+            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, enabled, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?6, ?6)
+            \\ON CONFLICT (id) DO UPDATE SET
+            \\    kind = excluded.kind, minutes = excluded.minutes,
+            \\    time_of_day_secs = excluded.time_of_day_secs, enabled = excluded.enabled,
+            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
+        , .{ blob(&rule.id), @tagName(rule.trigger), minutes, tod, rule.enabled, now });
     }
 
     pub fn setAlarmEnabled(self: *Store, rule_id: Uuid, enabled: bool, now: i64) Error!void {
@@ -784,6 +824,7 @@ fn optId(stmt: sqlite.Stmt, col: c_int) Error!?Uuid {
 }
 
 test {
+    _ = @import("ffi.zig");
     _ = @import("report.zig");
     _ = @import("tests.zig");
 }
