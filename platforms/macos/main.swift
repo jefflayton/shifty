@@ -59,7 +59,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Development: open the main window without clicking.
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
-      DispatchQueue.main.async { self.mainWindow?.show() }
+      // Active first, like a click on the popover, then the window.
+      NSApp.activate()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow?.show() }
     }
 
     // Development: open the popover without clicking the status item.
@@ -131,9 +133,31 @@ func setupMenu() {
   let appMenu = NSMenu()
   appItem.submenu = appMenu
   appMenu.addItem(
+    withTitle: "About Shifty",
+    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+  appMenu.addItem(.separator())
+  appMenu.addItem(
+    withTitle: "Hide Shifty", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+  let hideOthers = appMenu.addItem(
+    withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)),
+    keyEquivalent: "h")
+  hideOthers.keyEquivalentModifierMask = [.command, .option]
+  appMenu.addItem(
+    withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)),
+    keyEquivalent: "")
+  appMenu.addItem(.separator())
+  appMenu.addItem(
     withTitle: "Quit Shifty",
     action: #selector(NSApplication.terminate(_:)),
     keyEquivalent: "q")
+
+  let fileItem = NSMenuItem()
+  fileItem.title = "File"
+  mainMenu.addItem(fileItem)
+  let fileMenu = NSMenu(title: "File")
+  fileItem.submenu = fileMenu
+  fileMenu.addItem(
+    withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
   let editItem = NSMenuItem()
   editItem.title = "Edit"
@@ -165,10 +189,14 @@ func setupMenu() {
   let windowMenu = NSMenu(title: "Window")
   windowItem.submenu = windowMenu
   windowMenu.addItem(
-    withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-  windowMenu.addItem(
     withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)),
     keyEquivalent: "m")
+  windowMenu.addItem(
+    withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+  windowMenu.addItem(.separator())
+  windowMenu.addItem(
+    withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)),
+    keyEquivalent: "")
   NSApp.windowsMenu = windowMenu
 
   NSApp.mainMenu = mainMenu

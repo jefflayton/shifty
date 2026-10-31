@@ -1,40 +1,50 @@
 import AppKit
 import SwiftUI
 
-/// The main window: a week of entries by day, editable in place, with
-/// totals by project and client.
+/// The main window: the week at a glance as a strip of day bars, then its
+/// entries by day, editable in place, with totals by project and client.
+/// A project's color carries through all three.
 struct TimesheetView: View {
   @Bindable var model: TimesheetModel
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 30)) { context in
       let now = context.date
-      VStack(spacing: 0) {
-        WeekHeader(model: model, now: now)
-          .padding(.horizontal, 20)
-          .padding(.vertical, 12)
-        Divider()
-        HStack(alignment: .top, spacing: 0) {
-          ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-              if let error = model.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                  .foregroundStyle(.red)
-                  .font(.callout)
-              }
-              ForEach(model.days, id: \.self) { day in
-                DaySection(model: model, day: day, now: now)
-              }
-            }
-            .padding(20)
+      ScrollViewReader { proxy in
+        VStack(spacing: 0) {
+          WeekHeader(model: model, now: now)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+          WeekStrip(model: model, now: now) { day in
+            withAnimation(.snappy) { proxy.scrollTo(day, anchor: .top) }
           }
+          .padding(.horizontal, 24)
+          .padding(.bottom, 16)
           Divider()
-          WeekTotals(model: model, now: now)
-            .frame(width: 220)
+          HStack(alignment: .top, spacing: 0) {
+            ScrollView {
+              VStack(alignment: .leading, spacing: 14) {
+                if let error = model.error {
+                  Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                }
+                ForEach(model.days, id: \.self) { day in
+                  DaySection(model: model, day: day, now: now)
+                    .id(day)
+                }
+              }
+              .padding(20)
+            }
+            Divider()
+            WeekTotals(model: model, now: now)
+              .frame(width: 240)
+          }
         }
       }
     }
-    .frame(minWidth: 760, minHeight: 480)
+    .frame(minWidth: 820, minHeight: 520)
   }
 }
 
@@ -43,23 +53,33 @@ struct WeekHeader: View {
   let now: Date
 
   var body: some View {
-    HStack(spacing: 10) {
-      Button(action: model.previousWeek) { Image(systemName: "chevron.left") }
-        .help("Previous week")
-      Button(action: model.nextWeek) { Image(systemName: "chevron.right") }
-        .help("Next week")
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text(Self.range(model.week))
         .font(.title2.weight(.semibold))
+      HStack(spacing: 2) {
+        Button(action: model.previousWeek) {
+          Image(systemName: "chevron.left").frame(width: 22, height: 22)
+        }
+        .help("Previous week")
+        Button(action: model.nextWeek) {
+          Image(systemName: "chevron.right").frame(width: 22, height: 22)
+        }
+        .help("Next week")
+      }
+      .buttonStyle(.borderless)
+      .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       if !model.week.contains(now) {
         Button("This Week") { model.showWeek(containing: now) }
+          .controlSize(.small)
+          .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       }
       Spacer()
-      Text(ShiftSummary.duration(model.total(now: now)))
-        .font(.title2.weight(.semibold))
+      Text(TimesheetFormat.duration(model.total(now: now)))
+        .font(.system(size: 28, weight: .semibold, design: .rounded))
         .monospacedDigit()
         .contentTransition(.numericText())
+        .help("Time this week")
     }
-    .buttonStyle(.borderless)
   }
 
   /// "Oct 26 – Nov 1".
@@ -70,6 +90,96 @@ struct WeekHeader: View {
   }
 }
 
+/// The week at a glance: a bar per day, stacked by project, on a shared
+/// scale with a faint line at a full day. Clicking a day jumps to it.
+struct WeekStrip: View {
+  let model: TimesheetModel
+  let now: Date
+  let select: (Date) -> Void
+
+  static let barHeight: CGFloat = 72
+  /// The scale tops out at a full day unless a day runs longer.
+  static let fullDay: TimeInterval = 8 * 60 * 60
+
+  var body: some View {
+    let scale = max(Self.fullDay, model.days.map { model.total(on: $0, now: now) }.max() ?? 0)
+    HStack(alignment: .bottom, spacing: 6) {
+      ForEach(model.days, id: \.self) { day in
+        DayColumn(model: model, day: day, now: now, scale: scale) { select(day) }
+      }
+    }
+    .background(alignment: .top) {
+      // The full-day line, at the height a full day reaches.
+      Rectangle()
+        .fill(.quaternary)
+        .frame(height: 1)
+        .padding(.top, 6 + Self.barHeight * (1 - Self.fullDay / scale))
+        .allowsHitTesting(false)
+    }
+  }
+}
+
+struct DayColumn: View {
+  let model: TimesheetModel
+  let day: Date
+  let now: Date
+  let scale: TimeInterval
+  let action: () -> Void
+
+  @State private var hovered = false
+
+  var body: some View {
+    let total = model.total(on: day, now: now)
+    let isToday = Calendar.current.isDate(day, inSameDayAs: now)
+    let isFuture = day > now
+
+    Button(action: action) {
+      VStack(spacing: 6) {
+        bar(total: total)
+          .frame(width: 36, height: WeekStrip.barHeight, alignment: .bottom)
+        VStack(spacing: 1) {
+          Text(day.formatted(.dateTime.weekday(.abbreviated)))
+            .font(.callout.weight(isToday ? .semibold : .regular))
+            .foregroundStyle(isToday ? Color.accentColor : isFuture ? .secondary : .primary)
+          Text(total > 0 ? TimesheetFormat.duration(total) : " ")
+            .font(.system(.caption, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(.top, 6)
+      .padding(.bottom, 4)
+      .frame(maxWidth: .infinity)
+      .contentShape(Rectangle())
+      .background(
+        hovered ? AnyShapeStyle(.quinary) : AnyShapeStyle(.clear),
+        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .onHover { hovered = $0 }
+    .help("Show \(day.formatted(.dateTime.weekday(.wide)))")
+    .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).month().day()))
+    .accessibilityValue(TimesheetFormat.duration(total))
+  }
+
+  /// Segments bottom up, biggest project first; an empty day is a stub.
+  @ViewBuilder private func bar(total: TimeInterval) -> some View {
+    if total <= 0 {
+      Capsule().fill(.quaternary).frame(height: 3)
+    } else {
+      let rows = model.totalsByProject(on: day, now: now)
+      VStack(spacing: 1.5) {
+        ForEach(Array(rows.reversed().enumerated()), id: \.offset) { _, row in
+          Rectangle()
+            .fill(ProjectColor.color(row.project, in: model))
+            .frame(height: max(2, WeekStrip.barHeight * row.seconds / scale))
+        }
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+  }
+}
+
 struct DaySection: View {
   let model: TimesheetModel
   let day: Date
@@ -77,50 +187,48 @@ struct DaySection: View {
 
   var body: some View {
     let entries = model.entries(on: day)
-    if entries.isEmpty {
-      // An empty day is one line, so a week with a few busy days stays short.
-      HStack {
-        Text(Self.title(day, now: now))
-          .font(.subheadline.weight(.semibold))
+    let (title, detail) = Self.title(day, now: now)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(entries.isEmpty ? .secondary : .primary)
+        Text(detail)
           .foregroundStyle(.secondary)
         Spacer()
-        Text("No time")
-          .font(.subheadline)
-          .foregroundStyle(.tertiary)
-        AddButton(help: "Add time on this day") { model.addEntry(on: day, now: now) }
-      }
-      .padding(.horizontal, 6)
-    } else {
-      section(entries)
-    }
-  }
-
-  private func section(_ entries: [ShiftStore.Entry]) -> some View {
-    FormSection(Self.title(day, now: now)) {
-      HStack(spacing: 8) {
-        let total = model.total(on: day, now: now)
-        if total > 0 {
-          Text(ShiftSummary.duration(total))
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+        if entries.isEmpty {
+          Text("No time")
+            .foregroundStyle(.tertiary)
+        } else {
+          Text(TimesheetFormat.duration(model.total(on: day, now: now)))
+            .font(.system(.body, design: .rounded).weight(.medium))
             .monospacedDigit()
         }
-        AddButton(help: "Add time on this day") { model.addEntry(on: day, now: now) }
+        AddButton(help: "Add an hour on this day") { model.addEntry(on: day, now: now) }
+          .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       }
-    } content: {
-      ForEach(entries) { entry in
-        EntryRow(model: model, entry: entry, now: now)
+      .padding(.horizontal, 6)
+
+      if !entries.isEmpty {
+        GroupedRows(minRowHeight: 38) {
+          ForEach(entries) { entry in
+            EntryRow(model: model, entry: entry, now: now)
+          }
+        }
       }
     }
   }
 
-  /// "Today", "Yesterday", or "Wednesday, Oct 28".
-  static func title(_ day: Date, now: Date, calendar: Calendar = .current) -> String {
-    if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+  /// ("Today", "Friday, Oct 30"), ("Yesterday", …), or ("Wednesday", "Oct 28").
+  static func title(_ day: Date, now: Date, calendar: Calendar = .current) -> (String, String) {
+    let full = day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    if calendar.isDate(day, inSameDayAs: now) { return ("Today", full) }
     if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: y) {
-      return "Yesterday"
+      return ("Yesterday", full)
     }
-    return day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    return (
+      day.formatted(.dateTime.weekday(.wide)), day.formatted(.dateTime.month(.abbreviated).day())
+    )
   }
 }
 
@@ -130,68 +238,87 @@ struct EntryRow: View {
   let now: Date
 
   @State private var note = ""
+  @State private var hovered = false
   @FocusState private var noteFocused: Bool
 
   var body: some View {
     let times = model.times(of: entry)
     let invalid = times.end.map { !TimesheetModel.isValid(start: times.start, end: $0) } ?? false
+    let running = entry.end == nil
 
     VStack(alignment: .leading, spacing: 4) {
-      HStack(spacing: 8) {
-        RemoveButton(help: "Delete this time") { model.delete(entry) }
+      HStack(spacing: 10) {
+        Capsule()
+          .fill(ProjectColor.color(entry.projectId, in: model))
+          .frame(width: 4, height: 22)
 
-        DatePicker(
-          "Start", selection: Binding(get: { times.start }, set: { model.setStart(entry, to: $0) }),
-          displayedComponents: .hourAndMinute
-        )
-        .datePickerStyle(.field)
-        .labelsHidden()
-        .fixedSize()
-        Text("to").foregroundStyle(.secondary)
-        if let end = times.end {
+        HStack(spacing: 4) {
           DatePicker(
-            "End", selection: Binding(get: { end }, set: { model.setEnd(entry, to: $0) }),
+            "Start", selection: Binding(get: { times.start }, set: { model.setStart(entry, to: $0) }),
             displayedComponents: .hourAndMinute
           )
           .datePickerStyle(.field)
           .labelsHidden()
           .fixedSize()
-        } else {
-          HStack(spacing: 4) {
-            Circle().fill(.green).frame(width: 7, height: 7)
-            Text("now")
+          Text("–").foregroundStyle(.secondary)
+          if let end = times.end {
+            DatePicker(
+              "End", selection: Binding(get: { end }, set: { model.setEnd(entry, to: $0) }),
+              displayedComponents: .hourAndMinute
+            )
+            .datePickerStyle(.field)
+            .labelsHidden()
+            .fixedSize()
+          } else {
+            RunningLabel()
           }
-          .help("Running")
         }
+        // A running entry's "now" is narrower than a time; keep the columns.
+        .frame(minWidth: 146, alignment: .leading)
 
-        Text(ShiftSummary.duration((times.end ?? now).timeIntervalSince(times.start)))
-          .foregroundStyle(.secondary)
+        Text(TimesheetFormat.duration((times.end ?? now).timeIntervalSince(times.start)))
+          .font(.system(.body, design: .rounded))
           .monospacedDigit()
-          .frame(width: 80, alignment: .trailing)
+          .foregroundStyle(invalid ? .red : running ? .primary : .secondary)
+          .frame(width: 62, alignment: .trailing)
 
         ProjectPicker(model: model, entry: entry)
           .frame(width: 170, alignment: .leading)
 
-        TextField("Note", text: $note)
+        TextField("Add a note", text: $note)
           .textFieldStyle(.plain)
           .focused($noteFocused)
           .onSubmit { model.setNote(entry, to: note) }
 
-        if entry.end == nil {
-          Button("Stop") { model.stop(entry) }
-            .controlSize(.small)
-            .help("Stop this timer now")
+        if running {
+          Button { model.stop(entry) } label: {
+            Label("Stop", systemImage: "stop.fill")
+          }
+          .controlSize(.small)
+          .help("Stop this timer now")
         }
+
+        Button { model.delete(entry) } label: {
+          Image(systemName: "trash")
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Delete this time")
+        .opacity(hovered ? 1 : 0)
+        .accessibilityHidden(!hovered)
       }
       if invalid {
-        Text("An entry must end after it starts and last at most 16 hours.")
+        Text("Times must be in order and at most 16 hours apart. This isn't saved yet.")
           .font(.caption)
           .foregroundStyle(.red)
+          .padding(.leading, 14)
       }
     }
     .padding(.vertical, invalid ? 6 : 0)
+    .contentShape(Rectangle())
+    .onHover { hovered = $0 }
     .contextMenu {
-      if entry.end == nil { Button("Stop") { model.stop(entry) } }
+      if running { Button("Stop") { model.stop(entry) } }
       Button("Delete", role: .destructive) { model.delete(entry) }
     }
     .onAppear { note = entry.note ?? "" }
@@ -204,22 +331,33 @@ struct EntryRow: View {
   }
 }
 
+/// "now", with a dot that breathes while the timer runs.
+struct RunningLabel: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var dim = false
+
+  var body: some View {
+    HStack(spacing: 5) {
+      Circle()
+        .fill(.green)
+        .frame(width: 7, height: 7)
+        .opacity(dim ? 0.35 : 1)
+      Text("now")
+    }
+    .help("Running")
+    .onAppear {
+      guard !reduceMotion else { return }
+      withAnimation(.easeInOut(duration: 1.2).repeatForever()) { dim = true }
+    }
+  }
+}
+
 /// Which project, and optionally workspace, an entry is for.
 struct ProjectPicker: View {
   let model: TimesheetModel
   let entry: ShiftStore.Entry
 
   var body: some View {
-    HStack(spacing: 6) {
-      // Outside the menu: a menu's label drops shapes and colors.
-      Circle()
-        .fill(ProjectColor.color(entry.projectId.flatMap { model.project($0)?.color }))
-        .frame(width: 8, height: 8)
-      menu
-    }
-  }
-
-  private var menu: some View {
     Menu {
       Button("No Project") { model.setProject(entry, project: nil, workspace: nil) }
       if !model.sheet.projects.isEmpty { Divider() }
@@ -249,78 +387,151 @@ struct ProjectPicker: View {
     } label: {
       Text(model.label(project: entry.projectId, workspace: entry.workspaceId) ?? "No project")
         .lineLimit(1)
+        .foregroundStyle(entry.projectId == nil ? .secondary : .primary)
     }
     .menuStyle(.borderlessButton)
     .fixedSize(horizontal: false, vertical: true)
   }
 }
 
+/// The sidebar: where the week's time went.
 struct WeekTotals: View {
   let model: TimesheetModel
   let now: Date
 
   var body: some View {
+    let total = model.total(now: now)
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: 22) {
         let byProject = model.totalsByProject(now: now)
-        FormSection("By project") {
+        TotalsList(title: "Projects") {
           if byProject.isEmpty {
-            Text("No time this week").foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Time you add shows up here by project.")
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
           }
           ForEach(byProject, id: \.project) { row in
             TotalRow(
-              color: ProjectColor.color(row.project.flatMap { model.project($0)?.color }),
+              color: ProjectColor.color(row.project, in: model),
               name: model.label(project: row.project, workspace: nil) ?? "No project",
-              secondary: row.project == nil, seconds: row.seconds)
+              secondary: row.project == nil, seconds: row.seconds, of: total)
           }
         }
 
         let byClient = model.totalsByClient(now: now)
         if byClient.contains(where: { $0.client != nil }) {
-          FormSection("By client") {
+          TotalsList(title: "Clients") {
             ForEach(byClient, id: \.client) { row in
               TotalRow(
-                color: nil, name: row.client.flatMap { model.client($0)?.name } ?? "No client",
-                secondary: row.client == nil, seconds: row.seconds)
+                color: .secondary, name: row.client.flatMap { model.client($0)?.name } ?? "No client",
+                secondary: row.client == nil, seconds: row.seconds, of: total)
             }
           }
         }
       }
-      .padding(16)
+      .padding(.horizontal, 18)
+      .padding(.vertical, 20)
     }
   }
 }
 
+struct TotalsList<Content: View>: View {
+  let title: String
+  @ViewBuilder var content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(title)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.secondary)
+      content
+    }
+  }
+}
+
+/// A name and its time, over a bar showing its share of the week.
 struct TotalRow: View {
-  let color: Color?
+  let color: Color
   let name: String
   let secondary: Bool
   let seconds: TimeInterval
+  let total: TimeInterval
+
+  init(color: Color, name: String, secondary: Bool, seconds: TimeInterval, of total: TimeInterval) {
+    self.color = color
+    self.name = name
+    self.secondary = secondary
+    self.seconds = seconds
+    self.total = total
+  }
 
   var body: some View {
-    HStack(spacing: 6) {
-      if let color {
-        Circle().fill(color).frame(width: 8, height: 8)
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(alignment: .firstTextBaseline) {
+        Text(name)
+          .foregroundStyle(secondary ? .secondary : .primary)
+          .lineLimit(1)
+        Spacer()
+        Text(TimesheetFormat.duration(seconds))
+          .font(.system(.body, design: .rounded))
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .fixedSize()
       }
-      Text(name)
-        .foregroundStyle(secondary ? .secondary : .primary)
-        .lineLimit(1)
-      Spacer()
-      Text(ShiftSummary.duration(seconds))
-        .foregroundStyle(.secondary)
-        .monospacedDigit()
-        .fixedSize()
+      GeometryReader { geo in
+        ZStack(alignment: .leading) {
+          Capsule().fill(.quinary)
+          Capsule()
+            .fill(color)
+            .frame(width: max(4, geo.size.width * CGFloat(total > 0 ? seconds / total : 0)))
+        }
+      }
+      .frame(height: 4)
+    }
+    .accessibilityElement(children: .combine)
+  }
+}
+
+enum TimesheetFormat {
+  /// "7h 30m", "45m", "8h": short enough for the strip and rows.
+  static func duration(_ seconds: TimeInterval) -> String {
+    let minutes = max(0, Int((seconds / 60).rounded()))
+    let (h, m) = (minutes / 60, minutes % 60)
+    switch (h, m) {
+    case (0, _): return "\(m)m"
+    case (_, 0): return "\(h)h"
+    default: return "\(h)h \(m)m"
     }
   }
 }
 
 enum ProjectColor {
-  /// A project's `#rrggbb` color, or a neutral one.
-  static func color(_ hex: String?) -> Color {
-    guard let hex, hex.count == 7, hex.hasPrefix("#"), let v = UInt32(hex.dropFirst(), radix: 16)
-    else { return Color.secondary.opacity(0.5) }
-    return Color(
+  /// For projects without a color of their own, picked by age so a
+  /// project keeps its color as others are added. Mid tones that hold up
+  /// in light and dark.
+  static let palette: [Color] = ([
+    0x4A90E2, 0xF08A3C, 0x34A770, 0x9B6BE0, 0xE0598B, 0x22A6A6, 0xD9A520, 0x7D8BA6,
+  ] as [UInt32]).map(rgb)
+
+  /// Unassigned time.
+  static let none = Color.secondary.opacity(0.45)
+
+  static func color(_ project: UUID?, in model: TimesheetModel) -> Color {
+    guard let project else { return none }
+    if let own = model.project(project)?.color.flatMap(parse) { return own }
+    guard let rank = model.rank(of: project) else { return none }
+    return palette[rank % palette.count]
+  }
+
+  /// A `#rrggbb` color.
+  static func parse(_ hex: String) -> Color? {
+    guard hex.count == 7, hex.hasPrefix("#"), let v = UInt32(hex.dropFirst(), radix: 16)
+    else { return nil }
+    return rgb(v)
+  }
+
+  private static func rgb(_ v: UInt32) -> Color {
+    Color(
       red: Double((v >> 16) & 0xff) / 255, green: Double((v >> 8) & 0xff) / 255,
       blue: Double(v & 0xff) / 255)
   }

@@ -95,7 +95,11 @@ import Observation
   func totalsByProject(now: Date) -> [(project: UUID?, seconds: TimeInterval)] {
     var totals: [UUID?: TimeInterval] = [:]
     for e in sheet.entries { totals[e.projectId, default: 0] += seconds(of: e, now: now) }
-    return totals.map { ($0.key, $0.value) }.sorted { $0.seconds > $1.seconds }
+    // Ties by id, so equal rows don't swap places between redraws.
+    return totals.map { ($0.key, $0.value) }.sorted {
+      $0.seconds != $1.seconds
+        ? $0.seconds > $1.seconds : ($0.project?.uuidString ?? "~") < ($1.project?.uuidString ?? "~")
+    }
   }
 
   /// Time per client this week, most first. nil is projects with no client
@@ -105,7 +109,27 @@ import Observation
     for e in sheet.entries {
       totals[e.projectId.flatMap { project($0)?.clientId }, default: 0] += seconds(of: e, now: now)
     }
-    return totals.map { ($0.key, $0.value) }.sorted { $0.seconds > $1.seconds }
+    return totals.map { ($0.key, $0.value) }.sorted {
+      $0.seconds != $1.seconds
+        ? $0.seconds > $1.seconds : ($0.client?.uuidString ?? "~") < ($1.client?.uuidString ?? "~")
+    }
+  }
+
+  /// Time per project on `day`, in the order of `totalsByProject`, so a
+  /// project stacks in the same place every day.
+  func totalsByProject(on day: Date, now: Date) -> [(project: UUID?, seconds: TimeInterval)] {
+    var totals: [UUID?: TimeInterval] = [:]
+    for e in entries(on: day) { totals[e.projectId, default: 0] += seconds(of: e, now: now) }
+    return totalsByProject(now: now).compactMap { row in
+      totals[row.project].map { (row.project, $0) }
+    }
+  }
+
+  /// A project's place among all projects, oldest first, for picking it a
+  /// color that stays put as projects are added. Ids are UUIDv7, so they
+  /// sort by creation.
+  func rank(of project: UUID) -> Int? {
+    sheet.projects.map(\.id).sorted { $0.uuidString < $1.uuidString }.firstIndex(of: project)
   }
 
   func project(_ id: UUID) -> ShiftStore.Project? { sheet.projects.first { $0.id == id } }

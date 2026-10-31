@@ -19,9 +19,33 @@ final class MainWindow: NSObject, NSWindowDelegate {
     let window = self.window ?? makeWindow()
     self.window = window
     model.reload()
+    let wasAccessory = NSApp.activationPolicy() != .regular
     NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
+    NSApp.activate()
+    if wasAccessory { Self.claimMenuBar(window) }
+  }
+
+  /// An app that turns regular while it's already active (as it is after a
+  /// click in the popover) gets a menu bar that ignores clicks until it's
+  /// activated again. So hand activation to the Dock and take it back.
+  private static func claimMenuBar(_ window: NSWindow) {
+    guard
+      let dock = NSRunningApplication.runningApplications(
+        withBundleIdentifier: "com.apple.dock"
+      ).first
+    else { return }
+    NSApp.yieldActivation(to: dock)
+    dock.activate()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+      NSApp.activate(ignoringOtherApps: true)
+      window.makeKeyAndOrderFront(nil)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // macOS can keep another app active instead. Keep the window on
+        // top anyway: clicking it activates Shifty, menu bar and all.
+        if !NSApp.isActive { window.orderFrontRegardless() }
+      }
+    }
   }
 
   private func makeWindow() -> NSWindow {
