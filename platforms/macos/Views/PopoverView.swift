@@ -9,17 +9,20 @@ struct PopoverView: View {
   @Bindable var model: ShiftModel
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
+  /// The running timer; nil without the store.
+  let tracking: TrackingModel?
   /// Opens the main window; nil without the store.
   let openTimesheet: (() -> Void)?
 
   init(
     updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
-    openTimesheet: (() -> Void)? = nil
+    tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil
   ) {
     self.updater = updater
     self.model = model
     self.preferences = preferences
     self.loginItem = loginItem
+    self.tracking = tracking
     self.openTimesheet = openTimesheet
 
     // Create our view model for our CheckForUpdatesView
@@ -71,6 +74,10 @@ struct PopoverView: View {
               .labelsHidden()
           }
         }
+      }
+
+      if let tracking {
+        TrackingSection(tracking: tracking)
       }
 
       FormSection("Breaks") {
@@ -127,9 +134,14 @@ struct PopoverView: View {
     }
     .padding(14)
     .frame(width: 320)
+    // A break or clock out stops the timer. The shift saves to the store in
+    // a task queued when it changed, so read after that.
+    .onChange(of: model.breakStart) { Task { @MainActor in tracking?.reload() } }
+    .onChange(of: model.isClockedIn) { Task { @MainActor in tracking?.reload() } }
     .onAppear {
       // Nothing observes the clock, so check for a finished shift on open.
       model.rollOverIfStale()
+      tracking?.reload()
       // Login items can also be changed in System Settings.
       loginItem.refresh()
     }

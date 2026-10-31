@@ -119,6 +119,14 @@ ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
                                    const ShiftyId *client_id, const char *color, int64_t now,
                                    ShiftyId *out);
 
+// Starts tracking now: stops the running entry and ends a break in progress.
+// NULL ids leave it unassigned; a workspace implies its project.
+ShiftyResult shifty_start_entry(ShiftyStore *store, const ShiftyId *project_id,
+                                const ShiftyId *workspace_id, const char *note, int64_t now,
+                                ShiftyId *out);
+// Stops the running entry; SHIFTY_NONE if nothing was running.
+ShiftyResult shifty_stop_entry(ShiftyStore *store, int64_t now);
+
 // ── Projects ────────────────────────────────────────────────────────────────
 
 // Every active project, client, and workspace, plus each project's usage, as

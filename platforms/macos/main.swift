@@ -14,6 +14,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
   lazy var mainWindow = store.map { MainWindow(store: $0) }
+  lazy var tracking = store.map { store in
+    let tracking = TrackingModel(store: store)
+    // Starting a timer ends a break in progress.
+    tracking.didChange = { [weak self] in
+      self?.model.pull()
+      if self?.mainWindow?.isVisible == true { self?.mainWindow?.reload() }
+    }
+    return tracking
+  }
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
   private var storeVersion: Int64?
@@ -48,7 +57,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let host = NSHostingController(
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
-        loginItem: loginItem,
+        loginItem: loginItem, tracking: tracking,
         openTimesheet: mainWindow == nil ? nil : { [weak self] in self?.showMainWindow() }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
@@ -98,6 +107,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     storeVersion = version
     model.pull()
     preferences.pull()
+    tracking?.reload()
     if mainWindow?.isVisible == true { mainWindow?.reload() }
   }
 

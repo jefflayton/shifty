@@ -200,6 +200,28 @@ final class ShiftStore {
     }
   }
 
+  /// Starts tracking now, stopping the running entry and ending a break in
+  /// progress. A workspace implies its project.
+  @discardableResult
+  func startEntry(project: UUID?, workspace: UUID?, note: String? = nil, now: Date = Date())
+    throws -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_start_entry(handle, p, w, note, ts(now), &out))
+    }
+    return UUID(out)
+  }
+
+  /// Stops the running entry. Returns whether one was running.
+  @discardableResult
+  func stopEntry(now: Date = Date()) throws -> Bool {
+    let result = shifty_stop_entry(handle, ts(now))
+    if result == SHIFTY_NONE { return false }
+    try check(result)
+    return true
+  }
+
   func deleteEntry(_ id: UUID, now: Date = Date()) throws {
     try check(shifty_delete_entry(handle, ShiftyId(id), ts(now)))
   }

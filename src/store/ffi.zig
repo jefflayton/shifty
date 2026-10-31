@@ -316,6 +316,25 @@ export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*co
     return .ok;
 }
 
+/// Starts tracking now, stopping the running entry and ending a break in
+/// progress. Null ids leave it unassigned (a workspace implies its project).
+export fn shifty_start_entry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, note: ?[*:0]const u8, now: i64, out: *Id) Result {
+    var tz_buf: local.TzBuf = undefined;
+    const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
+    const new = h.store.startEntry(
+        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .menubar, .note = optStr(note) },
+        .{ .ts = now, .utc_offset_secs = local.utcOffset(now), .tz = tz },
+    ) catch |e| return result(e);
+    out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// Stops the running entry; `none` if nothing was running.
+export fn shifty_stop_entry(h: *Handle, now: i64) Result {
+    const stopped = h.store.stopEntry(now) catch |e| return result(e);
+    return if (stopped == null) .none else .ok;
+}
+
 export fn shifty_edit_project(h: *Handle, project_id: Id, name: [*:0]const u8, client_id: ?*const Id, color: ?[*:0]const u8, now: i64) Result {
     h.store.editProject(id(project_id), .{ .name = std.mem.span(name), .client_id = optId(client_id), .color = optStr(color) }, now) catch |e| return result(e);
     return .ok;
@@ -472,4 +491,28 @@ test "C API - manage projects" {
     try testing.expectEqual(Result.ok, shifty_delete_project(s, web, 2));
     try testing.expectEqual(Result.not_found, shifty_delete_project(s, web, 3));
     try testing.expectEqual(Result.not_found, shifty_edit_project(s, web, "x", null, null, 3));
+}
+
+test "C API - start and stop tracking" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var web: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    var first: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_entry(s, null, null, null, 1000, &first));
+    var second: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_entry(s, &web, null, "api", 2000, &second));
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const running = (try s.store.runningEntry(arena.allocator())).?;
+    try testing.expect(running.id.eql(.{ .bytes = second.bytes }));
+    try testing.expect(running.project_id.?.eql(.{ .bytes = web.bytes }));
+    try testing.expectEqual(.menubar, running.source);
+
+    try testing.expectEqual(Result.ok, shifty_stop_entry(s, 3000));
+    try testing.expectEqual(Result.none, shifty_stop_entry(s, 3001));
 }

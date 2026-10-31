@@ -68,6 +68,11 @@ bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any
 up in the others within a couple of seconds. **Clock Out** ends it. Until you clock in, the
 popover is just a calculator. Alarm rules and the clock-out link are shared the same way.
 
+Under **Tracking**, pick the project you're working on to start a timer. Picking one while the
+timer has no project assigns it, time so far included; picking a different project stops the
+timer and starts a new one, so earlier time stays with its project. **Stop** stops it. It's the
+same timer as `shifty start` and the TUI's, and a break or clock out stops it.
+
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
