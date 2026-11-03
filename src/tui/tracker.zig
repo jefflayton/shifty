@@ -241,11 +241,21 @@ pub const Tracker = struct {
         var tz_buf: local.TzBuf = undefined;
         const at = self.stamp(&tz_buf);
         const target = self.defaultShiftSecs();
-        _ = self.db.startShift(target, at) catch |e| switch (e) {
+        const shift_id = self.db.startShift(target, at) catch |e| switch (e) {
             error.Conflict => return self.flash(false, "Already on shift.", .{}),
             else => return self.flash(true, "Couldn't clock in: {t}", .{e}),
         };
-        self.flash(false, "Clocked in. Clock out at {f}.", .{fmt.clock(at.ts + target, at.utc_offset_secs)});
+        // The day's break presets are on the shift, pushing clock out later.
+        var tmp: std.heap.ArenaAllocator = .init(self.gpa);
+        defer tmp.deinit();
+        const brks = self.db.breaks(tmp.allocator(), shift_id) catch &.{};
+        const shift: store.Shift = .{ .id = shift_id, .in_ts = at.ts, .utc_offset_secs = at.utc_offset_secs, .tz = at.tz, .target_secs = target, .out_ts = null };
+        const out = store.clockOut(shift, brks, at.ts);
+        if (brks.len == 0) {
+            self.flash(false, "Clocked in. Clock out at {f}.", .{fmt.clock(out, at.utc_offset_secs)});
+        } else {
+            self.flash(false, "Clocked in with {d} planned break{s}. Clock out at {f}.", .{ brks.len, if (brks.len == 1) "" else "s", fmt.clock(out, at.utc_offset_secs) });
+        }
         self.refresh();
     }
 

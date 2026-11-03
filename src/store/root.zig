@@ -94,20 +94,54 @@ pub const AlarmRule = struct {
         before_clock_out: i64,
         /// Rings at this local time of day, in seconds since midnight.
         at_time: i64,
-        /// Rings when the lunch window opens, until you've had lunch.
-        lunch_opens,
-        /// Rings this many minutes before the lunch window closes, until
-        /// you've had lunch.
-        before_lunch_closes: i64,
+        /// Rings when a window preset (like lunch) opens, until you've taken
+        /// that break.
+        window_opens: Uuid,
+        /// Rings this many minutes before a window preset closes, until
+        /// you've taken that break.
+        before_window_closes: struct { minutes: i64, preset_id: Uuid },
+        /// Rings this many minutes before each break on the shift starts.
+        before_break: i64,
+        /// Rings this many minutes before each break on the shift ends; 0
+        /// rings when it's over.
+        before_break_ends: i64,
     };
 
-    /// The row's `minutes` and `time_of_day_secs`.
-    fn columns(trigger: Trigger) struct { ?i64, ?i64 } {
-        return switch (trigger) {
-            .before_clock_out, .before_lunch_closes => |m| .{ m, null },
-            .at_time => |t| .{ null, t },
-            .lunch_opens => .{ null, null },
+    /// The row's `minutes`, `time_of_day_secs`, and `preset_id`.
+    fn columns(trigger: *const Trigger) struct { ?i64, ?i64, ?Blob } {
+        return switch (trigger.*) {
+            .before_clock_out, .before_break, .before_break_ends => |m| .{ m, null, null },
+            .at_time => |t| .{ null, t, null },
+            .window_opens => |*p| .{ null, null, blob(p) },
+            .before_window_closes => |*w| .{ w.minutes, null, blob(&w.preset_id) },
         };
+    }
+};
+
+/// A break you plan once, for every shift it applies to.
+pub const BreakPreset = struct {
+    id: Uuid,
+    name: []const u8,
+    /// ISO weekdays it applies on: bit 0 is Monday, bit 6 Sunday.
+    weekdays: u7 = all_days,
+    enabled: bool = true,
+    rule: Rule,
+
+    pub const all_days: u7 = 0b1111111;
+
+    pub const Rule = union(enum) {
+        /// A break at set local times, seconds since midnight, put on the
+        /// shift when you clock in.
+        scheduled: struct { start_secs: i64, end_secs: i64 },
+        /// A break of at least `minimum_secs` that has to start between
+        /// `earliest_secs` and `latest_secs` of time worked, like lunch. It
+        /// adds no break; alarms and the timesheet check against it.
+        window: struct { earliest_secs: i64, latest_secs: i64, minimum_secs: i64 },
+    };
+
+    /// Whether it applies on an ISO weekday (1 is Monday, 7 Sunday).
+    pub fn appliesOn(p: BreakPreset, iso_weekday: u3) bool {
+        return p.weekdays & (@as(u7, 1) << (iso_weekday - 1)) != 0;
     }
 };
 
@@ -155,6 +189,7 @@ pub const NewEntry = struct {
 const migrations = [_][:0]const u8{
     @embedFile("migrations/0001_init.sql"),
     @embedFile("migrations/0002_lunch_alarms.sql"),
+    @embedFile("migrations/0003_break_presets.sql"),
 };
 
 pub const Store = struct {
@@ -586,14 +621,73 @@ pub const Store = struct {
 
     // ── Shifts and breaks ─────────────────────────────────────────────────
 
-    /// Clocks in. Fails with `Conflict` if a shift is already open.
+    /// Clocks in, with the day's scheduled break presets on the shift.
+    /// Fails with `Conflict` if a shift is already open.
     pub fn startShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
+        try self.begin();
+        errdefer self.rollback();
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer arena.deinit();
+        const new = try self.insertShift(target_secs, at);
+        for (try self.scheduledBreaks(arena.allocator(), at, target_secs)) |b| {
+            _ = try self.addBreak(new, b.in_ts, b.out_ts, at.ts);
+        }
+        try self.commit();
+        return new;
+    }
+
+    /// Clocks in with no breaks, for a frontend that brings its own (the
+    /// menu bar's draft already has the day's presets). `Conflict` if a
+    /// shift is already open.
+    pub fn startEmptyShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
+        return self.insertShift(target_secs, at);
+    }
+
+    fn insertShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
         const new: Uuid = .v7(self.io);
         try self.db.exec(
             \\INSERT INTO shifts (id, in_ts, utc_offset_secs, tz, target_secs, created_ts, updated_ts)
             \\VALUES (?, ?, ?, ?, ?, ?, ?)
         , .{ blob(&new), at.ts, at.utc_offset_secs, at.tz, target_secs, at.ts, at.ts });
         return new;
+    }
+
+    /// The breaks the enabled scheduled presets put on a `target_secs` shift
+    /// clocking in `at`: those for its local weekday, cut to start no
+    /// earlier than clock in, and none starting after the clock out they
+    /// push to. Oldest first. Allocated in `arena`.
+    pub fn scheduledBreaks(self: *Store, arena: Allocator, at: Stamp, target_secs: i64) Error![]core.shift.Interval {
+        const local_ts = at.ts + at.utc_offset_secs;
+        const midnight = at.ts - @mod(local_ts, std.time.s_per_day);
+        // 1 January 1970 was a Thursday, ISO weekday 4.
+        const weekday: u3 = @intCast(@mod(@divFloor(local_ts, std.time.s_per_day) + 3, 7) + 1);
+
+        var out: std.ArrayList(core.shift.Interval) = .empty;
+        for (try self.breakPresets(arena)) |p| {
+            if (!p.enabled or !p.appliesOn(weekday)) continue;
+            const times = switch (p.rule) {
+                .scheduled => |t| t,
+                .window => continue,
+            };
+            const end = midnight + times.end_secs;
+            if (end <= at.ts) continue;
+            try out.append(arena, .{ .in_ts = @max(at.ts, midnight + times.start_secs), .out_ts = end });
+        }
+        std.mem.sort(core.shift.Interval, out.items, {}, struct {
+            fn lessThan(_: void, l: core.shift.Interval, r: core.shift.Interval) bool {
+                return l.in_ts < r.in_ts;
+            }
+        }.lessThan);
+
+        // Breaks after clock out don't count, so they'd only be clutter.
+        const out_ts = core.shift.clockIn(target_secs, at.ts, out.items);
+        var kept: usize = 0;
+        for (out.items) |b| {
+            if (b.in_ts >= out_ts) continue;
+            out.items[kept] = b;
+            kept += 1;
+        }
+        return out.items[0..kept];
     }
 
     /// The open shift, if any. Allocated in `arena`.
@@ -846,18 +940,19 @@ pub const Store = struct {
 
     pub fn addAlarmRule(self: *Store, trigger: AlarmRule.Trigger, now: i64) Error!Uuid {
         const new: Uuid = .v7(self.io);
-        const minutes: ?i64, const tod: ?i64 = AlarmRule.columns(trigger);
+        const minutes: ?i64, const tod: ?i64, const preset: ?Blob = AlarmRule.columns(&trigger);
         try self.db.exec(
-            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, created_ts, updated_ts)
-            \\VALUES (?, ?, ?, ?, ?5, ?5)
-        , .{ blob(&new), @tagName(trigger), minutes, tod, now });
+            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, preset_id, created_ts,
+            \\                         updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?6, ?6)
+        , .{ blob(&new), @tagName(trigger), minutes, tod, preset, now });
         return new;
     }
 
     /// All alarm rules, enabled or not, oldest first. Allocated in `arena`.
     pub fn alarmRules(self: *Store, arena: Allocator) Error![]AlarmRule {
         var stmt = try self.db.prepare(
-            \\SELECT id, kind, minutes, time_of_day_secs, enabled FROM alarm_rules
+            \\SELECT id, kind, minutes, time_of_day_secs, enabled, preset_id FROM alarm_rules
             \\WHERE deleted_ts IS NULL ORDER BY created_ts, rowid
         );
         defer stmt.deinit();
@@ -870,8 +965,13 @@ pub const Store = struct {
                 .trigger = switch (kind) {
                     .before_clock_out => .{ .before_clock_out = stmt.int(2) },
                     .at_time => .{ .at_time = stmt.int(3) },
-                    .lunch_opens => .lunch_opens,
-                    .before_lunch_closes => .{ .before_lunch_closes = stmt.int(2) },
+                    .window_opens => .{ .window_opens = try id(stmt, 5) },
+                    .before_window_closes => .{ .before_window_closes = .{
+                        .minutes = stmt.int(2),
+                        .preset_id = try id(stmt, 5),
+                    } },
+                    .before_break => .{ .before_break = stmt.int(2) },
+                    .before_break_ends => .{ .before_break_ends = stmt.int(2) },
                 },
                 .enabled = stmt.int(4) != 0,
             });
@@ -881,15 +981,16 @@ pub const Store = struct {
 
     /// Creates or replaces an alarm rule under an id the caller chose.
     pub fn putAlarmRule(self: *Store, rule: AlarmRule, now: i64) Error!void {
-        const minutes: ?i64, const tod: ?i64 = AlarmRule.columns(rule.trigger);
+        const minutes: ?i64, const tod: ?i64, const preset: ?Blob = AlarmRule.columns(&rule.trigger);
         try self.db.exec(
-            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, enabled, created_ts, updated_ts)
-            \\VALUES (?, ?, ?, ?, ?, ?6, ?6)
+            \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, preset_id, enabled,
+            \\                         created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
             \\ON CONFLICT (id) DO UPDATE SET
             \\    kind = excluded.kind, minutes = excluded.minutes,
-            \\    time_of_day_secs = excluded.time_of_day_secs, enabled = excluded.enabled,
-            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
-        , .{ blob(&rule.id), @tagName(rule.trigger), minutes, tod, rule.enabled, now });
+            \\    time_of_day_secs = excluded.time_of_day_secs, preset_id = excluded.preset_id,
+            \\    enabled = excluded.enabled, updated_ts = excluded.updated_ts, deleted_ts = NULL
+        , .{ blob(&rule.id), @tagName(rule.trigger), minutes, tod, preset, rule.enabled, now });
     }
 
     pub fn setAlarmEnabled(self: *Store, rule_id: Uuid, enabled: bool, now: i64) Error!void {
@@ -904,6 +1005,83 @@ pub const Store = struct {
             \\UPDATE alarm_rules SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
         , .{ now, blob(&rule_id) });
         if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Break presets not deleted: windows (like lunch) first, then oldest
+    /// first. Allocated in `arena`.
+    pub fn breakPresets(self: *Store, arena: Allocator) Error![]BreakPreset {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, kind, weekdays, enabled, start_secs, end_secs,
+            \\       earliest_secs, latest_secs, minimum_secs
+            \\FROM break_presets WHERE deleted_ts IS NULL
+            \\ORDER BY kind <> 'window', created_ts, rowid
+        );
+        defer stmt.deinit();
+        var out: std.ArrayList(BreakPreset) = .empty;
+        while (try stmt.step()) {
+            const Kind = @typeInfo(BreakPreset.Rule).@"union".tag_type.?;
+            const kind = std.meta.stringToEnum(Kind, stmt.bytes(2)) orelse return error.Corrupt;
+            try out.append(arena, .{
+                .id = try id(stmt, 0),
+                .name = try stmt.text(arena, 1),
+                .weekdays = std.math.cast(u7, stmt.int(3)) orelse return error.Corrupt,
+                .enabled = stmt.int(4) != 0,
+                .rule = switch (kind) {
+                    .scheduled => .{ .scheduled = .{ .start_secs = stmt.int(5), .end_secs = stmt.int(6) } },
+                    .window => .{ .window = .{
+                        .earliest_secs = stmt.int(7),
+                        .latest_secs = stmt.int(8),
+                        .minimum_secs = stmt.int(9),
+                    } },
+                },
+            });
+        }
+        return out.items;
+    }
+
+    /// Creates or replaces a break preset under an id the caller chose.
+    /// `Conflict` if its times don't make sense.
+    pub fn putBreakPreset(self: *Store, p: BreakPreset, now: i64) Error!void {
+        const start: ?i64, const end: ?i64 = switch (p.rule) {
+            .scheduled => |t| .{ t.start_secs, t.end_secs },
+            .window => .{ null, null },
+        };
+        const earliest: ?i64, const latest: ?i64, const minimum: ?i64 = switch (p.rule) {
+            .window => |w| .{ w.earliest_secs, w.latest_secs, w.minimum_secs },
+            .scheduled => .{ null, null, null },
+        };
+        try self.db.exec(
+            \\INSERT INTO break_presets (id, name, kind, weekdays, enabled, start_secs, end_secs,
+            \\                           earliest_secs, latest_secs, minimum_secs, created_ts,
+            \\                           updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?11, ?11)
+            \\ON CONFLICT (id) DO UPDATE SET
+            \\    name = excluded.name, kind = excluded.kind, weekdays = excluded.weekdays,
+            \\    enabled = excluded.enabled, start_secs = excluded.start_secs,
+            \\    end_secs = excluded.end_secs, earliest_secs = excluded.earliest_secs,
+            \\    latest_secs = excluded.latest_secs, minimum_secs = excluded.minimum_secs,
+            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
+        , .{
+            blob(&p.id),   p.name,   @tagName(p.rule), @as(i64, p.weekdays), p.enabled,
+            start,         end,      earliest,         latest,               minimum,
+            now,
+        });
+    }
+
+    /// Deletes a break preset and the alarms for it. Breaks it already put
+    /// on shifts stay.
+    pub fn deleteBreakPreset(self: *Store, preset_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        try self.db.exec(
+            \\UPDATE break_presets SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&preset_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.db.exec(
+            \\UPDATE alarm_rules SET deleted_ts = ?, updated_ts = ?1
+            \\WHERE preset_id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&preset_id) });
+        try self.commit();
     }
 
     /// A shared setting (`default_shift_secs`, `clock_out_link`, ...), if set.

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main window's Settings screen: the days you work, the lunch window,
-/// and the menu bar.
+/// The main window's Settings screen: the days you work, breaks (the lunch
+/// window and scheduled ones), and the menu bar.
 struct SettingsView: View {
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
@@ -30,6 +30,28 @@ struct SettingsView: View {
         )
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if preferences.hasStore {
+        Section {
+          ForEach($preferences.scheduledBreaks) { $brk in
+            ScheduledBreakEditor(brk: $brk) {
+              let id = brk.id
+              preferences.scheduledBreaks.removeAll { $0.id == id }
+            }
+          }
+          Button("Add Scheduled Break") {
+            preferences.scheduledBreaks.append(ScheduledBreak(name: ""))
+          }
+        } header: {
+          Text("Scheduled Breaks")
+        } footer: {
+          Text(
+            "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
+          )
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
       }
 
       Section("Menu Bar") {
@@ -73,6 +95,67 @@ struct LunchSettings: View {
     DurationStepper(
       "Lunch is a break of at least", value: $rule.minimum, in: (5 * 60)...(2 * 3600),
       step: 5 * 60)
+  }
+}
+
+/// One scheduled break: its name, days, and times.
+struct ScheduledBreakEditor: View {
+  @Binding var brk: ScheduledBreak
+  let onRemove: () -> Void
+  var calendar: Calendar = .current
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 8) {
+        RemoveButton(help: "Remove this break", action: onRemove)
+        TextField("Name", text: $brk.name, prompt: Text("Name, like Class"))
+          .labelsHidden()
+          .textFieldStyle(.plain)
+          .font(.body.weight(.medium))
+        Spacer()
+        Toggle("On", isOn: $brk.isEnabled)
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .controlSize(.small)
+      }
+      Group {
+        WeekdayPicker(days: $brk.weekdays, calendar: calendar)
+        HStack(spacing: 6) {
+          // Hidden labels: in a Form, a control's label joins the form's
+          // label column.
+          DatePicker("Starts", selection: time(\.start), displayedComponents: .hourAndMinute)
+            .datePickerStyle(.field)
+            .labelsHidden()
+            .fixedSize()
+          Text("to").foregroundStyle(.secondary)
+          DatePicker("Ends", selection: time(\.end), displayedComponents: .hourAndMinute)
+            .datePickerStyle(.field)
+            .labelsHidden()
+            .fixedSize()
+          Spacer()
+          if !brk.isValid {
+            Label("Ends before it starts", systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.red)
+              .font(.callout)
+          } else if brk.weekdays.isEmpty {
+            Text("No days").foregroundStyle(.secondary).font(.callout)
+          }
+        }
+      }
+      .opacity(brk.isEnabled ? 1 : 0.5)
+    }
+    .padding(.vertical, 4)
+  }
+
+  /// A time of day as today's date, for the picker.
+  private func time(_ key: WritableKeyPath<ScheduledBreak, TimeInterval>) -> Binding<Date> {
+    let day = calendar.startOfDay(for: Date())
+    return Binding(
+      get: { day.addingTimeInterval(brk[keyPath: key]) },
+      set: { date in
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        brk[keyPath: key] = TimeInterval((c.hour ?? 0) * 3600 + (c.minute ?? 0) * 60)
+      })
   }
 }
 

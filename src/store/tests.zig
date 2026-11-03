@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(2, stmt.int(0));
+    try testing.expectEqual(3, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -70,7 +70,76 @@ test "open - lunch alarms migration keeps existing rules" {
     try testing.expectEqual(1, rules.len);
     try testing.expectEqual(15, rules[0].trigger.before_clock_out);
     try testing.expect(!rules[0].enabled);
-    _ = try s.addAlarmRule(.lunch_opens, 2);
+    _ = try s.addAlarmRule(.{ .before_break = 5 }, 2);
+}
+
+/// A database as migration 0002 left it.
+fn v2Db(path: [:0]const u8) !store.sqlite.Db {
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?) catch {};
+    const db: store.sqlite.Db = try .open(path);
+    try db.execScript(@embedFile("migrations/0001_init.sql"));
+    try db.execScript(@embedFile("migrations/0002_lunch_alarms.sql"));
+    try db.execScript("PRAGMA user_version = 2");
+    return db;
+}
+
+test "open - break presets migration moves lunch into a window preset" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    const db = try v2Db(tmp.path);
+    try db.execScript(
+        \\INSERT INTO settings (key, value, updated_ts)
+        \\VALUES ('lunch', '{"enabled":true,"earliest_mins":120,"latest_mins":240,"minimum_mins":45}', 7);
+        \\INSERT INTO alarm_rules (id, kind, minutes, enabled, created_ts, updated_ts)
+        \\VALUES (x'01010101010101010101010101010101', 'before_clock_out', 15, 1, 1, 1),
+        \\       (x'02020202020202020202020202020202', 'lunch_opens', NULL, 1, 2, 2),
+        \\       (x'03030303030303030303030303030303', 'before_lunch_closes', 10, 0, 3, 3);
+    );
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const presets = try s.breakPresets(a);
+    try testing.expectEqual(1, presets.len);
+    const lunch = presets[0];
+    try testing.expectEqualStrings("Lunch", lunch.name);
+    try testing.expect(lunch.enabled);
+    try testing.expectEqual(store.BreakPreset.all_days, lunch.weekdays);
+    try testing.expectEqual(2 * h, lunch.rule.window.earliest_secs);
+    try testing.expectEqual(4 * h, lunch.rule.window.latest_secs);
+    try testing.expectEqual(45 * 60, lunch.rule.window.minimum_secs);
+    try testing.expectEqual(null, try s.setting(a, "lunch"));
+
+    const rules = try s.alarmRules(a);
+    try testing.expectEqual(3, rules.len);
+    try testing.expectEqual(15, rules[0].trigger.before_clock_out);
+    try testing.expect(rules[1].trigger.window_opens.eql(lunch.id));
+    try testing.expectEqual(10, rules[2].trigger.before_window_closes.minutes);
+    try testing.expect(rules[2].trigger.before_window_closes.preset_id.eql(lunch.id));
+    try testing.expect(!rules[2].enabled);
+}
+
+test "open - break presets migration without a lunch setting adds lunch, off" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    const db = try v2Db(tmp.path);
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const presets = try s.breakPresets(arena.allocator());
+    try testing.expectEqual(1, presets.len);
+    try testing.expect(!presets[0].enabled);
+    try testing.expectEqual(3 * h, presets[0].rule.window.earliest_secs);
+    try testing.expectEqual(5 * h, presets[0].rule.window.latest_secs);
+    try testing.expectEqual(30 * 60, presets[0].rule.window.minimum_secs);
 }
 
 test "open - refuses a database from a newer Shifty" {
@@ -414,6 +483,121 @@ test "shifts - a forgotten shift closes at its clock out" {
     try testing.expect(!try s.closeStaleShift(a, 40 * h));
 }
 
+// ── Break presets ──────────────────────────────────────────────────────────
+
+/// Local midnight starting Tuesday, 6 January 1970, in `at`'s zone (UTC-5).
+const tue = 5 * 24 * h + 5 * h;
+const tue_thu = 0b0001010;
+
+fn class(id: core.Uuid, weekdays: u7, start: i64, end: i64) store.BreakPreset {
+    return .{
+        .id = id,
+        .name = "Class",
+        .weekdays = weekdays,
+        .rule = .{ .scheduled = .{ .start_secs = start, .end_secs = end } },
+    };
+}
+
+test "break presets - put, list, edit, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    // A new store has the lunch window, off.
+    var presets = try s.breakPresets(a);
+    try testing.expectEqual(1, presets.len);
+    try testing.expectEqualStrings("Lunch", presets[0].name);
+    try testing.expect(!presets[0].enabled);
+    const lunch_id = presets[0].id;
+
+    const id: core.Uuid = .v7(io);
+    try s.putBreakPreset(class(id, tue_thu, 11 * h, 14 * h), 1);
+    var lunch = presets[0];
+    lunch.enabled = true;
+    lunch.rule.window.latest_secs = 6 * h;
+    try s.putBreakPreset(lunch, 1);
+
+    presets = try s.breakPresets(a);
+    try testing.expectEqual(2, presets.len);
+    try testing.expect(presets[0].id.eql(lunch_id));
+    try testing.expect(presets[0].enabled);
+    try testing.expectEqual(6 * h, presets[0].rule.window.latest_secs);
+    try testing.expectEqualStrings("Class", presets[1].name);
+    try testing.expectEqual(tue_thu, presets[1].weekdays);
+    try testing.expectEqual(11 * h, presets[1].rule.scheduled.start_secs);
+    try testing.expectEqual(14 * h, presets[1].rule.scheduled.end_secs);
+
+    // Ends before it starts; a window that closes before it opens.
+    try testing.expectError(error.Conflict, s.putBreakPreset(class(.v7(io), tue_thu, 14 * h, 11 * h), 2));
+    lunch.rule.window.latest_secs = h;
+    try testing.expectError(error.Conflict, s.putBreakPreset(lunch, 2));
+
+    // Deleting a window deletes its alarms.
+    const alarm = try s.addAlarmRule(.{ .window_opens = lunch_id }, 2);
+    try s.deleteBreakPreset(lunch_id, 3);
+    try testing.expectError(error.NotFound, s.deleteBreakPreset(lunch_id, 3));
+    try testing.expectError(error.NotFound, s.setAlarmEnabled(alarm, false, 3));
+    try s.deleteBreakPreset(id, 3);
+    try testing.expectEqual(0, (try s.breakPresets(a)).len);
+}
+
+test "break presets - clocking in adds the day's scheduled breaks" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try s.putBreakPreset(class(.v7(io), tue_thu, 11 * h, 14 * h), 0);
+    var off = class(.v7(io), tue_thu, 15 * h, 15 * h + 900);
+    off.enabled = false;
+    try s.putBreakPreset(off, 0);
+    // Turned on, but a window adds no break.
+    var lunch = (try s.breakPresets(a))[0];
+    lunch.enabled = true;
+    try s.putBreakPreset(lunch, 0);
+
+    // Tuesday at 9: class goes on the shift, and clock out moves to 8pm.
+    const tuesday = try s.startShift(8 * h, at(tue + 9 * h));
+    const brks = try s.breaks(a, tuesday);
+    try testing.expectEqual(1, brks.len);
+    try testing.expectEqual(tue + 11 * h, brks[0].in_ts);
+    try testing.expectEqual(tue + 14 * h, brks[0].out_ts.?);
+    const shift = (try s.currentShift(a)).?;
+    try testing.expectEqual(tue + 20 * h, store.clockOut(shift, brks, tue + 9 * h));
+    _ = try s.endShift(tue + 20 * h);
+
+    // Wednesday: no class.
+    const wednesday = try s.startShift(8 * h, at(tue + 24 * h + 9 * h));
+    try testing.expectEqual(0, (try s.breaks(a, wednesday)).len);
+    _ = try s.endShift(tue + 24 * h + 17 * h);
+
+    // An empty shift, for a frontend that brings its own breaks.
+    const bare = try s.startEmptyShift(8 * h, at(tue + 2 * 24 * h + 9 * h));
+    try testing.expectEqual(0, (try s.breaks(a, bare)).len);
+}
+
+test "break presets - the day's breaks are cut to the shift" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try s.putBreakPreset(class(.v7(io), tue_thu, 11 * h, 14 * h), 0);
+    try s.putBreakPreset(class(.v7(io), tue_thu, 8 * h, 9 * h), 0);
+    // After a 4h shift starting at noon (with the rest of class) ends.
+    try s.putBreakPreset(class(.v7(io), tue_thu, 19 * h, 20 * h), 0);
+
+    // Clocking in at noon: class counts from noon, the 8am one is over.
+    const planned = try s.scheduledBreaks(a, at(tue + 12 * h), 4 * h);
+    try testing.expectEqual(1, planned.len);
+    try testing.expectEqual(tue + 12 * h, planned[0].in_ts);
+    try testing.expectEqual(tue + 14 * h, planned[0].out_ts);
+}
+
 // ── Alarms, settings, links ─────────────────────────────────────────────────
 
 test "alarm rules" {
@@ -437,18 +621,30 @@ test "alarm rules" {
     try testing.expectEqual(12 * h, rules[1].trigger.at_time);
     try testing.expect(!rules[1].enabled);
 
-    const opens = try s.addAlarmRule(.lunch_opens, 1);
-    const closing = try s.addAlarmRule(.{ .before_lunch_closes = 30 }, 1);
-    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .before_lunch_closes = -5 }, 1));
+    const lunch_id = (try s.breakPresets(a))[0].id;
+    const opens = try s.addAlarmRule(.{ .window_opens = lunch_id }, 1);
+    const closing = try s.addAlarmRule(.{ .before_window_closes = .{ .minutes = 30, .preset_id = lunch_id } }, 1);
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .before_window_closes = .{ .minutes = -5, .preset_id = lunch_id } }, 1));
+    // A window that isn't there.
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .window_opens = .v7(io) }, 1));
     rules = try s.alarmRules(a);
     try testing.expectEqual(4, rules.len);
     try testing.expect(rules[2].id.eql(opens));
-    try testing.expectEqual(.lunch_opens, std.meta.activeTag(rules[2].trigger));
-    try testing.expectEqual(30, rules[3].trigger.before_lunch_closes);
-    try s.putAlarmRule(.{ .id = closing, .trigger = .{ .before_lunch_closes = 15 }, .enabled = true }, 2);
-    try testing.expectEqual(15, (try s.alarmRules(a))[3].trigger.before_lunch_closes);
+    try testing.expect(rules[2].trigger.window_opens.eql(lunch_id));
+    try testing.expectEqual(30, rules[3].trigger.before_window_closes.minutes);
+    try s.putAlarmRule(.{ .id = closing, .trigger = .{ .before_window_closes = .{ .minutes = 15, .preset_id = lunch_id } }, .enabled = true }, 2);
+    try testing.expectEqual(15, (try s.alarmRules(a))[3].trigger.before_window_closes.minutes);
     try s.deleteAlarmRule(opens, 2);
     try s.deleteAlarmRule(closing, 2);
+
+    const before = try s.addAlarmRule(.{ .before_break = 10 }, 2);
+    const back = try s.addAlarmRule(.{ .before_break_ends = 0 }, 2);
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .before_break = -1 }, 2));
+    rules = try s.alarmRules(a);
+    try testing.expectEqual(10, rules[2].trigger.before_break);
+    try testing.expectEqual(0, rules[3].trigger.before_break_ends);
+    try s.deleteAlarmRule(before, 2);
+    try s.deleteAlarmRule(back, 2);
 
     try s.deleteAlarmRule(ten, 2);
     rules = try s.alarmRules(a);

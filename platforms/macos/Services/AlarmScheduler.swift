@@ -10,6 +10,9 @@ final class AlarmScheduler {
   private let model: ShiftModel
   private let preferences: Preferences
   private let controller: AlarmController
+  /// Wakes a sync once a break starts or ends, so a break alarm moves on to
+  /// the next break. Nothing in the model changes when time passes.
+  private var nextBoundary: Timer?
 
   init(model: ShiftModel, preferences: Preferences, controller: AlarmController) {
     self.model = model
@@ -43,16 +46,24 @@ final class AlarmScheduler {
     var live = Set<String>()
 
     let lunch = model.lunch(preferences.lunch, now: now)
+    let breaks = model.anchoredBreaks()
 
     for rule in model.alarms where rule.isEnabled {
       let id = rule.id.uuidString
       // A lunch alarm with no lunch to come (none needed, had it, or on a
-      // break) is dropped, so one ringing stops when you go.
+      // break), or a break alarm with no break ahead, is dropped, so one
+      // ringing stops when you go.
       guard
-        let fireDate = rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch)
+        let fireDate = rule.fireDate(
+          clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch, breaks: breaks, now: now)
       else { continue }
       live.insert(id)
-      if rule.isLunch, let lunch {
+      if rule.isBreak, let brk = Self.breakFor(rule, breaks: breaks, now: now) {
+        apply(
+          id: id, title: rule.title,
+          body: "Break \((brk.start..<brk.end).formatted(.interval.hour().minute()))",
+          link: nil, fireDate: fireDate, held: false, now: now)
+      } else if rule.isLunch, let lunch {
         apply(
           id: id, title: rule.title,
           body: "Start lunch by \(lunch.closes.formatted(date: .omitted, time: .shortened))",
@@ -66,6 +77,31 @@ final class AlarmScheduler {
 
     // Deleted or disabled rules
     controller.cancelAll(except: live)
+
+    scheduleNextBoundary(breaks: breaks, now: now)
+  }
+
+  /// The break a break alarm is for: the next to start, or to end.
+  private static func breakFor(_ rule: AlarmRule, breaks: [(start: Date, end: Date)], now: Date)
+    -> (start: Date, end: Date)?
+  {
+    if case .beforeBreak = rule.trigger { return breaks.first { $0.start > now } }
+    return breaks.first { $0.end > now }
+  }
+
+  private func scheduleNextBoundary(breaks: [(start: Date, end: Date)], now: Date) {
+    nextBoundary?.invalidate()
+    nextBoundary = nil
+    guard model.alarms.contains(where: { $0.isEnabled && $0.isBreak }),
+      let next = breaks.flatMap({ [$0.start, $0.end] }).filter({ $0 > now }).min()
+    else { return }
+    let timer = Timer(fire: next.addingTimeInterval(1), interval: 0, repeats: false) {
+      [weak self] _ in
+      Task { @MainActor in self?.sync() }
+    }
+    timer.tolerance = 5
+    RunLoop.main.add(timer, forMode: .common)
+    nextBoundary = timer
   }
 
   /// Brings one alarm's pending notification in line with its fire date.

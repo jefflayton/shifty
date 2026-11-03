@@ -49,10 +49,12 @@ typedef struct {
 } ShiftyBreak;
 
 typedef enum {
-  SHIFTY_ALARM_BEFORE_CLOCK_OUT = 0, // value: minutes before clock out
-  SHIFTY_ALARM_AT_TIME = 1,          // value: seconds since local midnight
-  SHIFTY_ALARM_LUNCH_OPENS = 2,      // value: unused
-  SHIFTY_ALARM_BEFORE_LUNCH_CLOSES = 3, // value: minutes before the lunch window closes
+  SHIFTY_ALARM_BEFORE_CLOCK_OUT = 0,     // value: minutes before clock out
+  SHIFTY_ALARM_AT_TIME = 1,              // value: seconds since local midnight
+  SHIFTY_ALARM_WINDOW_OPENS = 2,         // value: unused; preset_id: the window
+  SHIFTY_ALARM_BEFORE_WINDOW_CLOSES = 3, // value: minutes before it closes; preset_id
+  SHIFTY_ALARM_BEFORE_BREAK = 4,         // value: minutes before each break starts
+  SHIFTY_ALARM_BEFORE_BREAK_ENDS = 5,    // value: minutes before each break ends
 } ShiftyAlarmKind;
 
 typedef struct {
@@ -60,7 +62,22 @@ typedef struct {
   int32_t kind; // ShiftyAlarmKind
   int32_t enabled;
   int64_t value;
+  ShiftyId preset_id; // window alarms only; zeros otherwise
 } ShiftyAlarmRule;
+
+typedef enum {
+  SHIFTY_PRESET_SCHEDULED = 0, // a break at set local times
+  SHIFTY_PRESET_WINDOW = 1,    // a break that has to start within time worked, like lunch
+} ShiftyPresetKind;
+
+typedef struct {
+  ShiftyId id;
+  int32_t kind; // ShiftyPresetKind
+  int32_t enabled;
+  int32_t weekdays; // ISO weekdays: bit 0 is Monday, bit 6 Sunday
+  int64_t start_secs, end_secs; // scheduled: local seconds since midnight
+  int64_t earliest_secs, latest_secs, minimum_secs; // window: time worked
+} ShiftyBreakPreset;
 
 // A NULL path opens the shared default ($SHIFTY_DB, else
 // ~/Library/Application Support/Shifty/shifty.db).
@@ -70,8 +87,13 @@ void shifty_store_close(ShiftyStore *store);
 ShiftyResult shifty_data_version(ShiftyStore *store, int64_t *out);
 
 ShiftyResult shifty_current_shift(ShiftyStore *store, ShiftyShift *out);
+// `presets` nonzero puts the day's scheduled break presets on the shift.
 ShiftyResult shifty_start_shift(ShiftyStore *store, int64_t in_ts, int64_t target_secs,
-                                ShiftyId *out);
+                                int32_t presets, ShiftyId *out);
+// The breaks the scheduled presets would put on a shift clocking in at
+// `in_ts`. Fills up to `cap`; `count` gets the total.
+ShiftyResult shifty_scheduled_breaks(ShiftyStore *store, int64_t in_ts, int64_t target_secs,
+                                     ShiftInterval *out, size_t cap, size_t *count);
 ShiftyResult shifty_edit_shift(ShiftyStore *store, ShiftyId shift_id, int64_t in_ts,
                                int64_t target_secs, int64_t now);
 ShiftyResult shifty_end_shift(ShiftyStore *store, int64_t now);
@@ -96,6 +118,16 @@ ShiftyResult shifty_alarm_rules(ShiftyStore *store, ShiftyAlarmRule *out, size_t
                                 size_t *count);
 ShiftyResult shifty_put_alarm_rule(ShiftyStore *store, ShiftyAlarmRule rule, int64_t now);
 ShiftyResult shifty_delete_alarm_rule(ShiftyStore *store, ShiftyId rule_id, int64_t now);
+
+// Break presets, windows first, as a UTF-8 JSON array of {"id","name","kind",
+// "enabled","weekdays","start_secs","end_secs","earliest_secs","latest_secs",
+// "minimum_secs"} (times null where they don't apply). Release with
+// shifty_free.
+ShiftyResult shifty_break_presets_json(ShiftyStore *store, char **out, size_t *len);
+ShiftyResult shifty_put_break_preset(ShiftyStore *store, ShiftyBreakPreset preset,
+                                     const char *name, int64_t now);
+// Deletes a break preset and its alarms; breaks it put on shifts stay.
+ShiftyResult shifty_delete_break_preset(ShiftyStore *store, ShiftyId preset_id, int64_t now);
 
 // Copies up to `cap` bytes (no NUL); `len` gets the full length.
 ShiftyResult shifty_setting(ShiftyStore *store, const char *key, char *buf, size_t cap,

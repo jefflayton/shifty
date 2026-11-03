@@ -2,7 +2,8 @@ import AppKit
 import Observation
 
 /// Keeps the menu bar item's icon and text current: a cup while you're on a
-/// break, and the clock-out time or time left beside it.
+/// break (one you started, or one planned like a class), and the clock-out
+/// time, time left, or time until break beside it.
 @MainActor
 final class StatusItemController {
   private let item: NSStatusItem
@@ -25,8 +26,9 @@ final class StatusItemController {
     self.preferences = preferences
     observe()
 
-    // Time left counts down, a break pushes clock out later, and the text
-    // goes away once the shift is over: none of that changes the model.
+    // Time left counts down, a break pushes clock out later, planned breaks
+    // start and end, and the text goes away once the shift is over: none of
+    // that changes the model.
     let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
       Task { @MainActor in self?.update() }
     }
@@ -45,8 +47,9 @@ final class StatusItemController {
   }
 
   private func update(now: Date = Date()) {
-    let onBreak = model.isOnBreak
-    let title = preferences.menuBarDisplay.title(clockOut: model.clockOut(now: now), now: now)
+    let onBreak = model.isOnBreak || model.isInPlannedBreak(now: now)
+    let title = preferences.menuBarDisplay.title(
+      clockOut: model.clockOut(now: now), now: now, nextBreak: model.untilBreak(now: now))
     guard let button = item.button, shown?.onBreak != onBreak || shown?.title != title else {
       return
     }

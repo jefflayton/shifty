@@ -10,6 +10,10 @@ struct AlarmsSection: View {
         Button("At clock out") { add(.beforeClockOut(minutes: 0)) }
         Button("15 min before clock out") { add(.beforeClockOut(minutes: 15)) }
         Button("At a set time") { add(.atTime(model.clockOut)) }
+        Section("Breaks") {
+          Button("5 min before a break") { add(.beforeBreak(minutes: 5)) }
+          Button("When a break ends") { add(.beforeBreakEnds(minutes: 0)) }
+        }
         Section("Lunch") {
           Button("When lunch opens") { add(.lunchOpens) }
           Button("15 min before lunch closes") { add(.beforeLunchCloses(minutes: 15)) }
@@ -24,18 +28,22 @@ struct AlarmsSection: View {
       .help("Add an alarm")
     } content: {
       if model.alarms.isEmpty {
-        Text("Get a reminder before you clock out, or for lunch.")
+        Text("Get a reminder before you clock out, before a break, or for lunch.")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
 
-      let clockOut = model.clockOut
-      let lunch = model.lunch(preferences.lunch, now: Date())
+      let now = Date()
+      let clockOut = model.clockOut(now: now)
+      let lunch = model.lunch(preferences.lunch, now: now)
+      let breaks = model.anchoredBreaks()
       ForEach($model.alarms) { $rule in
         AlarmRow(
           rule: $rule,
-          fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch),
-          idle: rule.isLunch ? preferences.lunch.quietReason(lunch) : nil,
+          fireDate: rule.fireDate(
+            clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch, breaks: breaks, now: now),
+          idle: rule.isLunch
+            ? preferences.lunch.quietReason(lunch) : rule.isBreak ? "No break ahead" : nil,
           paused: model.isOnBreak && rule.followsClockOut,
           onRemove: {
             let id = rule.id
@@ -57,9 +65,9 @@ struct AlarmsSection: View {
 
 struct AlarmRow: View {
   @Binding var rule: AlarmRule
-  /// nil for a lunch alarm that won't ring on this shift.
+  /// nil for a lunch or break alarm that won't ring on this shift.
   let fireDate: Date?
-  /// Why a lunch alarm won't ring, when it won't.
+  /// Why a lunch or break alarm won't ring, when it won't.
   let idle: String?
   /// Waiting for a break to end, when clock out is known again.
   let paused: Bool
@@ -93,6 +101,20 @@ struct AlarmRow: View {
             .fixedSize()
             .help("Rings before the lunch window closes, unless you've had lunch")
           Stepper("Minutes before lunch closes", value: lunchMinutes, in: 0...120, step: 5)
+            .labelsHidden()
+        case .beforeBreak(let minutes):
+          Label(minutes == 0 ? "Break starts" : "\(minutes) min before", systemImage: "cup.and.saucer")
+            .monospacedDigit()
+            .fixedSize()
+            .help("Rings before each break on your shift starts")
+          Stepper("Minutes before a break", value: breakMinutes, in: 0...120, step: 5)
+            .labelsHidden()
+        case .beforeBreakEnds(let minutes):
+          Label(minutes == 0 ? "Break ends" : "\(minutes) min left", systemImage: "cup.and.saucer")
+            .monospacedDigit()
+            .fixedSize()
+            .help("Rings before each break on your shift ends, like when class lets out")
+          Stepper("Minutes before a break ends", value: breakMinutes, in: 0...120, step: 5)
             .labelsHidden()
         }
       }
@@ -146,6 +168,25 @@ struct AlarmRow: View {
         if case .beforeLunchCloses(let minutes) = rule.trigger { minutes } else { 0 }
       },
       set: { rule.trigger = .beforeLunchCloses(minutes: $0) }
+    )
+  }
+
+  /// The minutes of a break alarm, keeping its kind.
+  private var breakMinutes: Binding<Int> {
+    Binding(
+      get: {
+        switch rule.trigger {
+        case .beforeBreak(let minutes), .beforeBreakEnds(let minutes): minutes
+        default: 0
+        }
+      },
+      set: { minutes in
+        if case .beforeBreakEnds = rule.trigger {
+          rule.trigger = .beforeBreakEnds(minutes: minutes)
+        } else {
+          rule.trigger = .beforeBreak(minutes: minutes)
+        }
+      }
     )
   }
 

@@ -55,16 +55,47 @@ pub const Break = extern struct {
     running: i32,
 };
 
-pub const AlarmKind = enum(i32) { before_clock_out = 0, at_time = 1, lunch_opens = 2, before_lunch_closes = 3, _ };
+pub const AlarmKind = enum(i32) {
+    before_clock_out = 0,
+    at_time = 1,
+    window_opens = 2,
+    before_window_closes = 3,
+    before_break = 4,
+    before_break_ends = 5,
+    _,
+};
 
 pub const AlarmRule = extern struct {
     id: Id,
     kind: AlarmKind,
     enabled: i32,
-    /// Minutes before clock out or before the lunch window closes, seconds
-    /// since local midnight, or nothing (lunch opens).
+    /// Minutes before clock out, a window closing, or a break starting or
+    /// ending; seconds since local midnight; or nothing (window opens).
     value: i64,
+    /// The window preset, for window alarms; zeros otherwise.
+    preset_id: Id,
 };
+
+pub const PresetKind = enum(i32) { scheduled = 0, window = 1, _ };
+
+pub const BreakPreset = extern struct {
+    id: Id,
+    kind: PresetKind,
+    enabled: i32,
+    /// ISO weekdays: bit 0 is Monday, bit 6 Sunday.
+    weekdays: i32,
+    /// Scheduled: local seconds since midnight.
+    start_secs: i64,
+    end_secs: i64,
+    /// Window: time worked.
+    earliest_secs: i64,
+    latest_secs: i64,
+    minimum_secs: i64,
+};
+
+pub const Interval = extern struct { in_ts: i64, out_ts: i64 };
+
+const no_id: Id = .{ .bytes = @splat(0) };
 
 const gpa = std.heap.c_allocator;
 
@@ -130,13 +161,35 @@ export fn shifty_current_shift(h: *Handle, out: *Shift) Result {
     return .ok;
 }
 
-/// Clocks in at `in_ts`, recorded in the local zone. `conflict` if a shift
-/// is already open.
-export fn shifty_start_shift(h: *Handle, in_ts: i64, target_secs: i64, out: *Id) Result {
+/// Clocks in at `in_ts`, recorded in the local zone. `presets` nonzero puts
+/// the day's scheduled breaks on the shift; zero leaves it empty, for a
+/// caller that brings its own. `conflict` if a shift is already open.
+export fn shifty_start_shift(h: *Handle, in_ts: i64, target_secs: i64, presets: i32, out: *Id) Result {
     var tz_buf: local.TzBuf = undefined;
-    const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
-    const new = h.store.startShift(target_secs, .{ .ts = in_ts, .utc_offset_secs = local.utcOffset(in_ts), .tz = tz }) catch |e| return result(e);
+    const at = stamp(h, in_ts, &tz_buf);
+    const new = (if (presets != 0)
+        h.store.startShift(target_secs, at)
+    else
+        h.store.startEmptyShift(target_secs, at)) catch |e| return result(e);
     out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// `ts` in the local zone, its zone name kept in `tz_buf`.
+fn stamp(h: *Handle, ts: i64, tz_buf: *local.TzBuf) local.Stamp {
+    const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, tz_buf);
+    return .{ .ts = ts, .utc_offset_secs = local.utcOffset(ts), .tz = tz };
+}
+
+/// The breaks the scheduled presets would put on a `target_secs` shift
+/// clocking in at `in_ts`, like `shifty_breaks`.
+export fn shifty_scheduled_breaks(h: *Handle, in_ts: i64, target_secs: i64, out: [*]Interval, cap: usize, count: *usize) Result {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var tz_buf: local.TzBuf = undefined;
+    const brks = h.store.scheduledBreaks(arena.allocator(), stamp(h, in_ts, &tz_buf), target_secs) catch |e| return result(e);
+    count.* = brks.len;
+    for (brks[0..@min(brks.len, cap)], out) |b, *o| o.* = .{ .in_ts = b.in_ts, .out_ts = b.out_ts };
     return .ok;
 }
 
@@ -218,13 +271,21 @@ export fn shifty_alarm_rules(h: *Handle, out: [*]AlarmRule, cap: usize, count: *
     const rules = h.store.alarmRules(arena.allocator()) catch |e| return result(e);
     count.* = rules.len;
     for (rules[0..@min(rules.len, cap)], out) |r, *o| {
-        const kind: AlarmKind, const value: i64 = switch (r.trigger) {
-            .before_clock_out => |m| .{ .before_clock_out, m },
-            .at_time => |t| .{ .at_time, t },
-            .lunch_opens => .{ .lunch_opens, 0 },
-            .before_lunch_closes => |m| .{ .before_lunch_closes, m },
+        const kind: AlarmKind, const value: i64, const preset: Id = switch (r.trigger) {
+            .before_clock_out => |m| .{ .before_clock_out, m, no_id },
+            .at_time => |t| .{ .at_time, t, no_id },
+            .window_opens => |p| .{ .window_opens, 0, .{ .bytes = p.bytes } },
+            .before_window_closes => |w| .{ .before_window_closes, w.minutes, .{ .bytes = w.preset_id.bytes } },
+            .before_break => |m| .{ .before_break, m, no_id },
+            .before_break_ends => |m| .{ .before_break_ends, m, no_id },
         };
-        o.* = .{ .id = .{ .bytes = r.id.bytes }, .kind = kind, .enabled = @intFromBool(r.enabled), .value = value };
+        o.* = .{
+            .id = .{ .bytes = r.id.bytes },
+            .kind = kind,
+            .enabled = @intFromBool(r.enabled),
+            .value = value,
+            .preset_id = preset,
+        };
     }
     return .ok;
 }
@@ -233,8 +294,10 @@ export fn shifty_put_alarm_rule(h: *Handle, rule: AlarmRule, now: i64) Result {
     const trigger: store.AlarmRule.Trigger = switch (rule.kind) {
         .before_clock_out => .{ .before_clock_out = rule.value },
         .at_time => .{ .at_time = rule.value },
-        .lunch_opens => .lunch_opens,
-        .before_lunch_closes => .{ .before_lunch_closes = rule.value },
+        .window_opens => .{ .window_opens = id(rule.preset_id) },
+        .before_window_closes => .{ .before_window_closes = .{ .minutes = rule.value, .preset_id = id(rule.preset_id) } },
+        .before_break => .{ .before_break = rule.value },
+        .before_break_ends => .{ .before_break_ends = rule.value },
         _ => return .conflict,
     };
     h.store.putAlarmRule(.{ .id = id(rule.id), .trigger = trigger, .enabled = rule.enabled != 0 }, now) catch |e| return result(e);
@@ -243,6 +306,81 @@ export fn shifty_put_alarm_rule(h: *Handle, rule: AlarmRule, now: i64) Result {
 
 export fn shifty_delete_alarm_rule(h: *Handle, rule_id: Id, now: i64) Result {
     h.store.deleteAlarmRule(id(rule_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+// ── Break presets ───────────────────────────────────────────────────────────
+
+/// A break preset in `shifty_break_presets_json`.
+const PresetJson = struct {
+    id: Uuid,
+    name: []const u8,
+    kind: PresetKind,
+    enabled: bool,
+    weekdays: i64,
+    start_secs: ?i64 = null,
+    end_secs: ?i64 = null,
+    earliest_secs: ?i64 = null,
+    latest_secs: ?i64 = null,
+    minimum_secs: ?i64 = null,
+};
+
+/// Writes the break presets, windows first, as a UTF-8 JSON array into a new
+/// buffer; release it with `shifty_free`.
+export fn shifty_break_presets_json(h: *Handle, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const presets = h.store.breakPresets(a) catch |e| return result(e);
+    const rows = a.alloc(PresetJson, presets.len) catch return .no_memory;
+    for (presets, rows) |p, *r| {
+        r.* = .{ .id = p.id, .name = p.name, .kind = .scheduled, .enabled = p.enabled, .weekdays = p.weekdays };
+        switch (p.rule) {
+            .scheduled => |t| {
+                r.start_secs = t.start_secs;
+                r.end_secs = t.end_secs;
+            },
+            .window => |w| {
+                r.kind = .window;
+                r.earliest_secs = w.earliest_secs;
+                r.latest_secs = w.latest_secs;
+                r.minimum_secs = w.minimum_secs;
+            },
+        }
+    }
+    const json = std.json.Stringify.valueAlloc(gpa, rows, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
+/// Creates or replaces a break preset. `conflict` if its times don't make
+/// sense.
+export fn shifty_put_break_preset(h: *Handle, preset: BreakPreset, name: [*:0]const u8, now: i64) Result {
+    const rule: store.BreakPreset.Rule = switch (preset.kind) {
+        .scheduled => .{ .scheduled = .{ .start_secs = preset.start_secs, .end_secs = preset.end_secs } },
+        .window => .{ .window = .{
+            .earliest_secs = preset.earliest_secs,
+            .latest_secs = preset.latest_secs,
+            .minimum_secs = preset.minimum_secs,
+        } },
+        _ => return .conflict,
+    };
+    h.store.putBreakPreset(.{
+        .id = id(preset.id),
+        .name = std.mem.span(name),
+        .weekdays = std.math.cast(u7, preset.weekdays) orelse return .conflict,
+        .enabled = preset.enabled != 0,
+        .rule = rule,
+    }, now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Deletes a break preset and its alarms.
+export fn shifty_delete_break_preset(h: *Handle, preset_id: Id, now: i64) Result {
+    h.store.deleteBreakPreset(id(preset_id), now) catch |e| return result(e);
     return .ok;
 }
 
@@ -435,8 +573,8 @@ test "C API - shift, breaks, alarms, settings" {
     var shift: Shift = undefined;
     try testing.expectEqual(Result.none, shifty_current_shift(s, &shift));
     var shift_id: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_start_shift(s, 1000, 8 * 3600, &shift_id));
-    try testing.expectEqual(Result.conflict, shifty_start_shift(s, 1000, 8 * 3600, &shift_id));
+    try testing.expectEqual(Result.ok, shifty_start_shift(s, 1000, 8 * 3600, 0, &shift_id));
+    try testing.expectEqual(Result.conflict, shifty_start_shift(s, 1000, 8 * 3600, 0, &shift_id));
     try testing.expectEqual(Result.ok, shifty_edit_shift(s, shift_id, 900, 7 * 3600, 1001));
     try testing.expectEqual(Result.ok, shifty_current_shift(s, &shift));
     try testing.expectEqual(900, shift.in_ts);
@@ -451,7 +589,7 @@ test "C API - shift, breaks, alarms, settings" {
     try testing.expectEqual(Result.ok, shifty_breaks(s, shift_id, &brks, 1, &n));
     try testing.expectEqual(1, brks[0].running);
 
-    const rule: AlarmRule = .{ .id = .{ .bytes = @splat(9) }, .kind = .at_time, .enabled = 1, .value = 3600 };
+    const rule: AlarmRule = .{ .id = .{ .bytes = @splat(9) }, .kind = .at_time, .enabled = 1, .value = 3600, .preset_id = no_id };
     try testing.expectEqual(Result.ok, shifty_put_alarm_rule(s, rule, 0));
     var rules: [2]AlarmRule = undefined;
     try testing.expectEqual(Result.ok, shifty_alarm_rules(s, &rules, 2, &n));
@@ -522,7 +660,7 @@ test "C API - shifts on the timesheet" {
     try testing.expectEqual(Result.ok, shifty_put_break(s, lunch, past, 3 * 3600, 3 * 3600 + 1800, 0, 0));
     try testing.expectEqual(Result.ok, shifty_set_shift_times(s, past, 1800, 7 * 3600, 0));
     var open: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_start_shift(s, 10 * 3600, 8 * 3600, &open));
+    try testing.expectEqual(Result.ok, shifty_start_shift(s, 10 * 3600, 8 * 3600, 0, &open));
     try testing.expectEqual(Result.not_found, shifty_set_shift_times(s, open, 10 * 3600, 11 * 3600, 0));
 
     var ptr: ?[*]u8 = null;
@@ -606,4 +744,77 @@ test "C API - start and stop tracking" {
 
     try testing.expectEqual(Result.ok, shifty_stop_entry(s, 3000));
     try testing.expectEqual(Result.none, shifty_stop_entry(s, 3001));
+}
+
+test "C API - break presets" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    const class: BreakPreset = .{
+        .id = .{ .bytes = @splat(3) },
+        .kind = .scheduled,
+        .enabled = 1,
+        .weekdays = 0b1111111,
+        .start_secs = 11 * 3600,
+        .end_secs = 14 * 3600,
+        .earliest_secs = 0,
+        .latest_secs = 0,
+        .minimum_secs = 0,
+    };
+    try testing.expectEqual(Result.ok, shifty_put_break_preset(s, class, "Class", 0));
+    var bad = class;
+    bad.end_secs = 10 * 3600;
+    try testing.expectEqual(Result.conflict, shifty_put_break_preset(s, bad, "Class", 0));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_break_presets_json(s, &ptr, &len));
+    const Parsed = []const struct {
+        id: []const u8,
+        name: []const u8,
+        kind: PresetKind,
+        enabled: bool,
+        weekdays: i64,
+        start_secs: ?i64,
+        earliest_secs: ?i64,
+    };
+    {
+        defer shifty_free(ptr, len);
+        const parsed = try std.json.parseFromSlice(Parsed, testing.allocator, ptr.?[0..len], .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        try testing.expectEqual(2, parsed.value.len);
+        try testing.expectEqualStrings("Lunch", parsed.value[0].name);
+        try testing.expectEqual(PresetKind.window, parsed.value[0].kind);
+        try testing.expectEqual(3 * 3600, parsed.value[0].earliest_secs.?);
+        try testing.expectEqualStrings("Class", parsed.value[1].name);
+        try testing.expectEqual(11 * 3600, parsed.value[1].start_secs.?);
+        try testing.expectEqual(null, parsed.value[1].earliest_secs);
+    }
+
+    // Every day, so whatever the zone, clocking in at 9 local gets class.
+    var day: i64 = std.time.s_per_day * 30;
+    day -= local.utcOffset(day);
+    var brks: [2]Interval = undefined;
+    var n: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_scheduled_breaks(s, day + 9 * 3600, 8 * 3600, &brks, 2, &n));
+    try testing.expectEqual(1, n);
+    try testing.expectEqual(day + 11 * 3600, brks[0].in_ts);
+
+    var shift_id: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_shift(s, day + 9 * 3600, 8 * 3600, 1, &shift_id));
+    var stored: [2]Break = undefined;
+    try testing.expectEqual(Result.ok, shifty_breaks(s, shift_id, &stored, 2, &n));
+    try testing.expectEqual(1, n);
+
+    const rule: AlarmRule = .{ .id = .{ .bytes = @splat(4) }, .kind = .before_break, .enabled = 1, .value = 10, .preset_id = no_id };
+    try testing.expectEqual(Result.ok, shifty_put_alarm_rule(s, rule, 0));
+    var rules: [1]AlarmRule = undefined;
+    try testing.expectEqual(Result.ok, shifty_alarm_rules(s, &rules, 1, &n));
+    try testing.expectEqual(AlarmKind.before_break, rules[0].kind);
+    try testing.expectEqual(10, rules[0].value);
+
+    try testing.expectEqual(Result.ok, shifty_delete_break_preset(s, class.id, 1));
+    try testing.expectEqual(Result.not_found, shifty_delete_break_preset(s, class.id, 1));
 }
