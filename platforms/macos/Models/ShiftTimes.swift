@@ -88,8 +88,7 @@ enum ShiftSummary {
     func fraction(_ date: Date) -> Double {
       min(max(date.timeIntervalSince(clockIn) / total, 0), 1)
     }
-    let span = fraction(plan.opens)...fraction(plan.closes)
-    return span.upperBound > span.lowerBound ? span : nil
+    return span(fraction(plan.opens), fraction(plan.closes))
   }
 
   /// The break that was lunch as fractions of the shift, once you've
@@ -102,8 +101,15 @@ enum ShiftSummary {
     func fraction(_ date: Date) -> Double {
       min(max(date.timeIntervalSince(clockIn) / total, 0), 1)
     }
-    let span = fraction(lunch.start)...fraction(lunch.end ?? now)
-    return span.upperBound > span.lowerBound ? span : nil
+    // `now` may be a moment before the break began: a TimelineView draws
+    // with its last tick's date, and starting a break redraws at once.
+    return span(fraction(lunch.start), fraction(lunch.end ?? now))
+  }
+
+  /// `lower...upper`, or nil if it'd be empty or backwards. Building a
+  /// backwards ClosedRange traps.
+  private static func span(_ lower: Double, _ upper: Double) -> ClosedRange<Double>? {
+    upper > lower ? lower...upper : nil
   }
 
   /// Total break time inside the shift, in seconds.
