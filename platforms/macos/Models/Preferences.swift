@@ -67,6 +67,32 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
   }
 
+  /// Where you clock in, if it isn't the clock-out link. Shared through the
+  /// store like that one.
+  var separateClockInLink: URL? {
+    didSet { if !loading { save(Self.clockInLinkSetting, separateClockInLink?.absoluteString) } }
+  }
+
+  /// What Clock In in the menu bar opens: its own link, else the clock-out
+  /// link.
+  var clockInLink: URL? { separateClockInLink ?? clockOutLink }
+
+  /// Whether Clock In and Clock Out in the menu bar open the link too. Kept
+  /// on this Mac.
+  var clockLinkMode: ClockLinkMode {
+    didSet { defaults.set(clockLinkMode.rawValue, forKey: Self.clockLinkModeKey) }
+  }
+
+  /// What to do with the link after clocking in or out from the menu bar.
+  func clockLinkAction(clockingIn: Bool) -> ClockLinkAction {
+    guard let link = clockingIn ? clockInLink : clockOutLink else { return .none }
+    switch clockLinkMode {
+    case .ask: return .ask(link)
+    case .always: return .open(link)
+    case .never: return .none
+    }
+  }
+
   /// The days you work, as ISO weekdays (1 is Monday, 7 Sunday). The
   /// timesheet hides the others unless there's time on them.
   var workDays: Set<Int> {
@@ -99,6 +125,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let menuBarDisplayKey = "menuBarDisplay"
   static let clockOutLinkKey = "clockOutLink"
   static let clockOutLinkSetting = "clock_out_link"
+  static let clockInLinkSetting = "clock_in_link"
+  static let clockLinkModeKey = "clockLinkMode"
   static let migratedKey = "clockOutLink.migratedToStore"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
@@ -112,6 +140,10 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     lunch = LunchRule()
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
+    clockLinkMode =
+      defaults.string(forKey: Self.clockLinkModeKey).flatMap(ClockLinkMode.init) ?? .ask
+    separateClockInLink = Self.load(Self.clockInLinkSetting, store: store, defaults: defaults)
+      .flatMap(Self.link(from:))
 
     let saved = defaults.string(forKey: Self.clockOutLinkKey)
     guard let store else {
@@ -141,6 +173,13 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     let days = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
       .flatMap(Self.workDays(from:)) ?? Self.everyDay
     if days != workDays { workDays = days }
+    let inLink = Self.load(Self.clockInLinkSetting, store: store, defaults: defaults)
+      .flatMap(Self.link(from:))
+    if inLink != separateClockInLink {
+      loading = true
+      separateClockInLink = inLink
+      loading = false
+    }
     loadPresets()
     do {
       let link = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
@@ -273,4 +312,25 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
     return url
   }
+}
+
+/// Whether clocking in or out from the menu bar opens the clock link.
+enum ClockLinkMode: String, CaseIterable, Identifiable {
+  case ask, always, never
+
+  var id: Self { self }
+
+  var label: String {
+    switch self {
+    case .ask: "Ask first"
+    case .always: "Always"
+    case .never: "Never"
+    }
+  }
+}
+
+enum ClockLinkAction: Equatable {
+  case none
+  case ask(URL)
+  case open(URL)
 }

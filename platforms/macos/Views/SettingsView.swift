@@ -70,15 +70,33 @@ struct SettingsView: View {
         Toggle(
           "Open at login",
           isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
-        LabeledContent("Clock-out link") {
-          HStack {
-            Text(preferences.clockOutLink?.absoluteString ?? "None")
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-              .truncationMode(.middle)
-            Button("Change…") { ClockOutLinkPrompt.run(preferences: preferences) }
+        LabeledContent(preferences.separateClockInLink == nil ? "Clock link" : "Clock-out link") {
+          LinkValue(link: preferences.clockOutLink) {
+            ClockLinkPrompt.run(.clockOut, preferences: preferences)
           }
         }
+        Toggle(
+          "Separate clock-in link",
+          isOn: Binding(
+            get: { preferences.separateClockInLink != nil },
+            set: { on in
+              if on {
+                ClockLinkPrompt.run(.clockIn, preferences: preferences)
+              } else {
+                preferences.separateClockInLink = nil
+              }
+            }))
+        if preferences.separateClockInLink != nil {
+          LabeledContent("Clock-in link") {
+            LinkValue(link: preferences.separateClockInLink) {
+              ClockLinkPrompt.run(.clockIn, preferences: preferences)
+            }
+          }
+        }
+        Picker("Open link when clocking in or out", selection: $preferences.clockLinkMode) {
+          ForEach(ClockLinkMode.allCases) { Text($0.label).tag($0) }
+        }
+        .disabled(preferences.clockOutLink == nil && preferences.separateClockInLink == nil)
       }
     }
     .formStyle(.grouped)
@@ -236,5 +254,21 @@ struct WeekdayPicker: View {
   static func symbol(_ iso: Int, calendar: Calendar, style: KeyPath<Calendar, [String]>) -> String {
     // Calendar symbols start on Sunday.
     calendar[keyPath: style][iso % 7]
+  }
+}
+
+/// A link setting's value and its Change… button.
+private struct LinkValue: View {
+  let link: URL?
+  let change: () -> Void
+
+  var body: some View {
+    HStack {
+      Text(link?.absoluteString ?? "None")
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+      Button("Change…", action: change)
+    }
   }
 }

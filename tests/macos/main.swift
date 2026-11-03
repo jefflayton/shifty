@@ -428,6 +428,43 @@ do {
   expectEqual(prefs.clockOutLink, URL(string: "https://tui.example"), "link set elsewhere")
 }
 
+do {
+  // Clocking in uses the clock-out link unless it has one of its own, and
+  // the menu bar asks before opening either until told otherwise.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let suite = "shifty-tests-\(UUID().uuidString)"
+  let defaults = UserDefaults(suiteName: suite)!
+  defer { defaults.removePersistentDomain(forName: suite) }
+  let store = try! ShiftStore(path: path)
+  let prefs = Preferences(defaults: defaults, store: store)
+  let out = URL(string: "https://example.com/out")!
+  let inn = URL(string: "https://example.com/in")!
+
+  check(prefs.clockInLink == nil, "no link, no clock-in link")
+  expectEqual(prefs.clockLinkAction(clockingIn: true), .none, "nothing to open")
+  prefs.clockOutLink = out
+  expectEqual(prefs.clockInLink, out, "falls back to the clock-out link")
+  expectEqual(prefs.clockLinkMode, .ask, "asks by default")
+  expectEqual(prefs.clockLinkAction(clockingIn: true), .ask(out))
+
+  prefs.separateClockInLink = inn
+  expectEqual(try! store.setting(Preferences.clockInLinkSetting), "https://example.com/in", "shared with the TUI and CLI")
+  expectEqual(Preferences(defaults: defaults, store: store).clockInLink, inn, "kept")
+  expectEqual(prefs.clockLinkAction(clockingIn: true), .ask(inn), "its own link")
+  expectEqual(prefs.clockLinkAction(clockingIn: false), .ask(out), "clocking out keeps its own")
+
+  prefs.clockLinkMode = .always
+  expectEqual(Preferences(defaults: defaults, store: store).clockLinkMode, .always, "mode kept")
+  expectEqual(prefs.clockLinkAction(clockingIn: false), .open(out))
+  prefs.clockLinkMode = .never
+  expectEqual(prefs.clockLinkAction(clockingIn: false), .none, "don't open")
+
+  try! ShiftStore(path: path).setSetting(Preferences.clockInLinkSetting, nil)
+  prefs.pull()
+  expectEqual(prefs.clockInLink, out, "cleared elsewhere, back to the clock-out link")
+}
+
 // MARK: Timesheet
 
 do {

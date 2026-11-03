@@ -66,7 +66,11 @@ rolls over to today, with today's [scheduled breaks](#scheduled-breaks) instead 
 Click **Clock In** to start tracking the shift for real. Once you're clocked in, from the menu
 bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
 up in the others within a couple of seconds. **Clock Out** ends it. Until you clock in, the
-popover is just a calculator. Alarm rules and the clock-out link are shared the same way.
+popover is just a calculator. Alarm rules and the clock links are shared the same way.
+
+With a [clock link](#alarms) set, **Clock In** and **Clock Out** also offer to open it, so you can
+punch your timeclock too. Choose **Always** or **Never** in Settings, or tick **Don't ask again**
+in the prompt.
 
 Under **Tracking**, pick the project you're working on to start a timer. Picking one while the
 timer has no project assigns it, time so far included; picking a different project stops the
@@ -80,7 +84,7 @@ Until then, the menu bar icon turns into a cup and clock out moves later as the 
 
 The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
 screen of Shifty's window: what the menu bar shows (clock-out time, time left, time until your
-next break, or just the icon), whether Shifty opens at login, the clock-out link, the days you
+next break, or just the icon), whether Shifty opens at login, the clock links, the days you
 work, the lunch window, and scheduled breaks.
 
 ### Scheduled breaks
@@ -132,8 +136,10 @@ until then. Set-time alarms still ring, so one can remind you when to come back.
 When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
 **Stop**. A notification is scheduled as a backup in case Shifty isn't running.
 
-To clock out from the alarm, set the clock-out link in **Settings…** to your timeclock page. Alarms
-then show a **Clock Out** button that opens it and stops the alarm.
+To clock out from the alarm, set the clock link in **Settings…** to your timeclock page. Alarms
+then show a **Clock Out** button that opens it and stops the alarm. If you clock in somewhere else,
+turn on **Separate clock-in link**; the TUI and CLI read it from the `clock_in_link` setting, and
+without it clocking in uses the clock-out link (`clock_out_link`).
 
 ### Timesheet and projects
 

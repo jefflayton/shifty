@@ -14,11 +14,13 @@ struct PopoverView: View {
   /// Opens the main window; nil without the store.
   let openTimesheet: (() -> Void)?
   let openSettings: () -> Void
+  /// After Clock In (true) or Clock Out from here, for the clock link.
+  let clocked: (Bool) -> Void
 
   init(
     updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
     tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil,
-    openSettings: @escaping () -> Void
+    openSettings: @escaping () -> Void, clocked: @escaping (Bool) -> Void = { _ in }
   ) {
     self.updater = updater
     self.model = model
@@ -27,6 +29,7 @@ struct PopoverView: View {
     self.tracking = tracking
     self.openTimesheet = openTimesheet
     self.openSettings = openSettings
+    self.clocked = clocked
 
     // Create our view model for our CheckForUpdatesView
     self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
@@ -40,13 +43,19 @@ struct PopoverView: View {
         // Without the store there's nothing to clock in to.
         if model.store != nil {
           if model.isClockedIn {
-            Button("Clock Out") { model.clockOutNow() }
+            Button("Clock Out") {
+              model.clockOutNow()
+              clocked(false)
+            }
               .buttonStyle(.borderless)
               .font(.subheadline)
               .foregroundStyle(.tint)
               .help("End the shift now; the TUI and CLI see it too")
           } else {
-            Button("Clock In") { model.clockInNow() }
+            Button("Clock In") {
+              model.clockInNow()
+              clocked(true)
+            }
               .buttonStyle(.borderless)
               .font(.subheadline)
               .foregroundStyle(.tint)
