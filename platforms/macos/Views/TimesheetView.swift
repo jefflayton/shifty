@@ -280,12 +280,8 @@ struct DaySection: View {
 
       if !empty {
         GroupedRows(minRowHeight: 38) {
-          DayTimeline(model: model, day: day, now: now)
-          ForEach(shifts) { shift in
-            ShiftRow(model: model, shift: shift, now: now)
-            ForEach(shift.breaks) { brk in
-              SheetBreakRow(model: model, shift: shift, brk: brk, now: now)
-            }
+          if !shifts.isEmpty {
+            ShiftBlock(model: model, day: day, shifts: shifts, now: now)
           }
           ForEach(entries) { entry in
             EntryRow(model: model, entry: entry, now: now)
@@ -510,8 +506,7 @@ struct WeekTotals: View {
         if worked > 0 {
           TotalsList(title: "Shifts") {
             FigureRow(name: "Worked", seconds: worked)
-            FigureRow(name: "On break", seconds: model.onBreak(now: now))
-            FigureRow(name: "Not tracked", seconds: model.untracked(now: now))
+            FigureRow(name: "Untracked", seconds: model.untracked(now: now))
               .help("Time on shift with no project entry")
           }
         }

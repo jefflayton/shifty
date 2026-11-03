@@ -115,10 +115,10 @@ then show a **Clock Out** button that opens it and stops the alarm.
 screens from its toolbar: Timesheet, Projects, and Settings.
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
-  by project inside the time you were on shift; click a day to jump to it. Each day has a
-  timeline of the shift (breaks as gaps) above the time tracked to projects, so time on shift
-  that no project has stands out. Edit clock in and out, breaks, and entries in place; **Clock
-  Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**.
+  by project inside the time you were on shift; click a day to jump to it. A day's shift sits
+  on top: clock in and out, time worked, and its breaks (click one to change it), over a timeline
+  where project time is laid on the shift, so time on shift that no project has shows as bare
+  shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**.
 - **Days you work**: pick them from the menu by the week's dates, or in Settings. Other days are
   hidden unless they have time on them.
 - **Projects**: rename a project by editing its name, click its color to pick another, and delete
