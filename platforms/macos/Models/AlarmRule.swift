@@ -12,6 +12,11 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     case lunchOpens
     /// Rings `minutes` before the lunch window closes.
     case beforeLunchCloses(minutes: Int)
+    /// Rings `minutes` before each break on the shift starts.
+    case beforeBreak(minutes: Int)
+    /// Rings `minutes` before each break on the shift ends; 0 rings when
+    /// it's over.
+    case beforeBreakEnds(minutes: Int)
   }
 
   var id = UUID()
@@ -19,9 +24,12 @@ struct AlarmRule: Identifiable, Codable, Equatable {
   var isEnabled = true
 
   /// When it rings on this shift. A lunch alarm doesn't ring without a
-  /// lunch window, or once you've had lunch (or are on a break).
+  /// lunch window, or once you've had lunch (or are on a break). A break
+  /// alarm rings for the next of `breaks` (on the clock, oldest first) still
+  /// to start or end before clock out, or not at all.
   func fireDate(
-    clockIn: Date, clockOut: Date, lunch: LunchPlan? = nil, calendar: Calendar = .current
+    clockIn: Date, clockOut: Date, lunch: LunchPlan? = nil,
+    breaks: [(start: Date, end: Date)] = [], now: Date = Date(), calendar: Calendar = .current
   ) -> Date? {
     switch trigger {
     case .beforeClockOut(let minutes):
@@ -34,13 +42,27 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     case .beforeLunchCloses(let minutes):
       guard let lunch, lunch.lunch == nil else { return nil }
       return lunch.closes.addingTimeInterval(-TimeInterval(minutes) * 60)
+    case .beforeBreak(let minutes):
+      let next = breaks.first { $0.start > now && $0.start < clockOut }
+      return next?.start.addingTimeInterval(-TimeInterval(minutes) * 60)
+    case .beforeBreakEnds(let minutes):
+      let next = breaks.first { $0.end > now && $0.start < clockOut }
+      return next?.end.addingTimeInterval(-TimeInterval(minutes) * 60)
     }
   }
 
   var isLunch: Bool {
     switch trigger {
     case .lunchOpens, .beforeLunchCloses: true
-    case .beforeClockOut, .atTime: false
+    case .beforeClockOut, .atTime, .beforeBreak, .beforeBreakEnds: false
+    }
+  }
+
+  /// Whether it rings off the shift's breaks.
+  var isBreak: Bool {
+    switch trigger {
+    case .beforeBreak, .beforeBreakEnds: true
+    case .beforeClockOut, .atTime, .lunchOpens, .beforeLunchCloses: false
     }
   }
 
@@ -58,6 +80,10 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     case .lunchOpens: "Time for lunch"
     case .beforeLunchCloses(0): "Lunch window closing"
     case .beforeLunchCloses(let minutes): "\(minutes) min left to start lunch"
+    case .beforeBreak(0): "Break time"
+    case .beforeBreak(let minutes): "\(minutes) min until break"
+    case .beforeBreakEnds(0): "Break's over"
+    case .beforeBreakEnds(let minutes): "\(minutes) min left on break"
     }
   }
 }

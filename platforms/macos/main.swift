@@ -14,7 +14,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
   lazy var mainWindow: MainWindow = {
-    let window = MainWindow(store: store, preferences: preferences, loginItem: loginItem)
+    let window = MainWindow(
+      store: store, preferences: preferences, loginItem: loginItem, shift: model)
     // A clock in or break moved on the timesheet: the popover reads it before
     // it saves its own copy over it.
     window.didChange = { [weak self] in
@@ -113,6 +114,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func checkStore() {
+    // A planned break, like a class, stops the timer when it begins.
+    if model.isClockedIn { tracking?.stopForBreaks(model.anchoredBreaks()) }
     guard let store, let version = try? store.dataVersion(), version != storeVersion else { return }
     storeVersion = version
     model.pull()

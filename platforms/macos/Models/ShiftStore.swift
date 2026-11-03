@@ -50,11 +50,21 @@ final class ShiftStore {
     return Shift(id: UUID(s.id), clockIn: date(s.in_ts), lengthSeconds: s.target_secs)
   }
 
-  /// Throws `SHIFTY_CONFLICT` if a shift is already open.
-  func startShift(at clockIn: Date, lengthSeconds: Int64) throws -> UUID {
+  /// Throws `SHIFTY_CONFLICT` if a shift is already open. With `presets`,
+  /// the day's scheduled breaks go on it, as when the TUI or CLI clocks in;
+  /// without, it starts empty for the caller to add its own.
+  func startShift(at clockIn: Date, lengthSeconds: Int64, presets: Bool = false) throws -> UUID {
     var id = ShiftyId()
-    try check(shifty_start_shift(handle, ts(clockIn), lengthSeconds, &id))
+    try check(shifty_start_shift(handle, ts(clockIn), lengthSeconds, presets ? 1 : 0, &id))
     return UUID(id)
+  }
+
+  /// The breaks the scheduled presets put on a shift clocking in at
+  /// `clockIn`.
+  func scheduledBreaks(at clockIn: Date, lengthSeconds: Int64) throws -> [(start: Date, end: Date)] {
+    try fill { buf, cap, count in
+      shifty_scheduled_breaks(handle, ts(clockIn), lengthSeconds, buf, cap, count)
+    }.map { (date($0.in_ts), date($0.out_ts)) }
   }
 
   func editShift(_ id: UUID, clockIn: Date, lengthSeconds: Int64, now: Date = Date()) throws {
@@ -82,6 +92,16 @@ final class ShiftStore {
   /// Deletes a shift and its breaks. Time tracked during it stays.
   func deleteShift(_ id: UUID, now: Date = Date()) throws {
     try check(shifty_delete_shift(handle, ShiftyId(id), ts(now)))
+  }
+
+  /// Stops the running entry where a planned break began after it started.
+  /// Returns whether one was stopped.
+  @discardableResult
+  func stopForBreaks(now: Date = Date()) throws -> Bool {
+    let result = shifty_stop_for_breaks(handle, ts(now))
+    if result == SHIFTY_NONE { return false }
+    try check(result)
+    return true
   }
 
   /// Whether a shift nobody clocked out of was closed.
@@ -123,6 +143,36 @@ final class ShiftStore {
 
   func deleteAlarmRule(_ id: UUID, now: Date = Date()) throws {
     try check(shifty_delete_alarm_rule(handle, ShiftyId(id), ts(now)))
+  }
+
+  /// A break preset as the store keeps it. Times are nil where they don't
+  /// apply to its kind.
+  struct Preset: Decodable, Equatable {
+    var id: UUID
+    var name: String
+    /// "scheduled" or "window".
+    var kind: String
+    var enabled: Bool
+    var weekdays: Int
+    var startSecs: Int64?
+    var endSecs: Int64?
+    var earliestSecs: Int64?
+    var latestSecs: Int64?
+    var minimumSecs: Int64?
+  }
+
+  /// Break presets, windows (lunch) first.
+  func breakPresets() throws -> [Preset] {
+    try json([Preset]()) { shifty_break_presets_json(handle, $0, $1) }
+  }
+
+  func putBreakPreset(_ preset: ShiftyBreakPreset, name: String, now: Date = Date()) throws {
+    try check(shifty_put_break_preset(handle, preset, name, ts(now)))
+  }
+
+  /// Deletes a break preset and its alarms.
+  func deleteBreakPreset(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_break_preset(handle, ShiftyId(id), ts(now)))
   }
 
   func setting(_ key: String) throws -> String? {

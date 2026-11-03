@@ -61,7 +61,7 @@ timesheet window. Set `SHIFTY_DB` to a scratch path to keep a dev build off your
 
 Set your shift length, clock-in time (**Now** sets it to the current time), and breaks; Shifty shows
 when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
-rolls over to today without its breaks.
+rolls over to today, with today's [scheduled breaks](#scheduled-breaks) instead of yesterday's.
 
 Click **Clock In** to start tracking the shift for real. Once you're clocked in, from the menu
 bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
@@ -71,19 +71,39 @@ popover is just a calculator. Alarm rules and the clock-out link are shared the 
 Under **Tracking**, pick the project you're working on to start a timer. Picking one while the
 timer has no project assigns it, time so far included; picking a different project stops the
 timer and starts a new one, so earlier time stays with its project. **Stop** stops it. It's the
-same timer as `shifty start` and the TUI's, and a break or clock out stops it.
+same timer as `shifty start` and the TUI's, and a break or clock out stops it. A planned break,
+like a [scheduled one](#scheduled-breaks), stops it where the break begins, even if no Shifty was
+open then; a timer you start during the break keeps running.
 
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
 The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
-screen of Shifty's window: what the menu bar shows (clock-out time, time left, or just the icon), whether Shifty
-opens at login, the clock-out link, the days you work, and the lunch window.
+screen of Shifty's window: what the menu bar shows (clock-out time, time left, time until your
+next break, or just the icon), whether Shifty opens at login, the clock-out link, the days you
+work, the lunch window, and scheduled breaks.
+
+### Scheduled breaks
+
+For a break at the same time on the same days, like a class on Tuesdays and Thursdays from 11 to
+2, add it under **Scheduled Breaks** in Settings: a name, the days, and the times. When a new day's
+shift starts (the popover rolling over to today, the TUI's clock in, or `shifty in`), it goes on
+the shift as an ordinary break and pushes clock out later. To skip or move it for one day, edit or
+remove that break in the popover or on the timesheet. A break that would start after clock out
+isn't added, and one already underway when you clock in counts from clock in. Changes apply from
+the next day's shift; to put one on today's shift too, click **Add to Today** beside it (shown
+while it fits: it's for today, isn't over, and doesn't overlap a break you already have).
+
+With **Time Until Break** in the menu bar, Shifty counts down to the next break, then to the end
+of the one you're on; with no break left, it shows the time left. During a planned break the icon
+turns into a cup, as it does for one you start yourself.
 
 ### Lunch window
 
 Some jobs require lunch within a window of work. In California, for example, a 30-minute meal
-break has to start before the end of the fifth hour. Turn on **Lunch window** in Settings and set
+break has to start before the end of the fifth hour. The lunch window is a break preset like a
+scheduled break, kept in the shared database, but it adds no break: it's what Shifty checks your
+breaks against. Turn on **Lunch window** in Settings and set
 when it opens and closes, counted in time worked (3h and 5h by default), and how long a break has
 to be to count as lunch (30 min). Shorter breaks before lunch push the window later.
 
@@ -101,6 +121,9 @@ Add alarms from the **+** next to *Alarms*:
 - **At clock out**, or **N min before clock out**: these follow your clock-out time, so adding an
   unexpected break moves them later, even re-arming one that already rang.
 - **At a set time**: a fixed time of day during your shift.
+- **N min before a break**, or **When a break ends** (or N min before): these ring for each
+  planned break on your shift, like a [scheduled one](#scheduled-breaks), so you leave for class
+  on time and know when you're due back.
 - **When lunch opens**, or **N min before lunch closes**: see [Lunch window](#lunch-window).
 
 During a break, alarms that follow clock out wait for it to end, since clock out isn't known
@@ -121,7 +144,9 @@ screens from its toolbar: Timesheet, Projects, and Settings.
   by project inside the time you were on shift; click a day to jump to it. A day's shift sits
   on top: clock in and out, time worked, and its breaks (click one to change it), over a timeline
   where project time is laid on the shift, so time on shift that no project has shows as bare
-  shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**.
+  shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**. Click
+  a day's header to fold it down to its total (Option-click folds or opens every day); clicking a
+  day in the strip opens it.
 - **Days you work**: pick them from the menu by the week's dates, or in Settings. Other days are
   hidden unless they have time on them.
 - **Projects**: rename a project by editing its name, click its color to pick another, and delete
@@ -154,7 +179,8 @@ frontend shares: `~/Library/Application Support/Shifty/shifty.db` on macOS,
 
 ```
 status                     What's running: shift, break, timer
-in [-s <time>] [-l <len>]  Clock in (default: now, 8h)
+in [-s <time>] [-l <len>]  Clock in (default: now, 8h), with the
+                           day's scheduled breaks
 out                        Clock out
 break                      Start or end a break
 start [<project>[/<workspace>]] [-n <note>]

@@ -4,6 +4,9 @@
 import Foundation
 
 NSTimeZone.default = TimeZone(identifier: "UTC")!
+// The store's local time (scheduled breaks) comes from libc.
+setenv("TZ", "UTC", 1)
+tzset()
 var cal = Calendar(identifier: .gregorian)
 cal.timeZone = TimeZone(identifier: "UTC")!
 
@@ -398,7 +401,7 @@ do {
   check(again.alarms.isEmpty, "deleted rules don't come back from the old copy")
 
   let rule = AlarmRule(trigger: .atTime(at(16, 45)))
-  expectEqual(AlarmRule(storeRow: rule.storeRow, calendar: cal).fireDate(clockIn: at(9), clockOut: at(17), calendar: cal), at(16, 45), "set time round-trips by time of day")
+  expectEqual(AlarmRule(storeRow: rule.storeRow(), calendar: cal).fireDate(clockIn: at(9), clockOut: at(17), calendar: cal), at(16, 45), "set time round-trips by time of day")
 }
 
 do {
@@ -647,11 +650,11 @@ do {
   check(opens.isLunch && !AlarmRule(trigger: .atTime(at(12))).isLunch, "lunch kinds")
   for rule in [opens, closing] {
     check(
-      AlarmRule.sameRule(AlarmRule(storeRow: rule.storeRow, calendar: cal), rule),
+      AlarmRule.sameRule(AlarmRule(storeRow: rule.storeRow(), calendar: cal), rule),
       "\(rule.trigger) round-trips through the store")
   }
   expectEqual(LunchRule().quietReason(nil), "Lunch off")
-  expectEqual(rule.quietReason(nil), "No lunch needed")
+  expectEqual(rule.quietReason(nil), "Not needed")
   expectEqual(rule.quietReason(ate), "Had lunch")
 
   let late = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(14, 30), at(15))], now: at(16))!
@@ -839,6 +842,204 @@ do {
   model.clockInTime = at(9)
   model.startBreak(now: at(12))
   check(model.lunch(rule, now: stale) != nil, "planning with a stale now is fine")
+}
+
+// MARK: Break presets
+
+do {
+  // Scheduled breaks live in the store, beside the lunch window.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let prefs = Preferences(defaults: defaults, store: store)
+  check(prefs.scheduledBreaks.isEmpty, "none by default")
+  check(!prefs.lunch.isEnabled, "lunch off by default")
+
+  // Class on Tuesdays and Thursdays, 11 to 2.
+  var cls = ScheduledBreak(name: "Class", weekdays: [2, 4], start: 11 * 3600, end: 14 * 3600)
+  prefs.scheduledBreaks.append(cls)
+  prefs.lunch.isEnabled = true
+  let again = Preferences(defaults: defaults, store: store)
+  expectEqual(again.scheduledBreaks, [cls], "saved")
+  check(again.lunch.isEnabled, "lunch is a preset beside it")
+  expectEqual(try! store.breakPresets().map(\.name), ["Lunch", "Class"])
+
+  cls.end = 13 * 3600
+  again.scheduledBreaks[0] = cls
+  prefs.pull()
+  expectEqual(prefs.scheduledBreaks.first?.end, 13 * 3600, "edits picked up elsewhere")
+
+  // An invalid one isn't saved until it's fixed.
+  var bad = ScheduledBreak(name: "Oops", weekdays: [2], start: 15 * 3600, end: 14 * 3600)
+  prefs.scheduledBreaks.append(bad)
+  expectEqual(try! store.breakPresets().count, 2, "invalid not saved")
+  bad.end = 16 * 3600
+  prefs.scheduledBreaks[1] = bad
+  expectEqual(try! store.breakPresets().count, 3, "saved once valid")
+  prefs.scheduledBreaks.removeAll { $0.id == bad.id }
+  expectEqual(try! store.breakPresets().count, 2, "deleted")
+
+  // Thursday Oct 29: a draft rolling to a new day gets class.
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9, day: -1)
+  m.breaks = [brk(at(12, day: -1), at(13, day: -1))]
+  m.rollOverIfStale(now: at(8, day: 1), calendar: cal)
+  expectEqual(m.clockInTime, at(9, day: 1))
+  expectEqual(m.breaks.map(\.inDate), [at(11, day: 1)], "class instead of yesterday's breaks")
+  expectEqual(m.breaks.map(\.outDate), [at(13, day: 1)])
+  expectEqual(m.clockOut(now: at(8, day: 1)), at(19, day: 1), "class pushes clock out")
+
+  // Clocking in from the menu bar brings the draft's breaks, not a second
+  // copy of class.
+  m.clockInNow(now: at(9, day: 1))
+  let shift = try! store.currentShift()!
+  expectEqual(try! store.breaks(of: shift.id).count, 1, "class once")
+
+  // Friday: no class.
+  m.clockOutNow(now: at(19, day: 1))
+  m.rollOverIfStale(now: at(8, day: 2), calendar: cal)
+  check(m.breaks.isEmpty, "no class on Friday")
+}
+
+do {
+  // The next break, for the menu bar and alarms.
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  m.breaks = [brk(at(15), at(15, 15)), brk(at(11), at(14))]
+  expectEqual(m.untilBreak(now: at(10)), at(11), "counts to the next break")
+  expectEqual(m.untilBreak(now: at(12)), at(14), "on one, counts to when it's over")
+  check(m.isInPlannedBreak(now: at(12)), "in a planned break")
+  check(!m.isInPlannedBreak(now: at(14, 30)), "between breaks")
+  expectEqual(m.untilBreak(now: at(14, 30)), at(15))
+  check(m.untilBreak(now: at(16)) == nil, "none left")
+
+  let d = MenuBarDisplay.untilBreak
+  expectEqual(d.title(clockOut: at(20, 15), now: at(10), nextBreak: at(11)), "1h 0m")
+  expectEqual(d.title(clockOut: at(20, 15), now: at(16), nextBreak: nil), "4h 15m", "falls back to time left")
+  check(d.title(clockOut: at(20, 15), now: at(21), nextBreak: nil) == nil, "nothing after the shift")
+
+  // Break alarms ring off the next break, before it starts or ends.
+  let spans = m.anchoredBreaks()
+  let before = AlarmRule(trigger: .beforeBreak(minutes: 10))
+  let back = AlarmRule(trigger: .beforeBreakEnds(minutes: 0))
+  expectEqual(before.fireDate(clockIn: at(9), clockOut: at(20, 15), breaks: spans, now: at(10)), at(10, 50))
+  expectEqual(before.fireDate(clockIn: at(9), clockOut: at(20, 15), breaks: spans, now: at(12)), at(14, 50), "then the next one")
+  expectEqual(back.fireDate(clockIn: at(9), clockOut: at(20, 15), breaks: spans, now: at(10)), at(14))
+  check(before.fireDate(clockIn: at(9), clockOut: at(20, 15), breaks: spans, now: at(16)) == nil, "no break ahead")
+  check(before.isBreak && back.isBreak && !before.isLunch, "break kinds")
+  expectEqual(before.title, "10 min until break")
+  expectEqual(back.title, "Break's over")
+
+  // They round-trip through the store, and so do lunch alarms.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let model = ShiftModel()
+  model.store = store
+  model.alarms = [before, back, AlarmRule(trigger: .lunchOpens), AlarmRule(trigger: .beforeLunchCloses(minutes: 15))]
+  model.push(now: at(9))
+  let rows = try! store.alarmRules()
+  expectEqual(rows.count, 4, "all saved")
+  let lunchID = try! store.breakPresets().first!.id
+  expectEqual(rows.filter { UUID($0.preset_id) == lunchID }.count, 2, "lunch alarms name the lunch window")
+  let pulled = ShiftModel()
+  pulled.store = store
+  pulled.pull()
+  check(pulled.alarms.elementsEqual(model.alarms, by: AlarmRule.sameRule), "round trip")
+}
+
+do {
+  // A scheduled break made today can be added to today's shift by hand.
+  // Wednesday Oct 28, 9 to 5.
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  let today = ScheduledBreak(name: "Class", weekdays: [3], start: 14 * 3600, end: 15 * 3600)
+  let added = m.todayBreak(for: today, now: at(10), calendar: cal)
+  expectEqual(added?.inDate, at(14), "today's times")
+  expectEqual(added?.outDate, at(15))
+
+  var tomorrow = today
+  tomorrow.weekdays = [4]
+  check(m.todayBreak(for: tomorrow, now: at(10), calendar: cal) == nil, "not today's weekday")
+  var off = today
+  off.isEnabled = false
+  check(m.todayBreak(for: off, now: at(10), calendar: cal) == nil, "turned off")
+  check(m.todayBreak(for: today, now: at(15, 30), calendar: cal) == nil, "already over")
+  var early = today
+  early.start = 8 * 3600
+  early.end = 10 * 3600
+  expectEqual(m.todayBreak(for: early, now: at(9, 30), calendar: cal)?.inDate, at(9), "cut to clock in")
+  var late = today
+  late.start = 18 * 3600
+  late.end = 19 * 3600
+  check(m.todayBreak(for: late, now: at(10), calendar: cal) == nil, "after clock out")
+  check(m.todayBreak(for: today, now: at(10, day: 1), calendar: cal) == nil, "the shift isn't today's")
+
+  check(m.addToday(today, now: at(10), calendar: cal), "added")
+  expectEqual(m.breaks.map(\.inDate), [at(14)])
+  check(m.todayBreak(for: today, now: at(10), calendar: cal) == nil, "not twice")
+  check(!m.addToday(today, now: at(10), calendar: cal), "second add does nothing")
+  var overlapping = today
+  overlapping.start = 14.5 * 3600
+  overlapping.end = 16 * 3600
+  check(m.todayBreak(for: overlapping, now: at(10), calendar: cal) == nil, "overlaps a break")
+  m.startBreak(now: at(16, 30))
+  var during = today
+  during.start = 16 * 3600
+  during.end = 17 * 3600
+  check(m.todayBreak(for: during, now: at(16, 40), calendar: cal) == nil, "overlaps the break you're on")
+}
+
+do {
+  // A planned break stops the timer where it begins.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9)
+  m.breaks = [brk(at(11), at(14))]
+  m.clockInNow(now: at(9))
+  let tracking = TrackingModel(store: store)
+  var changed = 0
+  tracking.didChange = { changed += 1 }
+  try! store.startEntry(project: nil, workspace: nil, now: at(9))
+  tracking.reload(now: at(9))
+
+  tracking.stopForBreaks(m.anchoredBreaks(), now: at(10))
+  check(tracking.running != nil, "still working before class")
+  expectEqual(changed, 0, "nothing written")
+  tracking.stopForBreaks(m.anchoredBreaks(), now: at(11, 1))
+  check(tracking.running == nil, "stopped for class")
+  expectEqual(changed, 1, "the shift hears about it")
+  expectEqual(try! store.timesheet(DateInterval(start: at(0), end: at(23))).entries.first?.end, at(11), "ended when class began")
+}
+
+do {
+  // Days fold down to their header, one at a time or all at once.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(9), end: at(10))
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(9, day: -1), end: at(10, day: -1))
+  t.reload()
+  check(!t.isCollapsed(at(0)), "open to start")
+  t.toggleCollapsed(at(0))
+  check(t.isCollapsed(at(0)), "folded")
+  check(!t.isCollapsed(at(0, day: -1)), "only that day")
+  t.toggleCollapsed(at(0, day: -1), all: true)
+  check(t.isCollapsed(at(0)) && t.isCollapsed(at(0, day: -1)), "all folded")
+  check(!t.isCollapsed(at(0, day: 1)), "a day with nothing on it has nothing to fold")
+  t.toggleCollapsed(at(0), all: true)
+  check(!t.isCollapsed(at(0)) && !t.isCollapsed(at(0, day: -1)), "all open")
+  t.toggleCollapsed(at(0))
+  t.expand(at(0))
+  check(!t.isCollapsed(at(0)), "opened to jump to it")
 }
 
 print("\(count - failures)/\(count) checks passed")

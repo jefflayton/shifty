@@ -30,6 +30,23 @@ import Observation
     }
   }
 
+  /// Stops the timer where a planned break (like a class) began, once one
+  /// has, as Start Break does. `breaks` are the shift's, on the clock. Only
+  /// writes when there's something to stop.
+  func stopForBreaks(_ breaks: [(start: Date, end: Date)], now: Date = Date()) {
+    guard let running,
+      breaks.contains(where: { $0.start > running.start && $0.start <= now })
+    else { return }
+    do {
+      if try store.stopForBreaks(now: now) {
+        reload(now: now)
+        didChange?()
+      }
+    } catch {
+      log("stop for breaks:", error)
+    }
+  }
+
   func project(_ id: UUID) -> ShiftStore.Project? { projects.first { $0.id == id } }
   func rank(of project: UUID) -> Int? { projects.rank(of: project) }
 

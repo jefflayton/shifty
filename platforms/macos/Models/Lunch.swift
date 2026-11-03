@@ -44,7 +44,7 @@ struct LunchRule: Codable, Equatable {
   /// Why a lunch alarm won't ring on a shift with `plan`, for when it won't.
   func quietReason(_ plan: LunchPlan?) -> String {
     guard active != nil else { return "Lunch off" }
-    guard let plan else { return "No lunch needed" }
+    guard let plan else { return "Not needed" }
     return plan.lunch?.end == nil ? "On break" : "Had lunch"
   }
 

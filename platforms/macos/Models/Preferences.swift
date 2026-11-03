@@ -6,6 +6,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   case iconOnly
   case clockOut
   case timeLeft
+  case untilBreak
 
   var id: Self { self }
 
@@ -14,11 +15,14 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     case .iconOnly: "Icon Only"
     case .clockOut: "Clock-Out Time"
     case .timeLeft: "Time Left"
+    case .untilBreak: "Time Until Break"
     }
   }
 
   /// The text beside the icon, or nil for none. A finished shift shows none.
-  func title(clockOut: Date, now: Date) -> String? {
+  /// `nextBreak` is when the next break starts, or the one you're on ends;
+  /// without one, time until break shows the time left.
+  func title(clockOut: Date, now: Date, nextBreak: Date? = nil) -> String? {
     guard clockOut > now else { return nil }
     switch self {
     case .iconOnly:
@@ -27,6 +31,9 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
       return clockOut.formatted(date: .omitted, time: .shortened)
     case .timeLeft:
       return Self.compact(clockOut.timeIntervalSince(now))
+    case .untilBreak:
+      let next = nextBreak.flatMap { $0 > now ? $0 : nil } ?? clockOut
+      return Self.compact(next.timeIntervalSince(now))
     }
   }
 
@@ -66,13 +73,29 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { save(Self.workDaysSetting, Self.format(workDays)) }
   }
 
-  /// When to take lunch. Off until it's turned on.
+  /// When to take lunch. Off until it's turned on. With the store, it's the
+  /// window break preset; without, a setting.
   var lunch: LunchRule {
-    didSet { save(Self.lunchSetting, Self.format(lunch)) }
+    didSet { if lunch != oldValue && !loading { saveLunch() } }
   }
+
+  /// Breaks at set times on set days, put on each new day's shift. They
+  /// need the store.
+  var scheduledBreaks: [ScheduledBreak] = [] {
+    didSet {
+      if scheduledBreaks != oldValue && !loading { saveScheduled(was: oldValue) }
+    }
+  }
+
+  /// Whether there's a store to keep scheduled breaks in.
+  var hasStore: Bool { store != nil }
 
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private let store: ShiftStore?
+  /// The lunch window's preset in the store.
+  @ObservationIgnored private var lunchID: UUID?
+  /// Set while reading the store, so what was read isn't written back.
+  @ObservationIgnored private var loading = false
   static let menuBarDisplayKey = "menuBarDisplay"
   static let clockOutLinkKey = "clockOutLink"
   static let clockOutLinkSetting = "clock_out_link"
@@ -86,13 +109,13 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     self.store = store
     workDays = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
       .flatMap(Self.workDays(from:)) ?? Self.everyDay
-    lunch = Self.load(Self.lunchSetting, store: store, defaults: defaults)
-      .flatMap(Self.lunch(from:)) ?? LunchRule()
+    lunch = LunchRule()
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
 
     let saved = defaults.string(forKey: Self.clockOutLinkKey)
     guard let store else {
+      lunch = defaults.string(forKey: Self.lunchSetting).flatMap(Self.lunch(from:)) ?? LunchRule()
       clockOutLink = saved.flatMap(Self.link(from:))
       return
     }
@@ -109,6 +132,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
       log("load clock-out link:", error)
       clockOutLink = saved.flatMap(Self.link(from:))
     }
+    loadPresets()
   }
 
   /// Picks up settings changed from the TUI or CLI.
@@ -117,14 +141,62 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     let days = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
       .flatMap(Self.workDays(from:)) ?? Self.everyDay
     if days != workDays { workDays = days }
-    let rule = Self.load(Self.lunchSetting, store: store, defaults: defaults)
-      .flatMap(Self.lunch(from:)) ?? LunchRule()
-    if rule != lunch { lunch = rule }
+    loadPresets()
     do {
       let link = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
       if link != clockOutLink { clockOutLink = link }
     } catch {
       log("load clock-out link:", error)
+    }
+  }
+
+  /// Reads the lunch window and scheduled breaks from the store, assigning
+  /// only real changes.
+  private func loadPresets() {
+    guard let store else { return }
+    loading = true
+    defer { loading = false }
+    do {
+      let presets = try store.breakPresets()
+      let window = presets.first { $0.kind == "window" }
+      lunchID = window?.id
+      let rule = window.flatMap(BreakPresets.lunch) ?? LunchRule()
+      if rule != lunch { lunch = rule }
+      // Ones still being typed in (not valid yet) aren't in the store.
+      let stored = presets.compactMap(BreakPresets.scheduled)
+      let pending = scheduledBreaks.filter { !$0.isValid }
+      if stored + pending != scheduledBreaks { scheduledBreaks = stored + pending }
+    } catch {
+      log("load break presets:", error)
+    }
+  }
+
+  private func saveLunch() {
+    guard let store else {
+      return defaults.set(Self.format(lunch), forKey: Self.lunchSetting)
+    }
+    let id = lunchID ?? UUID()
+    do {
+      try store.putBreakPreset(BreakPresets.row(lunch, id: id), name: "Lunch")
+      lunchID = id
+    } catch {
+      log("save lunch:", error)
+    }
+  }
+
+  private func saveScheduled(was old: [ScheduledBreak]) {
+    guard let store else { return }
+    let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    do {
+      for brk in scheduledBreaks where brk.isValid && before[brk.id] != brk {
+        try store.putBreakPreset(BreakPresets.row(brk), name: brk.name)
+      }
+      let ids = Set(scheduledBreaks.filter(\.isValid).map(\.id))
+      for brk in old where brk.isValid && !ids.contains(brk.id) {
+        try store.deleteBreakPreset(brk.id)
+      }
+    } catch {
+      log("save scheduled breaks:", error)
     }
   }
 

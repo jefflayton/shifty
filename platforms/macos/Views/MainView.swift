@@ -24,6 +24,8 @@ struct MainView: View {
   let projects: ProjectsModel?
   let preferences: Preferences
   let loginItem: LoginItem
+  /// The menu bar's shift, for adding a scheduled break to it today.
+  let shift: ShiftModel?
   @Bindable var navigation: MainNavigation
 
   private var screens: [MainScreen] {
@@ -36,7 +38,7 @@ struct MainView: View {
       case .timesheet: timesheet.map { TimesheetView(model: $0) }
       case .projects: projects.map { ProjectsView(model: $0) }
       case .settings:
-        SettingsView(preferences: preferences, loginItem: loginItem)
+        SettingsView(preferences: preferences, loginItem: loginItem, shift: shift)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }

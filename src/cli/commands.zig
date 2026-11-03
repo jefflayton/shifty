@@ -20,7 +20,8 @@ const situ = @import("integrations").situ;
 pub const usage =
     \\Commands:
     \\  status                     What's running: shift, break, timer
-    \\  in [-s <time>] [-l <len>]  Clock in (default: now, 8h)
+    \\  in [-s <time>] [-l <len>]  Clock in (default: now, 8h), with the
+    \\                             day's scheduled breaks
     \\  out                        Clock out
     \\  break                      Start or end a break
     \\  start [<project>[/<workspace>]] [-n <note>]
@@ -157,14 +158,19 @@ fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
         at.utc_offset_secs = local.utcOffset(at.ts);
     }
 
-    _ = c.db.startShift(target, at) catch |e| switch (e) {
+    const shift_id = c.db.startShift(target, at) catch |e| switch (e) {
         error.Conflict => {
             const shift = (try c.db.currentShift(c.arena)).?;
             return c.fail("already on shift since {f}; `shifty out` first", .{clock(shift.in_ts, shift.utc_offset_secs)});
         },
         else => return e,
     };
-    try c.out.print("Clocked in at {f}. Clock out at {f}.\n", .{ clock(at.ts, at.utc_offset_secs), clock(at.ts + target, at.utc_offset_secs) });
+    // The day's break presets are on the shift now.
+    const shift = (try c.db.currentShift(c.arena)).?;
+    const brks = try c.db.breaks(c.arena, shift_id);
+    const out = store.clockOut(shift, brks, at.ts);
+    try c.out.print("Clocked in at {f}. Clock out at {f}.\n", .{ clock(at.ts, at.utc_offset_secs), clock(out, at.utc_offset_secs) });
+    for (brks) |b| try c.out.print("Break {f}-{f}.\n", .{ clock(b.in_ts, at.utc_offset_secs), clock(b.out_ts.?, at.utc_offset_secs) });
 }
 
 fn defaultShiftSecs(c: *Ctx) !i64 {

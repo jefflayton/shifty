@@ -84,11 +84,83 @@ import Observation
     if brk.isValid { breaks.append(brk) }
   }
 
+  /// The shift's breaks on the clock, start to end, oldest first; the one in
+  /// progress isn't one of them.
+  func anchoredBreaks() -> [(start: Date, end: Date)] {
+    breaks.filter(\.isValid)
+      .map { ShiftTimes.anchor($0, clockIn: clockInTime) }
+      .sorted { $0.start < $1.start }
+  }
+
+  /// When the next break starts or, during one planned with an end, when
+  /// it's over. nil once no break is left before clock out.
+  func untilBreak(now: Date) -> Date? {
+    let clockOut = clockOut(now: now)
+    for brk in anchoredBreaks() where brk.end > now && brk.start < clockOut {
+      return brk.start > now ? brk.start : brk.end
+    }
+    return nil
+  }
+
+  /// Whether `now` falls in a break planned with an end, like a class.
+  func isInPlannedBreak(now: Date) -> Bool {
+    anchoredBreaks().contains { $0.start <= now && now < $0.end }
+  }
+
+  /// The breaks the scheduled presets put on a shift clocking in at
+  /// `clockIn`.
+  func scheduledBreaks(clockIn: Date) -> [Interval] {
+    guard let store else { return [] }
+    do {
+      return try store.scheduledBreaks(at: clockIn, lengthSeconds: lengthSeconds)
+        .map { Interval(inDate: $0.start, outDate: $0.end) }
+    } catch {
+      log("scheduled breaks:", error)
+      return []
+    }
+  }
+
+  /// A scheduled break as it would go on this shift today, if it fits:
+  /// it's on, it's for the shift's weekday, the shift is today's (or still
+  /// going), it isn't over yet, it starts before clock out, and no break
+  /// already overlaps it. It counts from clock in, as when clocking in.
+  func todayBreak(for preset: ScheduledBreak, now: Date, calendar: Calendar = .current)
+    -> Interval?
+  {
+    guard preset.isEnabled, preset.isValid,
+      preset.weekdays.contains(Preferences.isoWeekday(clockInTime, calendar: calendar))
+    else { return nil }
+    let clockOut = clockOut(now: now)
+    guard calendar.isDate(clockInTime, inSameDayAs: now) || clockOut > now else { return nil }
+
+    let day = calendar.startOfDay(for: clockInTime)
+    let start = max(day.addingTimeInterval(preset.start), clockInTime)
+    let end = day.addingTimeInterval(preset.end)
+    guard end > now, end > start, start < clockOut else { return nil }
+
+    var taken = anchoredBreaks()
+    if let breakStart { taken.append((breakStart, .distantFuture)) }
+    guard !taken.contains(where: { $0.start < end && start < $0.end }) else { return nil }
+    return Interval(inDate: start, outDate: end)
+  }
+
+  /// Puts a scheduled break on this shift today, if it fits (see
+  /// `todayBreak`). Returns whether it did.
+  @discardableResult
+  func addToday(_ preset: ScheduledBreak, now: Date = Date(), calendar: Calendar = .current)
+    -> Bool
+  {
+    guard let brk = todayBreak(for: preset, now: now, calendar: calendar) else { return false }
+    breaks.append(brk)
+    return true
+  }
+
   /// The clock-in picker only edits hour and minute, so a menu bar app left
   /// running overnight would compute today's shift on yesterday's date and
   /// every alarm would already be in the past. Once a shift is stale, start
-  /// the next one at the same time of day today, without yesterday's breaks.
-  /// A clocked-in shift ends in the store first, at its clock out.
+  /// the next one at the same time of day today, with today's scheduled
+  /// breaks instead of yesterday's. A clocked-in shift ends in the store
+  /// first, at its clock out.
   func rollOverIfStale(now: Date = Date(), calendar: Calendar = .current) {
     if isClockedIn, let store, (try? store.closeStaleShift(now: now)) == true {
       shiftID = nil
@@ -101,7 +173,8 @@ import Observation
     let today = ShiftTimes.on(now, timeOf: clockInTime, calendar: calendar)
     // Only assign real changes: every set notifies observers.
     if today != clockInTime { clockInTime = today }
-    if !breaks.isEmpty { breaks = [] }
+    let planned = scheduledBreaks(clockIn: today)
+    if breaks != planned { breaks = planned }
   }
 
   // MARK: Clocking in and out
@@ -178,8 +251,12 @@ import Observation
   private func pushAlarms(_ store: ShiftStore, now: Date) throws {
     let stored = Dictionary(
       try store.alarmRules().map { (UUID($0.id), $0) }, uniquingKeysWith: { a, _ in a })
+    // Lunch alarms name the lunch window's preset.
+    let lunchID = alarms.contains(where: \.isLunch)
+      ? try store.breakPresets().first { $0.kind == "window" }?.id : nil
     for rule in alarms {
-      let row = rule.storeRow
+      if rule.isLunch && lunchID == nil { continue }
+      let row = rule.storeRow(lunchID: lunchID)
       if let old = stored[rule.id], old.kind == row.kind, old.value == row.value,
         old.enabled == row.enabled
       {
@@ -295,36 +372,36 @@ extension Date {
 }
 
 extension AlarmRule {
-  var storeRow: ShiftyAlarmRule {
-    switch trigger {
-    case .beforeClockOut(let minutes):
-      ShiftyAlarmRule(
-        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_BEFORE_CLOCK_OUT.rawValue),
-        enabled: isEnabled ? 1 : 0, value: Int64(minutes))
-    case .atTime(let time):
-      ShiftyAlarmRule(
-        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_AT_TIME.rawValue),
-        enabled: isEnabled ? 1 : 0, value: Int64(Self.secondsSinceMidnight(time)))
-    case .lunchOpens:
-      ShiftyAlarmRule(
-        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue),
-        enabled: isEnabled ? 1 : 0, value: 0)
-    case .beforeLunchCloses(let minutes):
-      ShiftyAlarmRule(
-        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue),
-        enabled: isEnabled ? 1 : 0, value: Int64(minutes))
-    }
+  /// The store's row. Lunch alarms need `lunchID`, the lunch window's
+  /// preset.
+  func storeRow(lunchID: UUID? = nil) -> ShiftyAlarmRule {
+    let (kind, value): (ShiftyAlarmKind, Int) =
+      switch trigger {
+      case .beforeClockOut(let minutes): (SHIFTY_ALARM_BEFORE_CLOCK_OUT, minutes)
+      case .atTime(let time): (SHIFTY_ALARM_AT_TIME, Self.secondsSinceMidnight(time))
+      case .lunchOpens: (SHIFTY_ALARM_WINDOW_OPENS, 0)
+      case .beforeLunchCloses(let minutes): (SHIFTY_ALARM_BEFORE_WINDOW_CLOSES, minutes)
+      case .beforeBreak(let minutes): (SHIFTY_ALARM_BEFORE_BREAK, minutes)
+      case .beforeBreakEnds(let minutes): (SHIFTY_ALARM_BEFORE_BREAK_ENDS, minutes)
+      }
+    return ShiftyAlarmRule(
+      id: ShiftyId(id), kind: Int32(kind.rawValue), enabled: isEnabled ? 1 : 0,
+      value: Int64(value), preset_id: isLunch ? lunchID.map(ShiftyId.init) ?? ShiftyId() : ShiftyId())
   }
 
+  /// A rule from the store. Window alarms are lunch alarms: lunch is the
+  /// only window.
   init(storeRow row: ShiftyAlarmRule, calendar: Calendar = .current) {
+    let minutes = Int(row.value)
     let trigger: Trigger =
       switch row.kind {
       case Int32(SHIFTY_ALARM_AT_TIME.rawValue):
         .atTime(calendar.startOfDay(for: Date()).addingTimeInterval(TimeInterval(row.value)))
-      case Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue): .lunchOpens
-      case Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue):
-        .beforeLunchCloses(minutes: Int(row.value))
-      default: .beforeClockOut(minutes: Int(row.value))
+      case Int32(SHIFTY_ALARM_WINDOW_OPENS.rawValue): .lunchOpens
+      case Int32(SHIFTY_ALARM_BEFORE_WINDOW_CLOSES.rawValue): .beforeLunchCloses(minutes: minutes)
+      case Int32(SHIFTY_ALARM_BEFORE_BREAK.rawValue): .beforeBreak(minutes: minutes)
+      case Int32(SHIFTY_ALARM_BEFORE_BREAK_ENDS.rawValue): .beforeBreakEnds(minutes: minutes)
+      default: .beforeClockOut(minutes: minutes)
       }
     self.init(id: UUID(row.id), trigger: trigger, isEnabled: row.enabled != 0)
   }
@@ -337,8 +414,8 @@ extension AlarmRule {
   /// Same rule, comparing a set time by time of day; the stored date's day
   /// means nothing.
   static func sameRule(_ a: AlarmRule, _ b: AlarmRule) -> Bool {
-    let ar = a.storeRow
-    let br = b.storeRow
+    let ar = a.storeRow()
+    let br = b.storeRow()
     return a.id == b.id && ar.kind == br.kind && ar.value == br.value && ar.enabled == br.enabled
   }
 }
