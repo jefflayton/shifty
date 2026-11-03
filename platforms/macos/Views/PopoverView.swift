@@ -13,10 +13,12 @@ struct PopoverView: View {
   let tracking: TrackingModel?
   /// Opens the main window; nil without the store.
   let openTimesheet: (() -> Void)?
+  let openSettings: () -> Void
 
   init(
     updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
-    tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil
+    tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil,
+    openSettings: @escaping () -> Void
   ) {
     self.updater = updater
     self.model = model
@@ -24,6 +26,7 @@ struct PopoverView: View {
     self.loginItem = loginItem
     self.tracking = tracking
     self.openTimesheet = openTimesheet
+    self.openSettings = openSettings
 
     // Create our view model for our CheckForUpdatesView
     self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
@@ -31,7 +34,7 @@ struct PopoverView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      ShiftSummaryView(model: model)
+      ShiftSummaryView(model: model, lunch: preferences.lunch)
 
       FormSection(model.isClockedIn ? "Shift · clocked in" : "Shift") {
         // Without the store there's nothing to clock in to.
@@ -115,19 +118,7 @@ struct PopoverView: View {
         }
         MenuRowButton("Check for Updates…", action: updater.checkForUpdates)
           .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
-        MenuRowMenu("Settings") {
-          Picker("Menu Bar Shows", selection: $preferences.menuBarDisplay) {
-            ForEach(MenuBarDisplay.allCases) { Text($0.label).tag($0) }
-          }
-          Toggle(
-            "Open at Login",
-            isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
-          Divider()
-          Button("Clock-Out Link…") {
-            // Let the menu close first; a modal from inside it doesn't take keys.
-            DispatchQueue.main.async { ClockOutLinkPrompt.run(preferences: preferences) }
-          }
-        }
+        MenuRowButton("Settings…", shortcut: "⌘,", action: openSettings)
         MenuRowButton("Quit Shifty", shortcut: "⌘Q") { NSApp.terminate(nil) }
       }
       .padding(.horizontal, -6)
@@ -151,12 +142,14 @@ struct PopoverView: View {
 /// The clock-out time, how far away it is, and the shift at a glance.
 struct ShiftSummaryView: View {
   let model: ShiftModel
+  let lunch: LunchRule
 
   var body: some View {
     // Inside the timeline: during a break, clock out moves with the clock.
     TimelineView(.periodic(from: .now, by: 30)) { context in
       let clockOut = model.clockOut(now: context.date)
       let breaks = model.breaks(now: context.date)
+      let plan = model.lunch(lunch, now: context.date)
 
       VStack(alignment: .leading, spacing: 8) {
         HStack(alignment: .lastTextBaseline) {
@@ -180,6 +173,9 @@ struct ShiftSummaryView: View {
           clockIn: model.clockInTime,
           clockOut: clockOut,
           breaks: ShiftSummary.breakSpans(breaks, clockIn: model.clockInTime, clockOut: clockOut),
+          lunch: plan.flatMap {
+            ShiftSummary.span($0, clockIn: model.clockInTime, clockOut: clockOut, now: context.date)
+          },
           now: context.date
         )
 
@@ -195,6 +191,11 @@ struct ShiftSummaryView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .monospacedDigit()
+
+        if let plan {
+          LunchStatus(plan: plan, now: context.date)
+            .font(.caption)
+        }
       }
       .animation(.snappy, value: clockOut)
     }

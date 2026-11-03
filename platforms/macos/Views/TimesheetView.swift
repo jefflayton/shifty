@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The main window: the week at a glance as a strip of day bars, then its
-/// entries by day, editable in place, with totals by project and client.
-/// A project's color carries through all three.
+/// shifts and entries by day, editable in place, with totals by project and
+/// client. A project's color carries through all three. Days you don't work
+/// stay out of the way unless there's time on them.
 struct TimesheetView: View {
   @Bindable var model: TimesheetModel
 
@@ -30,7 +31,7 @@ struct TimesheetView: View {
                     .foregroundStyle(.red)
                     .font(.callout)
                 }
-                ForEach(model.days, id: \.self) { day in
+                ForEach(model.visibleDays, id: \.self) { day in
                   DaySection(model: model, day: day, now: now)
                     .id(day)
                 }
@@ -73,6 +74,8 @@ struct WeekHeader: View {
           .controlSize(.small)
           .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       }
+      WorkDaysMenu(model: model)
+        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       Spacer()
       Text(TimesheetFormat.duration(model.total(now: now)))
         .font(.system(size: 28, weight: .semibold, design: .rounded))
@@ -90,8 +93,44 @@ struct WeekHeader: View {
   }
 }
 
-/// The week at a glance: a bar per day, stacked by project, on a shared
-/// scale with a faint line at a full day. Clicking a day jumps to it.
+/// Which days the timesheet shows. A day off with time on it shows anyway.
+struct WorkDaysMenu: View {
+  let model: TimesheetModel
+
+  var body: some View {
+    if let preferences = model.preferences {
+      let hidden = model.hiddenDays
+      Menu {
+        Section("Days You Work") {
+          ForEach(model.days, id: \.self) { day in
+            let iso = Preferences.isoWeekday(day, calendar: model.calendar)
+            Toggle(
+              day.formatted(.dateTime.weekday(.wide)),
+              isOn: Binding(
+                get: { preferences.workDays.contains(iso) },
+                set: { on in
+                  if on { preferences.workDays.insert(iso) } else { preferences.workDays.remove(iso) }
+                }))
+          }
+        }
+      } label: {
+        Label(
+          hidden.isEmpty
+            ? "All days"
+            : "\(hidden.count) day\(hidden.count == 1 ? "" : "s") hidden",
+          systemImage: "calendar")
+      }
+      .menuStyle(.borderlessButton)
+      .fixedSize()
+      .foregroundStyle(.secondary)
+      .help("Choose the days you work; the others are hidden when they have no time")
+    }
+  }
+}
+
+/// The week at a glance: a bar per day, stacked by project, inside an
+/// outline of the time on shift, on a shared scale with a faint line at a
+/// full day. Clicking a day jumps to it.
 struct WeekStrip: View {
   let model: TimesheetModel
   let now: Date
@@ -102,9 +141,12 @@ struct WeekStrip: View {
   static let fullDay: TimeInterval = 8 * 60 * 60
 
   var body: some View {
-    let scale = max(Self.fullDay, model.days.map { model.total(on: $0, now: now) }.max() ?? 0)
+    let days = model.visibleDays
+    let scale = max(
+      Self.fullDay,
+      days.map { max(model.total(on: $0, now: now), model.worked(on: $0, now: now)) }.max() ?? 0)
     HStack(alignment: .bottom, spacing: 6) {
-      ForEach(model.days, id: \.self) { day in
+      ForEach(days, id: \.self) { day in
         DayColumn(model: model, day: day, now: now, scale: scale) { select(day) }
       }
     }
@@ -136,7 +178,7 @@ struct DayColumn: View {
     Button(action: action) {
       VStack(spacing: 6) {
         bar(total: total)
-          .frame(width: 36, height: WeekStrip.barHeight, alignment: .bottom)
+          .frame(width: 36, height: WeekStrip.barHeight + 2, alignment: .bottom)
         VStack(spacing: 1) {
           Text(day.formatted(.dateTime.weekday(.abbreviated)))
             .font(.callout.weight(isToday ? .semibold : .regular))
@@ -162,20 +204,36 @@ struct DayColumn: View {
     .accessibilityValue(TimesheetFormat.duration(total))
   }
 
-  /// Segments bottom up, biggest project first; an empty day is a stub.
+  /// Segments bottom up, biggest project first, in an outline as tall as
+  /// the shift; an empty day is a stub.
   @ViewBuilder private func bar(total: TimeInterval) -> some View {
-    if total <= 0 {
+    let worked = model.worked(on: day, now: now)
+    if total <= 0 && worked <= 0 {
       Capsule().fill(.quaternary).frame(height: 3)
     } else {
       let rows = model.totalsByProject(on: day, now: now)
-      VStack(spacing: 1.5) {
-        ForEach(Array(rows.reversed().enumerated()), id: \.offset) { _, row in
-          Rectangle()
-            .fill(ProjectColor.color(row.project, in: model))
-            .frame(height: max(2, WeekStrip.barHeight * row.seconds / scale))
+      // The shift, a lighter column the projects stack up inside.
+      ZStack(alignment: .bottom) {
+        if worked > 0 {
+          RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(.primary.opacity(0.12))
+            .overlay(
+              RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(.primary.opacity(0.25), lineWidth: 1)
+            )
+            .frame(height: max(4, WeekStrip.barHeight * worked / scale))
+            .help("\(TimesheetFormat.duration(worked)) on shift")
         }
+        VStack(spacing: 1.5) {
+          ForEach(Array(rows.reversed().enumerated()), id: \.offset) { _, row in
+            Rectangle()
+              .fill(ProjectColor.color(row.project, in: model))
+              .frame(height: max(2, WeekStrip.barHeight * row.seconds / scale))
+          }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .padding(.horizontal, worked > 0 ? 4 : 0)
       }
-      .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
   }
 }
@@ -187,30 +245,48 @@ struct DaySection: View {
 
   var body: some View {
     let entries = model.entries(on: day)
+    let shifts = model.shifts(on: day)
+    let empty = entries.isEmpty && shifts.isEmpty
     let (title, detail) = Self.title(day, now: now)
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Text(title)
           .font(.headline)
-          .foregroundStyle(entries.isEmpty ? .secondary : .primary)
+          .foregroundStyle(empty ? .secondary : .primary)
         Text(detail)
           .foregroundStyle(.secondary)
+        if !model.isWorkDay(day) {
+          Text("Day off")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(.quinary, in: Capsule())
+        }
         Spacer()
-        if entries.isEmpty {
+        if empty {
           Text("No time")
             .foregroundStyle(.tertiary)
         } else {
           Text(TimesheetFormat.duration(model.total(on: day, now: now)))
             .font(.system(.body, design: .rounded).weight(.medium))
             .monospacedDigit()
+            .help("Tracked to projects")
         }
-        AddButton(help: "Add an hour on this day") { model.addEntry(on: day, now: now) }
+        AddMenu(model: model, day: day, now: now)
           .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       }
       .padding(.horizontal, 6)
 
-      if !entries.isEmpty {
+      if !empty {
         GroupedRows(minRowHeight: 38) {
+          DayTimeline(model: model, day: day, now: now)
+          ForEach(shifts) { shift in
+            ShiftRow(model: model, shift: shift, now: now)
+            ForEach(shift.breaks) { brk in
+              SheetBreakRow(model: model, shift: shift, brk: brk, now: now)
+            }
+          }
           ForEach(entries) { entry in
             EntryRow(model: model, entry: entry, now: now)
           }
@@ -229,6 +305,32 @@ struct DaySection: View {
     return (
       day.formatted(.dateTime.weekday(.wide)), day.formatted(.dateTime.month(.abbreviated).day())
     )
+  }
+}
+
+/// The "+" on a day: an hour of project time, a shift you forgot to clock
+/// in for, or a break on the day's shift.
+struct AddMenu: View {
+  let model: TimesheetModel
+  let day: Date
+  let now: Date
+
+  var body: some View {
+    Menu {
+      Button("Add Time") { model.addEntry(on: day, now: now) }
+      Button("Add Shift") { model.addShift(on: day, now: now) }
+        .disabled(model.shiftSlot(on: day, now: now) == nil)
+      if let shift = model.shifts(on: day).last {
+        Button("Add Break") { model.addBreak(to: shift, now: now) }
+      }
+    } label: {
+      Image(systemName: "plus")
+        .font(.subheadline.weight(.semibold))
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Add time, a shift, or a break on this day")
   }
 }
 
@@ -251,6 +353,7 @@ struct EntryRow: View {
         Capsule()
           .fill(ProjectColor.color(entry.projectId, in: model))
           .frame(width: 4, height: 22)
+          .frame(width: 16)
 
         HStack(spacing: 4) {
           DatePicker(
@@ -311,7 +414,7 @@ struct EntryRow: View {
         Text("Times must be in order and at most 16 hours apart. This isn't saved yet.")
           .font(.caption)
           .foregroundStyle(.red)
-          .padding(.leading, 14)
+          .padding(.leading, 26)
       }
     }
     .padding(.vertical, invalid ? 6 : 0)
@@ -403,6 +506,16 @@ struct WeekTotals: View {
     let total = model.total(now: now)
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
+        let worked = model.worked(now: now)
+        if worked > 0 {
+          TotalsList(title: "Shifts") {
+            FigureRow(name: "Worked", seconds: worked)
+            FigureRow(name: "On break", seconds: model.onBreak(now: now))
+            FigureRow(name: "Not tracked", seconds: model.untracked(now: now))
+              .help("Time on shift with no project entry")
+          }
+        }
+
         let byProject = model.totalsByProject(now: now)
         TotalsList(title: "Projects") {
           if byProject.isEmpty {
@@ -446,6 +559,24 @@ struct TotalsList<Content: View>: View {
         .foregroundStyle(.secondary)
       content
     }
+  }
+}
+
+/// A name and its time, plain.
+struct FigureRow: View {
+  let name: String
+  let seconds: TimeInterval
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(name)
+      Spacer()
+      Text(TimesheetFormat.duration(seconds))
+        .font(.system(.body, design: .rounded))
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+    }
+    .accessibilityElement(children: .combine)
   }
 }
 

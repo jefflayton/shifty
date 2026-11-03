@@ -66,6 +66,24 @@ final class ShiftStore {
     if result != SHIFTY_NONE { try check(result) }
   }
 
+  /// An ended shift recorded after the fact. Its length is the time between
+  /// its ends.
+  func addShift(start: Date, end: Date) throws -> UUID {
+    var id = ShiftyId()
+    try check(shifty_add_shift(handle, ts(start), ts(end), &id))
+    return UUID(id)
+  }
+
+  /// Moves an ended shift's clock in and clock out.
+  func setShiftTimes(_ id: UUID, start: Date, end: Date, now: Date = Date()) throws {
+    try check(shifty_set_shift_times(handle, ShiftyId(id), ts(start), ts(end), ts(now)))
+  }
+
+  /// Deletes a shift and its breaks. Time tracked during it stays.
+  func deleteShift(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_shift(handle, ShiftyId(id), ts(now)))
+  }
+
   /// Whether a shift nobody clocked out of was closed.
   func closeStaleShift(now: Date = Date()) throws -> Bool {
     let result = shifty_close_stale_shift(handle, ts(now))
@@ -133,6 +151,7 @@ final class ShiftStore {
 
   struct Timesheet: Decodable, Equatable {
     var entries: [Entry] = []
+    var shifts: [SheetShift] = []
     var clients: [Client] = []
     var projects: [Project] = []
     var workspaces: [Workspace] = []
@@ -149,6 +168,30 @@ final class ShiftStore {
 
     var start: Date { date(inTs) }
     /// nil while it's running.
+    var end: Date? { outTs.map(date) }
+  }
+
+  /// A shift on the timesheet, clock in to clock out, with its breaks.
+  struct SheetShift: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var inTs: Int64
+    var outTs: Int64?
+    var targetSecs: Int64
+    var breaks: [SheetBreak]
+
+    var start: Date { date(inTs) }
+    /// nil while you're on it.
+    var end: Date? { outTs.map(date) }
+    var length: TimeInterval { TimeInterval(targetSecs) }
+  }
+
+  struct SheetBreak: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var inTs: Int64
+    var outTs: Int64?
+
+    var start: Date { date(inTs) }
+    /// nil while you're on it.
     var end: Date? { outTs.map(date) }
   }
 
@@ -170,7 +213,8 @@ final class ShiftStore {
     var name: String
   }
 
-  /// The entries overlapping `range`, and the names they refer to.
+  /// The entries and shifts overlapping `range`, and the names they refer
+  /// to.
   func timesheet(_ range: DateInterval) throws -> Timesheet {
     try json(Timesheet()) { shifty_timesheet_json(handle, ts(range.start), ts(range.end), $0, $1) }
   }

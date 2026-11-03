@@ -76,8 +76,21 @@ same timer as `shifty start` and the TUI's, and a break or clock out stops it.
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
-The menu bar shows your clock-out time next to the icon. Under **Settings**, choose what it
-shows (clock-out time, time left, or just the icon) and whether Shifty opens at login.
+The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens Shifty's
+settings: what the menu bar shows (clock-out time, time left, or just the icon), whether Shifty
+opens at login, the clock-out link, the days you work, and the lunch window.
+
+### Lunch window
+
+Some jobs require lunch within a window of work. In California, for example, a 30-minute meal
+break has to start before the end of the fifth hour. Turn on **Lunch window** in Settings and set
+when it opens and closes, counted in time worked (3h and 5h by default), and how long a break has
+to be to count as lunch (30 min). Shorter breaks before lunch push the window later.
+
+On a shift long enough to need lunch, the popover's shift bar highlights the window until you
+take it, and a reminder rings at the time you choose (4h of work by default). Going on a break
+quiets it; a break shorter than lunch brings it back. The timesheet shows the window on each day
+and flags a lunch that started late or never happened.
 
 ### Alarms
 
@@ -93,17 +106,21 @@ until then. Set-time alarms still ring, so one can remind you when to come back.
 When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
 **Stop**. A notification is scheduled as a backup in case Shifty isn't running.
 
-To clock out from the alarm, set **Settings → Clock-Out Link…** to your timeclock page. Alarms then
-show a **Clock Out** button that opens it and stops the alarm.
+To clock out from the alarm, set the clock-out link in **Settings…** to your timeclock page. Alarms
+then show a **Clock Out** button that opens it and stops the alarm.
 
 ### Timesheet and projects
 
 **Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Switch
 screens from its toolbar:
 
-- **Timesheet**: a week of tracked time. The strip at the top shows each day's hours by project;
-  click a day to jump to it. Add time after the fact with **+**, and edit times, projects, and
-  notes in place.
+- **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
+  by project inside the time you were on shift; click a day to jump to it. Each day has a
+  timeline of the shift (breaks as gaps) above the time tracked to projects, so time on shift
+  that no project has stands out. Edit clock in and out, breaks, and entries in place; **Clock
+  Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**.
+- **Days you work**: pick them from the menu by the week's dates, or in Settings. Other days are
+  hidden unless they have time on them.
 - **Projects**: rename a project by editing its name, click its color to pick another, and delete
   it from the trash button or its right-click menu. Deleting a project keeps its time, with no
   project.

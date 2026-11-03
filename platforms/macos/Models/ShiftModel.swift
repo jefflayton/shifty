@@ -50,6 +50,18 @@ import Observation
     return Date(timeIntervalSince1970: TimeInterval(outTs))
   }
 
+  /// Where lunch falls on this shift under `rule`, or nil if it doesn't
+  /// need one.
+  func lunch(_ rule: LunchRule?, now: Date) -> LunchPlan? {
+    guard let rule = rule?.active else { return nil }
+    var spans = breaks.filter(\.isValid).map { brk in
+      let (start, end) = ShiftTimes.anchor(brk, clockIn: clockInTime)
+      return LunchPlan.Span(start: start, end: end)
+    }
+    if let breakStart { spans.append(.init(start: breakStart, end: nil)) }
+    return rule.plan(clockIn: clockInTime, worked: shiftLength * 3600, breaks: spans, now: now)
+  }
+
   /// The saved breaks, plus the one in progress as if it ended at `now`.
   func breaks(now: Date) -> [Interval] {
     guard let breakStart else { return breaks }

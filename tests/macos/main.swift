@@ -603,5 +603,211 @@ do {
   expectEqual(t.label(project: web, workspace: nil), "web")
 }
 
+// MARK: Lunch
+
+do {
+  var rule = LunchRule()
+  check(rule.active == nil, "off by default")
+  rule.isEnabled = true
+  let r = rule.active!
+  func span(_ s: Date, _ e: Date?) -> LunchPlan.Span { .init(start: s, end: e) }
+
+  // 9 AM, an 8h shift: lunch between 12 and 2.
+  let plain = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [], now: at(10))!
+  expectEqual(plain.opens, at(12), "opens after 3h of work")
+  expectEqual(plain.closes, at(14), "closes after 5h of work")
+  expectEqual(plain.remind, at(13), "reminds after 4h of work")
+  expectEqual(plain.status(now: at(11)), .upcoming)
+  expectEqual(plain.status(now: at(13)), .open)
+  expectEqual(plain.status(now: at(14, 1)), .missed)
+
+  // Five hours or less doesn't need lunch.
+  check(r.plan(clockIn: at(9), worked: 5 * 3600, breaks: [], now: at(10)) == nil, "short shift")
+
+  // A short break isn't lunch, and pushes the window later.
+  let rest = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(10), at(10, 15))], now: at(11))!
+  check(rest.lunch == nil, "15 min is a rest")
+  expectEqual(rest.opens, at(12, 15))
+  expectEqual(rest.closes, at(14, 15))
+
+  // Lunch itself doesn't move the window it's in.
+  let ate = r.plan(
+    clockIn: at(9), worked: 8 * 3600, breaks: [span(at(10), at(10, 10)), span(at(13), at(13, 30))],
+    now: at(15))!
+  expectEqual(ate.lunch?.start, at(13), "30 min is lunch")
+  expectEqual(ate.closes, at(14, 10))
+  expectEqual(ate.status(now: at(15)), .taken)
+  check(ate.remind == nil, "no reminder once you've eaten")
+
+  let late = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(14, 30), at(15))], now: at(16))!
+  expectEqual(late.status(now: at(16)), .late)
+
+  let eating = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(12, 30), nil)], now: at(12, 40))!
+  expectEqual(eating.status(now: at(12, 40)), .onLunch, "the break you're on counts")
+
+  // Saved in whole minutes; turning it off keeps the window.
+  var custom = rule
+  custom.earliest = 3.5 * 3600
+  custom.remindAt = nil
+  let text = Preferences.format(custom)!
+  check(text.contains("\"earliest_mins\":210"), "minutes: \(text)")
+  expectEqual(Preferences.lunch(from: text), custom, "round trip")
+  check(Preferences.format(LunchRule()) == nil, "the default isn't stored")
+
+  // ShiftModel: the popover's shift, its breaks anchored by time of day.
+  let model = ShiftModel()
+  model.clockInTime = at(9)
+  model.shiftLength = 8
+  model.breaks = [brk(at(10), at(10, 10))]
+  expectEqual(model.lunch(rule, now: at(11))?.opens, at(12, 10))
+  check(model.lunch(LunchRule(), now: at(11)) == nil, "off")
+  model.startBreak(now: at(12, 30))
+  expectEqual(model.lunch(rule, now: at(12, 40))?.status(now: at(12, 40)), .onLunch)
+
+  let bar = ShiftSummary.span(plain, clockIn: at(9), clockOut: at(17), now: at(10))!
+  expectEqual(bar, 0.375...0.625, "window as fractions of the shift")
+  check(ShiftSummary.span(ate, clockIn: at(9), clockOut: at(17), now: at(15)) == nil, "hidden once eaten")
+}
+
+// MARK: Work days
+
+do {
+  expectEqual(Preferences.isoWeekday(at(0), calendar: cal), 3, "Oct 28 2026 is a Wednesday")
+  expectEqual(Preferences.isoWeekday(at(0, day: 4), calendar: cal), 7, "Sunday")
+  expectEqual(Preferences.format([1, 2, 3, 4, 5]), "1,2,3,4,5")
+  check(Preferences.format(Preferences.everyDay) == nil, "every day isn't stored")
+  expectEqual(Preferences.workDays(from: "5,1, 3,9"), [1, 3, 5])
+  expectEqual(Preferences.weekOrder(cal), [7, 1, 2, 3, 4, 5, 6], "gregorian weeks start Sunday")
+  var monday = cal
+  monday.firstWeekday = 2
+  expectEqual(Preferences.weekOrder(monday), [1, 2, 3, 4, 5, 6, 7])
+
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let prefs = Preferences(defaults: defaults, store: store)
+  expectEqual(prefs.workDays, Preferences.everyDay, "every day by default")
+  prefs.workDays = [1, 2, 3, 4, 5]
+  prefs.lunch.isEnabled = true
+  expectEqual(try! store.setting(Preferences.workDaysSetting), "1,2,3,4,5", "shared through the store")
+  let again = Preferences(defaults: defaults, store: store)
+  expectEqual(again.workDays, [1, 2, 3, 4, 5])
+  check(again.lunch.isEnabled, "lunch saved")
+  try! store.setSetting(Preferences.workDaysSetting, "1,2,3,4")
+  again.pull()
+  expectEqual(again.workDays, [1, 2, 3, 4], "picked up from the TUI or CLI")
+}
+
+// MARK: Timesheet shifts
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let prefs = Preferences(defaults: defaults, store: store)
+  prefs.workDays = [1, 2, 3, 4, 5]
+  prefs.lunch.isEnabled = true
+  let t = TimesheetModel(store: store, preferences: prefs, calendar: cal, now: at(12))
+  var changes = 0
+  t.didChange = { changes += 1 }
+
+  // Sunday and Saturday are hidden while they're empty.
+  expectEqual(t.visibleDays, (1...5).map { at(0, day: $0 - 3) }, "Monday to Friday")
+  expectEqual(t.hiddenDays.count, 2)
+
+  // Clocked in at 8; tracked 8:30 to 4; clocked out at 5, lunch 12 to 12:30.
+  let shift = try! store.addShift(start: at(8), end: at(17))
+  try! store.putBreak(.init(id: UUID(), start: at(12), end: at(12, 30)), shift: shift)
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(8, 30), end: at(16))
+  t.reload()
+  var s = t.shifts(on: at(0)).first!
+  expectEqual(s.id, shift)
+  expectEqual(t.worked(s, now: at(18)), 8.5 * 3600, "9h less a half-hour break")
+  expectEqual(t.onBreak(s, now: at(18)), 30 * 60)
+  expectEqual(t.untracked(s, now: at(18)), 1.5 * 3600, "8 to 8:30 and 4 to 5")
+  expectEqual(t.lunch(of: s, now: at(18))?.status(now: at(18)), .taken)
+  expectEqual(t.worked(now: at(18)), 8.5 * 3600)
+
+  // Move clock in and out.
+  t.setStart(s, to: at(7, 45))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.start, at(7, 45))
+  expectEqual(s.end, at(17), "clock out stays")
+  t.setEnd(s, to: at(17, 30))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.end, at(17, 30))
+  check(changes >= 2, "the popover hears about it")
+
+  // An impossible clock out stays a draft.
+  t.setStart(s, to: at(6))
+  t.setEnd(s, to: at(23, 30))
+  check(t.drafts[shift] != nil, "17.5h shift is a draft")
+  expectEqual(t.shifts(on: at(0)).first!.end, at(17, 30), "store unchanged")
+  t.setEnd(s, to: at(17))
+  check(t.drafts[shift] == nil, "fixed")
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.start, at(6))
+
+  // Breaks: move, add one at the lunch window, delete.
+  let lunch = s.breaks.first!
+  t.setStart(lunch, of: s, to: at(12, 15))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.breaks.first!.start, at(12, 15))
+  expectEqual(s.breaks.first!.end, at(12, 30), "end stays")
+  t.setEnd(s.breaks.first!, of: s, to: at(12, 45))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.breaks.first!.end, at(12, 45))
+  t.delete(s.breaks.first!)
+  s = t.shifts(on: at(0)).first!
+  check(s.breaks.isEmpty, "break deleted")
+  t.addBreak(to: s, now: at(18))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(s.breaks.first?.start, at(9), "at the lunch window: 3h after 6 AM")
+  expectEqual(s.breaks.first?.end, at(9, 30))
+
+  // A day off with time on it shows.
+  _ = try! store.addShift(start: at(9, day: 3), end: at(13, day: 3))
+  t.reload()
+  check(t.visibleDays.contains(at(0, day: 3)), "Saturday with a shift shows")
+
+  // Adding a shift: around the day's time, or 9 to 5, never ahead of now.
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(10, 5, day: 1), end: at(14, 50, day: 1))
+  t.reload()
+  let slot = t.shiftSlot(on: at(0, day: 1), now: at(12, day: 2))!
+  expectEqual(slot.0, at(10, day: 1), "from the first entry, to the quarter before")
+  expectEqual(slot.1, at(15, day: 1), "to the last, the quarter after")
+  let plain = t.shiftSlot(on: at(0, day: 2), now: at(20, day: 2))!
+  expectEqual(plain.0, at(9, day: 2))
+  expectEqual(plain.1, at(17, day: 2))
+  expectEqual(t.shiftSlot(on: at(0, day: 2), now: at(12, day: 2))!.1, at(12, day: 2), "ends now")
+  check(t.shiftSlot(on: at(0, day: 2), now: at(12, day: 1)) == nil, "not tomorrow")
+  let added = t.addShift(on: at(0, day: 2), now: at(20, day: 2))!
+  check(t.sheet.shifts.contains { $0.id == added }, "added")
+  t.delete(t.sheet.shifts.first { $0.id == added }!)
+  check(!t.sheet.shifts.contains { $0.id == added }, "deleted")
+
+  // The shift you're on: clock in moves, clock out is now.
+  _ = try! store.startShift(at: at(8, day: 1), lengthSeconds: 8 * 3600)
+  t.reload()
+  var open = t.shifts(on: at(0, day: 1)).first!
+  t.setStart(open, to: at(7, 30))
+  open = t.shifts(on: at(0, day: 1)).first!
+  expectEqual(open.start, at(7, 30, day: 1))
+  check(open.end == nil, "still on it")
+  expectEqual(try! store.currentShift()?.lengthSeconds, 8 * 3600, "length kept")
+  t.clockOut(now: at(16, day: 1))
+  expectEqual(t.shifts(on: at(0, day: 1)).first!.end, at(16, day: 1), "clocked out")
+
+  expectEqual(TimesheetModel.roundedToQuarter(at(10, 5), calendar: cal, up: true), at(10, 15))
+  expectEqual(TimesheetModel.roundedToQuarter(at(10, 15), calendar: cal, up: true), at(10, 15))
+  expectEqual(TimesheetModel.roundedToQuarter(at(10, 14), calendar: cal, up: false), at(10))
+
+  let spans = Spans.subtract([(at(8), at(17))], [(at(12), at(13)), (at(16), at(18))])
+  expectEqual(spans.map(\.0), [at(8), at(13)])
+  expectEqual(spans.map(\.1), [at(12), at(16)])
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

@@ -45,30 +45,48 @@ final class AlarmScheduler {
     for rule in model.alarms where rule.isEnabled {
       let id = rule.id.uuidString
       live.insert(id)
-      let fireDate = rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut)
-      let link = preferences.clockOutLink
-      let pending = controller.pendingAlarm(id: id)
-      let snoozed = controller.isSnoozed(id: id)
-      let action = AlarmPlanner.action(
-        fireDate: fireDate, pending: pending?.fireDate, snoozed: snoozed,
+      apply(
+        id: id, title: rule.title, body: body, link: preferences.clockOutLink,
+        fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut),
         held: model.isOnBreak && rule.followsClockOut, now: now)
-      switch action {
-      case .schedule(let date):
-        controller.schedule(id: id, title: rule.title, body: body, link: link, at: date)
-      case .cancelPending:
-        controller.cancelPending(id: id)
-      case .keep:
-        // Same time, but clock out (in the body), the title, or the link may
-        // have changed.
-        if let pending, !snoozed,
-          pending.title != rule.title || pending.body != body || pending.link != link
-        {
-          controller.schedule(id: id, title: rule.title, body: body, link: link, at: fireDate)
-        }
-      }
+    }
+
+    // Until you've had lunch. Going on a break counts, so it stops ringing.
+    if let lunch = model.lunch(preferences.lunch, now: now), let remind = lunch.remind {
+      live.insert(Self.lunchID)
+      apply(
+        id: Self.lunchID, title: "Time for lunch",
+        body: "Start lunch by \(lunch.closes.formatted(date: .omitted, time: .shortened))",
+        link: nil, fireDate: remind, held: false, now: now)
     }
 
     // Deleted or disabled rules
     controller.cancelAll(except: live)
+  }
+
+  static let lunchID = "lunch"
+
+  /// Brings one alarm's pending notification in line with its fire date.
+  private func apply(
+    id: String, title: String, body: String, link: URL?, fireDate: Date, held: Bool, now: Date
+  ) {
+    let pending = controller.pendingAlarm(id: id)
+    let snoozed = controller.isSnoozed(id: id)
+    let action = AlarmPlanner.action(
+      fireDate: fireDate, pending: pending?.fireDate, snoozed: snoozed, held: held, now: now)
+    switch action {
+    case .schedule(let date):
+      controller.schedule(id: id, title: title, body: body, link: link, at: date)
+    case .cancelPending:
+      controller.cancelPending(id: id)
+    case .keep:
+      // Same time, but clock out (in the body), the title, or the link may
+      // have changed.
+      if let pending, !snoozed,
+        pending.title != title || pending.body != body || pending.link != link
+      {
+        controller.schedule(id: id, title: title, body: body, link: link, at: fireDate)
+      }
+    }
   }
 }
