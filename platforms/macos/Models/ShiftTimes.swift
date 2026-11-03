@@ -78,6 +78,34 @@ enum ShiftSummary {
     }
   }
 
+  /// The lunch window as fractions of the shift, while lunch is still to
+  /// come.
+  static func span(_ plan: LunchPlan, clockIn: Date, clockOut: Date, now: Date)
+    -> ClosedRange<Double>?
+  {
+    let total = clockOut.timeIntervalSince(clockIn)
+    guard total > 0, [.upcoming, .open].contains(plan.status(now: now)) else { return nil }
+    func fraction(_ date: Date) -> Double {
+      min(max(date.timeIntervalSince(clockIn) / total, 0), 1)
+    }
+    let span = fraction(plan.opens)...fraction(plan.closes)
+    return span.upperBound > span.lowerBound ? span : nil
+  }
+
+  /// The break that was lunch as fractions of the shift, once you've
+  /// started it.
+  static func lunchBreak(_ plan: LunchPlan, clockIn: Date, clockOut: Date, now: Date)
+    -> ClosedRange<Double>?
+  {
+    let total = clockOut.timeIntervalSince(clockIn)
+    guard total > 0, let lunch = plan.lunch else { return nil }
+    func fraction(_ date: Date) -> Double {
+      min(max(date.timeIntervalSince(clockIn) / total, 0), 1)
+    }
+    let span = fraction(lunch.start)...fraction(lunch.end ?? now)
+    return span.upperBound > span.lowerBound ? span : nil
+  }
+
   /// Total break time inside the shift, in seconds.
   static func breakSeconds(
     _ breaks: [Interval], clockIn: Date, clockOut: Date, calendar: Calendar = .current

@@ -34,9 +34,15 @@ jobs:
 
     # The app needs swiftc/AppKit: compile it and run its model tests.
     macos:
-        runs-on: macos-15
+        # macOS draws an app in the style of the SDK it was built against, so
+        # build with the latest Xcode/SDK (as on a dev Mac), not macos-15's
+        # Xcode 16. The deployment target (macOS 15) is set in build.zig.
+        runs-on: xcode-27
         steps:
             - uses: actions/checkout@v5
+
+            - name: Show SDK
+              run: xcodebuild -version && xcrun --show-sdk-version
 
             - uses: jdx/mise-action@v3
               with:

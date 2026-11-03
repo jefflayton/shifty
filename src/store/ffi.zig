@@ -55,13 +55,14 @@ pub const Break = extern struct {
     running: i32,
 };
 
-pub const AlarmKind = enum(i32) { before_clock_out = 0, at_time = 1, _ };
+pub const AlarmKind = enum(i32) { before_clock_out = 0, at_time = 1, lunch_opens = 2, before_lunch_closes = 3, _ };
 
 pub const AlarmRule = extern struct {
     id: Id,
     kind: AlarmKind,
     enabled: i32,
-    /// Minutes before clock out, or seconds since local midnight.
+    /// Minutes before clock out or before the lunch window closes, seconds
+    /// since local midnight, or nothing (lunch opens).
     value: i64,
 };
 
@@ -144,6 +145,27 @@ export fn shifty_edit_shift(h: *Handle, shift_id: Id, in_ts: i64, target_secs: i
     return .ok;
 }
 
+/// Records an ended shift after the fact, in the local zone.
+export fn shifty_add_shift(h: *Handle, in_ts: i64, out_ts: i64, out: *Id) Result {
+    var tz_buf: local.TzBuf = undefined;
+    const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
+    const new = h.store.addShift(.{ .ts = in_ts, .utc_offset_secs = local.utcOffset(in_ts), .tz = tz }, out_ts) catch |e| return result(e);
+    out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// Moves an ended shift's clock in and out; `not_found` for the open shift.
+export fn shifty_set_shift_times(h: *Handle, shift_id: Id, in_ts: i64, out_ts: i64, now: i64) Result {
+    h.store.setShiftTimes(id(shift_id), in_ts, out_ts, now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Deletes a shift and its breaks; tracked time stays.
+export fn shifty_delete_shift(h: *Handle, shift_id: Id, now: i64) Result {
+    h.store.deleteShift(id(shift_id), now) catch |e| return result(e);
+    return .ok;
+}
+
 /// Clocks out at `now`; `none` if no shift was open.
 export fn shifty_end_shift(h: *Handle, now: i64) Result {
     const ended = h.store.endShift(now) catch |e| return result(e);
@@ -195,10 +217,15 @@ export fn shifty_alarm_rules(h: *Handle, out: [*]AlarmRule, cap: usize, count: *
     defer arena.deinit();
     const rules = h.store.alarmRules(arena.allocator()) catch |e| return result(e);
     count.* = rules.len;
-    for (rules[0..@min(rules.len, cap)], out) |r, *o| o.* = switch (r.trigger) {
-        .before_clock_out => |m| .{ .id = .{ .bytes = r.id.bytes }, .kind = .before_clock_out, .enabled = @intFromBool(r.enabled), .value = m },
-        .at_time => |t| .{ .id = .{ .bytes = r.id.bytes }, .kind = .at_time, .enabled = @intFromBool(r.enabled), .value = t },
-    };
+    for (rules[0..@min(rules.len, cap)], out) |r, *o| {
+        const kind: AlarmKind, const value: i64 = switch (r.trigger) {
+            .before_clock_out => |m| .{ .before_clock_out, m },
+            .at_time => |t| .{ .at_time, t },
+            .lunch_opens => .{ .lunch_opens, 0 },
+            .before_lunch_closes => |m| .{ .before_lunch_closes, m },
+        };
+        o.* = .{ .id = .{ .bytes = r.id.bytes }, .kind = kind, .enabled = @intFromBool(r.enabled), .value = value };
+    }
     return .ok;
 }
 
@@ -206,6 +233,8 @@ export fn shifty_put_alarm_rule(h: *Handle, rule: AlarmRule, now: i64) Result {
     const trigger: store.AlarmRule.Trigger = switch (rule.kind) {
         .before_clock_out => .{ .before_clock_out = rule.value },
         .at_time => .{ .at_time = rule.value },
+        .lunch_opens => .lunch_opens,
+        .before_lunch_closes => .{ .before_lunch_closes = rule.value },
         _ => return .conflict,
     };
     h.store.putAlarmRule(.{ .id = id(rule.id), .trigger = trigger, .enabled = rule.enabled != 0 }, now) catch |e| return result(e);
@@ -236,13 +265,24 @@ export fn shifty_set_setting(h: *Handle, key: [*:0]const u8, value: ?[*:0]const 
 
 // ── Timesheet ───────────────────────────────────────────────────────────────
 
-/// What a timesheet shows for `[from, to)`: the entries overlapping it and
-/// every active client, project, and workspace to name them.
+/// What a timesheet shows for `[from, to)`: the entries and shifts
+/// overlapping it, and every active client, project, and workspace to name
+/// them.
 const Timesheet = struct {
     entries: []const store.Entry,
+    shifts: []const TimesheetShift,
     clients: []const store.Client,
     projects: []const store.Project,
     workspaces: []const store.Workspace,
+};
+
+/// A shift on the timesheet, with its breaks. `out_ts` is null while on it.
+const TimesheetShift = struct {
+    id: Uuid,
+    in_ts: i64,
+    out_ts: ?i64,
+    target_secs: i64,
+    breaks: []const store.Break,
 };
 
 /// Writes the timesheet for `[from, to)` as UTF-8 JSON into a new buffer;
@@ -254,8 +294,18 @@ export fn shifty_timesheet_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, le
     defer arena.deinit();
     const a = arena.allocator();
     const names: store.report.Names = store.report.Names.load(&h.store, a) catch |e| return result(e);
+    const shifts = h.store.shiftsBetween(a, from, to) catch |e| return result(e);
+    const with_breaks = a.alloc(TimesheetShift, shifts.len) catch return .no_memory;
+    for (shifts, with_breaks) |sh, *o| o.* = .{
+        .id = sh.id,
+        .in_ts = sh.in_ts,
+        .out_ts = sh.out_ts,
+        .target_secs = sh.target_secs,
+        .breaks = h.store.breaks(a, sh.id) catch |e| return result(e),
+    };
     const sheet: Timesheet = .{
         .entries = h.store.entriesBetween(a, from, to) catch |e| return result(e),
+        .shifts = with_breaks,
         .clients = names.clients,
         .projects = names.projects,
         .workspaces = names.workspaces,
@@ -457,6 +507,47 @@ test "C API - timesheet JSON and entry edits" {
 
     try testing.expectEqual(Result.ok, shifty_delete_entry(s, e, 20));
     try testing.expectEqual(Result.not_found, shifty_delete_entry(s, e, 21));
+}
+
+test "C API - shifts on the timesheet" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var past: Id = undefined;
+    try testing.expectEqual(Result.conflict, shifty_add_shift(s, 7200, 3600, &past));
+    try testing.expectEqual(Result.ok, shifty_add_shift(s, 3600, 7 * 3600, &past));
+    const lunch: Id = .{ .bytes = Uuid.v7(testing.io).bytes };
+    try testing.expectEqual(Result.ok, shifty_put_break(s, lunch, past, 3 * 3600, 3 * 3600 + 1800, 0, 0));
+    try testing.expectEqual(Result.ok, shifty_set_shift_times(s, past, 1800, 7 * 3600, 0));
+    var open: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_shift(s, 10 * 3600, 8 * 3600, &open));
+    try testing.expectEqual(Result.not_found, shifty_set_shift_times(s, open, 10 * 3600, 11 * 3600, 0));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_timesheet_json(s, 0, 86400, &ptr, &len));
+    defer shifty_free(ptr, len);
+    const Parsed = struct {
+        shifts: []const struct {
+            id: []const u8,
+            in_ts: i64,
+            out_ts: ?i64,
+            breaks: []const struct { in_ts: i64, out_ts: ?i64 },
+        },
+    };
+    const parsed = try std.json.parseFromSlice(Parsed, testing.allocator, ptr.?[0..len], .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const v = parsed.value;
+    try testing.expectEqual(2, v.shifts.len);
+    try testing.expectEqual(1800, v.shifts[0].in_ts);
+    try testing.expectEqual(7 * 3600, v.shifts[0].out_ts.?);
+    try testing.expectEqual(1, v.shifts[0].breaks.len);
+    try testing.expectEqual(null, v.shifts[1].out_ts);
+
+    try testing.expectEqual(Result.ok, shifty_delete_shift(s, past, 0));
+    try testing.expectEqual(Result.not_found, shifty_delete_shift(s, past, 0));
 }
 
 test "C API - manage projects" {

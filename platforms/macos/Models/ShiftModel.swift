@@ -50,6 +50,18 @@ import Observation
     return Date(timeIntervalSince1970: TimeInterval(outTs))
   }
 
+  /// Where lunch falls on this shift under `rule`, or nil if it doesn't
+  /// need one.
+  func lunch(_ rule: LunchRule?, now: Date) -> LunchPlan? {
+    guard let rule = rule?.active else { return nil }
+    var spans = breaks.filter(\.isValid).map { brk in
+      let (start, end) = ShiftTimes.anchor(brk, clockIn: clockInTime)
+      return LunchPlan.Span(start: start, end: end)
+    }
+    if let breakStart { spans.append(.init(start: breakStart, end: nil)) }
+    return rule.plan(clockIn: clockInTime, worked: shiftLength * 3600, breaks: spans, now: now)
+  }
+
   /// The saved breaks, plus the one in progress as if it ended at `now`.
   func breaks(now: Date) -> [Interval] {
     guard let breakStart else { return breaks }
@@ -293,14 +305,27 @@ extension AlarmRule {
       ShiftyAlarmRule(
         id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_AT_TIME.rawValue),
         enabled: isEnabled ? 1 : 0, value: Int64(Self.secondsSinceMidnight(time)))
+    case .lunchOpens:
+      ShiftyAlarmRule(
+        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue),
+        enabled: isEnabled ? 1 : 0, value: 0)
+    case .beforeLunchCloses(let minutes):
+      ShiftyAlarmRule(
+        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue),
+        enabled: isEnabled ? 1 : 0, value: Int64(minutes))
     }
   }
 
   init(storeRow row: ShiftyAlarmRule, calendar: Calendar = .current) {
     let trigger: Trigger =
-      row.kind == Int32(SHIFTY_ALARM_AT_TIME.rawValue)
-      ? .atTime(calendar.startOfDay(for: Date()).addingTimeInterval(TimeInterval(row.value)))
-      : .beforeClockOut(minutes: Int(row.value))
+      switch row.kind {
+      case Int32(SHIFTY_ALARM_AT_TIME.rawValue):
+        .atTime(calendar.startOfDay(for: Date()).addingTimeInterval(TimeInterval(row.value)))
+      case Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue): .lunchOpens
+      case Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue):
+        .beforeLunchCloses(minutes: Int(row.value))
+      default: .beforeClockOut(minutes: Int(row.value))
+      }
     self.init(id: UUID(row.id), trigger: trigger, isEnabled: row.enabled != 0)
   }
 

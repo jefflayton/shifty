@@ -1,23 +1,38 @@
 import AppKit
 import SwiftUI
 
-/// The main window. Shifty lives in the menu bar; while this is open it's
-/// also a regular app with a Dock icon and menus, and it goes back to the
-/// menu bar alone when the window closes.
+/// The main window: the timesheet, projects, and settings. Shifty lives in
+/// the menu bar; while this is open it's also a regular app with a Dock icon
+/// and menus, and it goes back to the menu bar alone when the window closes.
+/// Without the store it has settings only.
 @MainActor
 final class MainWindow: NSObject, NSWindowDelegate {
-  private let timesheet: TimesheetModel
-  private let projects: ProjectsModel
+  private let timesheet: TimesheetModel?
+  private let projects: ProjectsModel?
+  private let preferences: Preferences
+  private let loginItem: LoginItem
+  private let navigation = MainNavigation()
   private var window: NSWindow?
 
-  init(store: ShiftStore) {
-    timesheet = TimesheetModel(store: store)
-    projects = ProjectsModel(store: store)
+  init(store: ShiftStore?, preferences: Preferences, loginItem: LoginItem) {
+    timesheet = store.map { TimesheetModel(store: $0, preferences: preferences) }
+    projects = store.map { ProjectsModel(store: $0) }
+    self.preferences = preferences
+    self.loginItem = loginItem
+    if store == nil { navigation.screen = .settings }
+  }
+
+  /// Called after the timesheet writes, e.g. moving a clock in.
+  var didChange: (() -> Void)? {
+    get { timesheet?.didChange }
+    set { timesheet?.didChange = newValue }
   }
 
   var isVisible: Bool { window?.isVisible ?? false }
 
-  func show() {
+  /// Shows the window, on `screen` if given.
+  func show(_ screen: MainScreen? = nil) {
+    if let screen, timesheet != nil || !screen.needsStore { navigation.screen = screen }
     let window = self.window ?? makeWindow()
     self.window = window
     reload()
@@ -57,7 +72,10 @@ final class MainWindow: NSObject, NSWindowDelegate {
       backing: .buffered, defer: false)
     window.title = "Shifty"
     window.isReleasedWhenClosed = false
-    let host = NSHostingController(rootView: MainView(timesheet: timesheet, projects: projects))
+    let host = NSHostingController(
+      rootView: MainView(
+        timesheet: timesheet, projects: projects, preferences: preferences, loginItem: loginItem,
+        navigation: navigation))
     // Let the views' .toolbar fill the window's.
     host.sceneBridgingOptions = [.toolbars]
     window.contentViewController = host
@@ -70,10 +88,11 @@ final class MainWindow: NSObject, NSWindowDelegate {
     return window
   }
 
-  /// Both screens are cheap to read, so both stay current.
+  /// Every screen is cheap to read, so all stay current.
   func reload() {
-    timesheet.reload()
-    projects.reload()
+    timesheet?.reload()
+    projects?.reload()
+    preferences.pull()
   }
 
   func windowDidBecomeKey(_ notification: Notification) {

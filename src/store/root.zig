@@ -94,7 +94,21 @@ pub const AlarmRule = struct {
         before_clock_out: i64,
         /// Rings at this local time of day, in seconds since midnight.
         at_time: i64,
+        /// Rings when the lunch window opens, until you've had lunch.
+        lunch_opens,
+        /// Rings this many minutes before the lunch window closes, until
+        /// you've had lunch.
+        before_lunch_closes: i64,
     };
+
+    /// The row's `minutes` and `time_of_day_secs`.
+    fn columns(trigger: Trigger) struct { ?i64, ?i64 } {
+        return switch (trigger) {
+            .before_clock_out, .before_lunch_closes => |m| .{ m, null },
+            .at_time => |t| .{ null, t },
+            .lunch_opens => .{ null, null },
+        };
+    }
 };
 
 /// What a link (or an entry) points at.
@@ -140,6 +154,7 @@ pub const NewEntry = struct {
 
 const migrations = [_][:0]const u8{
     @embedFile("migrations/0001_init.sql"),
+    @embedFile("migrations/0002_lunch_alarms.sql"),
 };
 
 pub const Store = struct {
@@ -626,6 +641,46 @@ pub const Store = struct {
         if (self.db.changes() == 0) return error.NotFound;
     }
 
+    /// Records a shift after the fact, with both ends, e.g. a day you forgot
+    /// to clock in. Its length is the time between them. `Conflict` if it
+    /// ends before it starts.
+    pub fn addShift(self: *Store, at: Stamp, out_ts: i64) Error!Uuid {
+        if (out_ts <= at.ts) return error.Conflict;
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO shifts (id, in_ts, utc_offset_secs, tz, target_secs, out_ts, created_ts,
+            \\                    updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
+        , .{ blob(&new), at.ts, at.utc_offset_secs, at.tz, out_ts - at.ts, out_ts, self.nowTs() });
+        return new;
+    }
+
+    /// Moves an ended shift's clock in and clock out. `NotFound` for the
+    /// open shift (its clock out isn't known yet) or a deleted one;
+    /// `Conflict` if it would end before it starts.
+    pub fn setShiftTimes(self: *Store, shift_id: Uuid, in_ts: i64, out_ts: i64, now: i64) Error!void {
+        if (out_ts <= in_ts) return error.Conflict;
+        try self.db.exec(
+            \\UPDATE shifts SET in_ts = ?, out_ts = ?, updated_ts = ?
+            \\WHERE id = ? AND out_ts IS NOT NULL AND deleted_ts IS NULL
+        , .{ in_ts, out_ts, now, blob(&shift_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Deletes a shift and its breaks. Time tracked during it stays.
+    pub fn deleteShift(self: *Store, shift_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        try self.db.exec(
+            \\UPDATE shifts SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&shift_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.db.exec(
+            \\UPDATE breaks SET deleted_ts = ?, updated_ts = ?1 WHERE shift_id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&shift_id) });
+        try self.commit();
+    }
+
     /// Clocks out of the open shift at `now`, ending the running break and
     /// entry with it. Returns the shift's id, or null if none was open.
     pub fn endShift(self: *Store, now: i64) Error!?Uuid {
@@ -791,10 +846,7 @@ pub const Store = struct {
 
     pub fn addAlarmRule(self: *Store, trigger: AlarmRule.Trigger, now: i64) Error!Uuid {
         const new: Uuid = .v7(self.io);
-        const minutes: ?i64, const tod: ?i64 = switch (trigger) {
-            .before_clock_out => |m| .{ m, null },
-            .at_time => |t| .{ null, t },
-        };
+        const minutes: ?i64, const tod: ?i64 = AlarmRule.columns(trigger);
         try self.db.exec(
             \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, created_ts, updated_ts)
             \\VALUES (?, ?, ?, ?, ?5, ?5)
@@ -818,6 +870,8 @@ pub const Store = struct {
                 .trigger = switch (kind) {
                     .before_clock_out => .{ .before_clock_out = stmt.int(2) },
                     .at_time => .{ .at_time = stmt.int(3) },
+                    .lunch_opens => .lunch_opens,
+                    .before_lunch_closes => .{ .before_lunch_closes = stmt.int(2) },
                 },
                 .enabled = stmt.int(4) != 0,
             });
@@ -827,10 +881,7 @@ pub const Store = struct {
 
     /// Creates or replaces an alarm rule under an id the caller chose.
     pub fn putAlarmRule(self: *Store, rule: AlarmRule, now: i64) Error!void {
-        const minutes: ?i64, const tod: ?i64 = switch (rule.trigger) {
-            .before_clock_out => |m| .{ m, null },
-            .at_time => |t| .{ null, t },
-        };
+        const minutes: ?i64, const tod: ?i64 = AlarmRule.columns(rule.trigger);
         try self.db.exec(
             \\INSERT INTO alarm_rules (id, kind, minutes, time_of_day_secs, enabled, created_ts, updated_ts)
             \\VALUES (?, ?, ?, ?, ?, ?6, ?6)

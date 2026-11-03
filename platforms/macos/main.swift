@@ -13,13 +13,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
-  lazy var mainWindow = store.map { MainWindow(store: $0) }
+  lazy var mainWindow: MainWindow = {
+    let window = MainWindow(store: store, preferences: preferences, loginItem: loginItem)
+    // A clock in or break moved on the timesheet: the popover reads it before
+    // it saves its own copy over it.
+    window.didChange = { [weak self] in
+      self?.model.pull()
+      self?.tracking?.reload()
+    }
+    return window
+  }()
   lazy var tracking = store.map { store in
     let tracking = TrackingModel(store: store)
     // Starting a timer ends a break in progress.
     tracking.didChange = { [weak self] in
       self?.model.pull()
-      if self?.mainWindow?.isVisible == true { self?.mainWindow?.reload() }
+      if self?.mainWindow.isVisible == true { self?.mainWindow.reload() }
     }
     return tracking
   }
@@ -58,7 +67,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
         loginItem: loginItem, tracking: tracking,
-        openTimesheet: mainWindow == nil ? nil : { [weak self] in self?.showMainWindow() }))
+        openTimesheet: store == nil ? nil : { [weak self] in self?.showMainWindow() },
+        openSettings: { [weak self] in self?.showSettings() }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
@@ -70,7 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
       // Active first, like a click on the popover, then the window.
       NSApp.activate()
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow?.show() }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow.show() }
     }
 
     // Development: open the popover without clicking the status item.
@@ -108,19 +118,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     model.pull()
     preferences.pull()
     tracking?.reload()
-    if mainWindow?.isVisible == true { mainWindow?.reload() }
+    if mainWindow.isVisible { mainWindow.reload() }
   }
 
   func showMainWindow() {
     popover.close()
-    mainWindow?.show()
+    mainWindow.show(.timesheet)
+  }
+
+  @objc func showSettings() {
+    popover.close()
+    mainWindow.show(.settings)
   }
 
   /// Clicking the Dock icon with the window closed (or minimized) shows it.
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
     -> Bool
   {
-    if !flag { mainWindow?.show() }
+    if !flag { mainWindow.show() }
     return true
   }
 
@@ -145,6 +160,9 @@ func setupMenu() {
   appMenu.addItem(
     withTitle: "About Shifty",
     action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+  appMenu.addItem(.separator())
+  appMenu.addItem(
+    withTitle: "Settings…", action: #selector(AppDelegate.showSettings), keyEquivalent: ",")
   appMenu.addItem(.separator())
   appMenu.addItem(
     withTitle: "Hide Shifty", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")

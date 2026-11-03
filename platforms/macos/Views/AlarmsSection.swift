@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AlarmsSection: View {
   @Bindable var model: ShiftModel
+  let preferences: Preferences
 
   var body: some View {
     FormSection("Alarms") {
@@ -9,6 +10,10 @@ struct AlarmsSection: View {
         Button("At clock out") { add(.beforeClockOut(minutes: 0)) }
         Button("15 min before clock out") { add(.beforeClockOut(minutes: 15)) }
         Button("At a set time") { add(.atTime(model.clockOut)) }
+        Section("Lunch") {
+          Button("When lunch opens") { add(.lunchOpens) }
+          Button("15 min before lunch closes") { add(.beforeLunchCloses(minutes: 15)) }
+        }
       } label: {
         Image(systemName: "plus")
           .font(.subheadline.weight(.semibold))
@@ -19,16 +24,18 @@ struct AlarmsSection: View {
       .help("Add an alarm")
     } content: {
       if model.alarms.isEmpty {
-        Text("Get a reminder before you clock out.")
+        Text("Get a reminder before you clock out, or for lunch.")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
 
       let clockOut = model.clockOut
+      let lunch = model.lunch(preferences.lunch, now: Date())
       ForEach($model.alarms) { $rule in
         AlarmRow(
           rule: $rule,
-          fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut),
+          fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch),
+          idle: rule.isLunch ? preferences.lunch.quietReason(lunch) : nil,
           paused: model.isOnBreak && rule.followsClockOut,
           onRemove: {
             let id = rule.id
@@ -41,13 +48,19 @@ struct AlarmsSection: View {
 
   private func add(_ trigger: AlarmRule.Trigger) {
     model.alarms.append(AlarmRule(trigger: trigger))
+    // A lunch alarm needs the lunch window; it's off until asked for.
+    if case .lunchOpens = trigger { preferences.lunch.isEnabled = true }
+    if case .beforeLunchCloses = trigger { preferences.lunch.isEnabled = true }
     AlarmController.shared.requestPermission()
   }
 }
 
 struct AlarmRow: View {
   @Binding var rule: AlarmRule
-  let fireDate: Date
+  /// nil for a lunch alarm that won't ring on this shift.
+  let fireDate: Date?
+  /// Why a lunch alarm won't ring, when it won't.
+  let idle: String?
   /// Waiting for a break to end, when clock out is known again.
   let paused: Bool
   let onRemove: () -> Void
@@ -70,6 +83,17 @@ struct AlarmRow: View {
             .datePickerStyle(.field)
             .labelsHidden()
             .fixedSize()
+        case .lunchOpens:
+          Label("Lunch opens", systemImage: "fork.knife")
+            .fixedSize()
+            .help("Rings when the lunch window opens, unless you've had lunch")
+        case .beforeLunchCloses(let minutes):
+          Label(minutes == 0 ? "Lunch closes" : "\(minutes) min left", systemImage: "fork.knife")
+            .monospacedDigit()
+            .fixedSize()
+            .help("Rings before the lunch window closes, unless you've had lunch")
+          Stepper("Minutes before lunch closes", value: lunchMinutes, in: 0...120, step: 5)
+            .labelsHidden()
         }
       }
       .opacity(rule.isEnabled ? 1 : 0.5)
@@ -82,10 +106,15 @@ struct AlarmRow: View {
           .foregroundStyle(.secondary)
           .fixedSize()
           .opacity(rule.isEnabled ? 1 : 0.5)
-      } else if case .beforeClockOut = rule.trigger {
+      } else if showsFireDate, let fireDate {
         Text(fireDate, style: .time)
           .foregroundStyle(.secondary)
           .monospacedDigit()
+          .fixedSize()
+          .opacity(rule.isEnabled ? 1 : 0.5)
+      } else if let idle {
+        Text(idle)
+          .foregroundStyle(.secondary)
           .fixedSize()
           .opacity(rule.isEnabled ? 1 : 0.5)
       }
@@ -103,6 +132,20 @@ struct AlarmRow: View {
         if case .beforeClockOut(let minutes) = rule.trigger { minutes } else { 0 }
       },
       set: { rule.trigger = .beforeClockOut(minutes: $0) }
+    )
+  }
+
+  /// A set-time alarm's picker already shows when it rings.
+  private var showsFireDate: Bool {
+    if case .atTime = rule.trigger { false } else { true }
+  }
+
+  private var lunchMinutes: Binding<Int> {
+    Binding(
+      get: {
+        if case .beforeLunchCloses(let minutes) = rule.trigger { minutes } else { 0 }
+      },
+      set: { rule.trigger = .beforeLunchCloses(minutes: $0) }
     )
   }
 

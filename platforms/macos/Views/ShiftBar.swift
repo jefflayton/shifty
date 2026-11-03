@@ -2,11 +2,17 @@ import SwiftUI
 
 /// The shift from clock in to clock out: work in the accent color, breaks as
 /// gaps, time already worked solid and time ahead faded, and a dot for now.
+/// The lunch window, while lunch is still to come, is a band behind it; once
+/// you've gone, the gap that was lunch is tinted.
 struct ShiftBar: View {
   let clockIn: Date
   let clockOut: Date
   /// Fractions (0...1) of the shift spent on break.
   let breaks: [ClosedRange<Double>]
+  /// Fractions of the shift lunch has to start in, or nil.
+  var lunch: ClosedRange<Double>? = nil
+  /// Fractions of the shift you were (or are) at lunch, or nil.
+  var lunchBreak: ClosedRange<Double>? = nil
   let now: Date
 
   private let height: CGFloat = 6
@@ -22,7 +28,24 @@ struct ShiftBar: View {
     GeometryReader { geo in
       let width = geo.size.width
       ZStack(alignment: .leading) {
+        if let lunch {
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(LunchStyle.color.opacity(0.35))
+            .frame(width: max(2, width * CGFloat(lunch.upperBound - lunch.lowerBound)), height: dot)
+            .offset(x: width * CGFloat(lunch.lowerBound))
+            .help("Lunch window")
+        }
         Capsule().fill(.quaternary).frame(height: height)
+        if let lunchBreak {
+          Capsule()
+            .fill(LunchStyle.color.opacity(0.6))
+            .frame(
+              width: max(height, width * CGFloat(lunchBreak.upperBound - lunchBreak.lowerBound)),
+              height: height
+            )
+            .offset(x: width * CGFloat(lunchBreak.lowerBound))
+            .help("Lunch")
+        }
 
         // Work: the whole shift, minus break gaps
         workShape(width: width)

@@ -60,16 +60,34 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
   }
 
+  /// The days you work, as ISO weekdays (1 is Monday, 7 Sunday). The
+  /// timesheet hides the others unless there's time on them.
+  var workDays: Set<Int> {
+    didSet { save(Self.workDaysSetting, Self.format(workDays)) }
+  }
+
+  /// When to take lunch. Off until it's turned on.
+  var lunch: LunchRule {
+    didSet { save(Self.lunchSetting, Self.format(lunch)) }
+  }
+
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private let store: ShiftStore?
   static let menuBarDisplayKey = "menuBarDisplay"
   static let clockOutLinkKey = "clockOutLink"
   static let clockOutLinkSetting = "clock_out_link"
   static let migratedKey = "clockOutLink.migratedToStore"
+  static let workDaysSetting = "work_days"
+  static let lunchSetting = "lunch"
+  static let everyDay = Set(1...7)
 
   init(defaults: UserDefaults = .standard, store: ShiftStore? = nil) {
     self.defaults = defaults
     self.store = store
+    workDays = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
+      .flatMap(Self.workDays(from:)) ?? Self.everyDay
+    lunch = Self.load(Self.lunchSetting, store: store, defaults: defaults)
+      .flatMap(Self.lunch(from:)) ?? LunchRule()
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
 
@@ -93,14 +111,81 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
   }
 
-  /// Picks up a link changed from the TUI or CLI.
+  /// Picks up settings changed from the TUI or CLI.
   func pull() {
     guard let store else { return }
+    let days = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
+      .flatMap(Self.workDays(from:)) ?? Self.everyDay
+    if days != workDays { workDays = days }
+    let rule = Self.load(Self.lunchSetting, store: store, defaults: defaults)
+      .flatMap(Self.lunch(from:)) ?? LunchRule()
+    if rule != lunch { lunch = rule }
     do {
       let link = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
       if link != clockOutLink { clockOutLink = link }
     } catch {
       log("load clock-out link:", error)
+    }
+  }
+
+  /// Whether `day` is one you work.
+  func isWorkDay(_ day: Date, calendar: Calendar = .current) -> Bool {
+    workDays.contains(Self.isoWeekday(day, calendar: calendar))
+  }
+
+  /// 1 for Monday through 7 for Sunday, whatever day the calendar's week
+  /// starts on.
+  static func isoWeekday(_ day: Date, calendar: Calendar = .current) -> Int {
+    (calendar.component(.weekday, from: day) + 5) % 7 + 1
+  }
+
+  /// ISO weekdays starting at the calendar's first day of the week.
+  static func weekOrder(_ calendar: Calendar = .current) -> [Int] {
+    let first = (calendar.firstWeekday + 5) % 7 + 1
+    return (0..<7).map { (first - 1 + $0) % 7 + 1 }
+  }
+
+  /// "1,2,3,4,5"; nil for every day, the default.
+  static func format(_ days: Set<Int>) -> String? {
+    days == everyDay ? nil : days.sorted().map(String.init).joined(separator: ",")
+  }
+
+  static func workDays(from text: String) -> Set<Int>? {
+    let days = text.split(separator: ",").compactMap {
+      Int($0.trimmingCharacters(in: .whitespaces))
+    }
+    let valid = Set(days.filter { (1...7).contains($0) })
+    return valid.isEmpty && !text.isEmpty ? nil : valid
+  }
+
+  static func format(_ rule: LunchRule) -> String? {
+    guard rule != LunchRule(), let data = try? JSONEncoder().encode(rule) else { return nil }
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  static func lunch(from text: String) -> LunchRule? {
+    try? JSONDecoder().decode(LunchRule.self, from: Data(text.utf8))
+  }
+
+  /// A setting from the store, or UserDefaults without one.
+  private static func load(_ key: String, store: ShiftStore?, defaults: UserDefaults) -> String? {
+    guard let store else { return defaults.string(forKey: key) }
+    do {
+      return try store.setting(key)
+    } catch {
+      log("load \(key):", error)
+      return nil
+    }
+  }
+
+  /// Saves a setting to the store, or UserDefaults without one. nil
+  /// removes it.
+  private func save(_ key: String, _ value: String?) {
+    guard let store else { return defaults.set(value, forKey: key) }
+    do {
+      try store.setSetting(key, value)
+    } catch {
+      log("save \(key):", error)
     }
   }
 
