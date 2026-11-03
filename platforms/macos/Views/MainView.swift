@@ -1,43 +1,64 @@
+import Observation
 import SwiftUI
 
 /// The main window's screens, switched from the toolbar.
 enum MainScreen: String, CaseIterable, Identifiable {
   case timesheet = "Timesheet"
   case projects = "Projects"
+  case settings = "Settings"
 
   var id: Self { self }
+
+  /// Without the store there's no time to show, only settings.
+  var needsStore: Bool { self != .settings }
+}
+
+/// Which screen the main window shows, so the menu bar and ⌘, can pick one.
+@Observable final class MainNavigation {
+  var screen = MainScreen.timesheet
 }
 
 struct MainView: View {
-  let timesheet: TimesheetModel
-  let projects: ProjectsModel
+  /// nil without the store.
+  let timesheet: TimesheetModel?
+  let projects: ProjectsModel?
+  let preferences: Preferences
+  let loginItem: LoginItem
+  @Bindable var navigation: MainNavigation
 
-  @State private var screen = MainScreen.timesheet
+  private var screens: [MainScreen] {
+    timesheet == nil ? [.settings] : MainScreen.allCases
+  }
 
   var body: some View {
     Group {
-      switch screen {
-      case .timesheet: TimesheetView(model: timesheet)
-      case .projects: ProjectsView(model: projects)
+      switch navigation.screen {
+      case .timesheet: timesheet.map { TimesheetView(model: $0) }
+      case .projects: projects.map { ProjectsView(model: $0) }
+      case .settings:
+        SettingsView(preferences: preferences, loginItem: loginItem)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
+    .frame(minWidth: 820, minHeight: 520)
     .toolbar {
       ToolbarItem(placement: .principal) {
-        Picker("Show", selection: $screen) {
-          ForEach(MainScreen.allCases) { Text($0.rawValue).tag($0) }
+        Picker("Show", selection: $navigation.screen) {
+          ForEach(screens) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
         .fixedSize()
       }
     }
-    .onChange(of: screen) { _, new in
-      // Pick up what the other screen changed: a deleted project's time.
+    .onChange(of: navigation.screen) { _, new in
+      // Pick up what another screen changed: a deleted project's time.
       switch new {
-      case .timesheet: timesheet.reload()
+      case .timesheet: timesheet?.reload()
       case .projects:
-        projects.reload()
-        projects.clearError()
+        projects?.reload()
+        projects?.clearError()
+      case .settings: loginItem.refresh()
       }
     }
   }

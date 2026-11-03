@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Settings that don't fit in the popover: the days you work, the lunch
-/// window, and the menu bar.
+/// The main window's Settings screen: the days you work, the lunch window,
+/// and the menu bar.
 struct SettingsView: View {
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
@@ -51,8 +51,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 460)
-    .fixedSize(horizontal: false, vertical: true)
+    .frame(maxWidth: 560)
     .onAppear { loginItem.refresh() }
   }
 }

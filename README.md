@@ -76,8 +76,8 @@ same timer as `shifty start` and the TUI's, and a break or clock out stops it.
 For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
-The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens Shifty's
-settings: what the menu bar shows (clock-out time, time left, or just the icon), whether Shifty
+The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
+screen of Shifty's window: what the menu bar shows (clock-out time, time left, or just the icon), whether Shifty
 opens at login, the clock-out link, the days you work, and the lunch window.
 
 ### Lunch window
@@ -112,7 +112,7 @@ then show a **Clock Out** button that opens it and stops the alarm.
 ### Timesheet and projects
 
 **Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Switch
-screens from its toolbar:
+screens from its toolbar: Timesheet, Projects, and Settings.
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
   by project inside the time you were on shift; click a day to jump to it. Each day has a
