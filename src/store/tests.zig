@@ -323,6 +323,42 @@ test "shifts - edit, planned breaks, delete" {
     try testing.expectEqual(0, (try s.breaks(a, shift_id)).len);
 }
 
+test "shifts - add after the fact, move, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try testing.expectError(error.Conflict, s.addShift(at(17 * h), 9 * h));
+    const past = try s.addShift(at(9 * h), 17 * h);
+    _ = try s.addBreak(past, 12 * h, 12 * h + 1800, 18 * h);
+    var shifts = try s.shiftsBetween(a, 0, 24 * h);
+    try testing.expectEqual(1, shifts.len);
+    try testing.expectEqual(8 * h, shifts[0].target_secs);
+    try testing.expectEqual(17 * h, shifts[0].out_ts.?);
+    // Adding one doesn't clock you in.
+    try testing.expectEqual(null, try s.currentShift(a));
+
+    try s.setShiftTimes(past, 8 * h, 16 * h, 18 * h);
+    shifts = try s.shiftsBetween(a, 0, 24 * h);
+    try testing.expectEqual(8 * h, shifts[0].in_ts);
+    try testing.expectEqual(16 * h, shifts[0].out_ts.?);
+    try testing.expectError(error.Conflict, s.setShiftTimes(past, 16 * h, 8 * h, 18 * h));
+
+    // The open shift's clock out isn't known, so it can't be moved.
+    const open = try s.startShift(8 * h, at(30 * h));
+    try testing.expectError(error.NotFound, s.setShiftTimes(open, 30 * h, 31 * h, 31 * h));
+
+    try s.deleteShift(past, 18 * h);
+    try testing.expectError(error.NotFound, s.deleteShift(past, 18 * h));
+    try testing.expectEqual(0, (try s.shiftsBetween(a, 0, 24 * h)).len);
+    try testing.expectEqual(0, (try s.breaks(a, past)).len);
+
+    try s.deleteShift(open, 31 * h);
+    try testing.expectEqual(null, try s.currentShift(a));
+}
+
 test "shifts - a forgotten shift closes at its clock out" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();

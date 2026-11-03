@@ -73,6 +73,13 @@ ShiftyResult shifty_start_shift(ShiftyStore *store, int64_t in_ts, int64_t targe
 ShiftyResult shifty_edit_shift(ShiftyStore *store, ShiftyId shift_id, int64_t in_ts,
                                int64_t target_secs, int64_t now);
 ShiftyResult shifty_end_shift(ShiftyStore *store, int64_t now);
+// An ended shift recorded after the fact; its length is out - in.
+ShiftyResult shifty_add_shift(ShiftyStore *store, int64_t in_ts, int64_t out_ts, ShiftyId *out);
+// Moves an ended shift's clock in and out. SHIFTY_NOT_FOUND for the open shift.
+ShiftyResult shifty_set_shift_times(ShiftyStore *store, ShiftyId shift_id, int64_t in_ts,
+                                    int64_t out_ts, int64_t now);
+// Deletes a shift and its breaks; time tracked during it stays.
+ShiftyResult shifty_delete_shift(ShiftyStore *store, ShiftyId shift_id, int64_t now);
 // SHIFTY_OK if a forgotten shift was closed, SHIFTY_NONE otherwise.
 ShiftyResult shifty_close_stale_shift(ShiftyStore *store, int64_t now);
 
@@ -97,9 +104,10 @@ ShiftyResult shifty_set_setting(ShiftyStore *store, const char *key, const char 
 
 // ── Timesheet ───────────────────────────────────────────────────────────────
 
-// The entries overlapping [from, to) plus every active client, project, and
-// workspace, as UTF-8 JSON: {"entries":[...],"clients":[...],"projects":[...],
-// "workspaces":[...]}. Ids are UUID strings. Release with shifty_free.
+// The entries and shifts (with their breaks) overlapping [from, to) plus every
+// active client, project, and workspace, as UTF-8 JSON: {"entries":[...],
+// "shifts":[...],"clients":[...],"projects":[...],"workspaces":[...]}. Ids
+// are UUID strings. Release with shifty_free.
 ShiftyResult shifty_timesheet_json(ShiftyStore *store, int64_t from, int64_t to, char **out,
                                    size_t *len);
 void shifty_free(char *ptr, size_t len);
