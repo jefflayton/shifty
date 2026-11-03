@@ -1028,18 +1028,40 @@ do {
   _ = try! store.addEntry(project: nil, workspace: nil, start: at(9), end: at(10))
   _ = try! store.addEntry(project: nil, workspace: nil, start: at(9, day: -1), end: at(10, day: -1))
   t.reload()
-  check(!t.isCollapsed(at(0)), "open to start")
-  t.toggleCollapsed(at(0))
-  check(t.isCollapsed(at(0)), "folded")
-  check(!t.isCollapsed(at(0, day: -1)), "only that day")
-  t.toggleCollapsed(at(0, day: -1), all: true)
-  check(t.isCollapsed(at(0)) && t.isCollapsed(at(0, day: -1)), "all folded")
-  check(!t.isCollapsed(at(0, day: 1)), "a day with nothing on it has nothing to fold")
-  t.toggleCollapsed(at(0), all: true)
-  check(!t.isCollapsed(at(0)) && !t.isCollapsed(at(0, day: -1)), "all open")
-  t.toggleCollapsed(at(0))
+  let now = at(12)
+  check(!t.isCollapsed(at(0), now: now), "today starts open")
+  check(t.isCollapsed(at(0, day: -1), now: now), "other days start folded")
+  t.toggleCollapsed(at(0), now: now)
+  check(t.isCollapsed(at(0), now: now), "folded")
+  t.toggleCollapsed(at(0, day: -1), now: now)
+  check(!t.isCollapsed(at(0, day: -1), now: now), "opened")
+  check(t.isCollapsed(at(0), now: now), "only that day")
+  t.toggleCollapsed(at(0, day: -1), all: true, now: now)
+  check(t.isCollapsed(at(0), now: now) && t.isCollapsed(at(0, day: -1), now: now), "all folded")
+  check(!t.isCollapsed(at(0, day: 1), now: now), "a day with nothing on it has nothing to fold")
+  t.toggleCollapsed(at(0), all: true, now: now)
+  check(!t.isCollapsed(at(0), now: now) && !t.isCollapsed(at(0, day: -1), now: now), "all open")
+  t.toggleCollapsed(at(0), now: now)
   t.expand(at(0))
-  check(!t.isCollapsed(at(0)), "opened to jump to it")
+  check(!t.isCollapsed(at(0), now: now), "opened to jump to it")
+}
+
+do {
+  // After midnight the new day is the open one; days you opened or folded
+  // stay that way.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  for d in [-1, 0, 1] {
+    _ = try! store.addEntry(project: nil, workspace: nil, start: at(9, day: d), end: at(10, day: d))
+  }
+  t.reload()
+  t.toggleCollapsed(at(0, day: -1), now: at(12))
+  let tomorrow = at(8, day: 1)
+  check(!t.isCollapsed(at(0, day: 1), now: tomorrow), "the new today opens")
+  check(t.isCollapsed(at(0), now: tomorrow), "yesterday folds")
+  check(!t.isCollapsed(at(0, day: -1), now: tomorrow), "a day you opened stays open")
 }
 
 print("\(count - failures)/\(count) checks passed")

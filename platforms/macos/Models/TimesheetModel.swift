@@ -54,28 +54,42 @@ import Observation
   /// The days shown: the ones you work, and any other with time on it.
   var visibleDays: [Date] { days.filter { isWorkDay($0) || hasTime(on: $0) } }
 
-  /// Days folded down to their header, by their start.
-  private(set) var collapsed: Set<Date> = []
+  /// Days folded or opened by hand, by their start. Others are open only
+  /// if they're today.
+  private(set) var folded: Set<Date> = []
+  private(set) var opened: Set<Date> = []
 
-  /// Whether a day is folded down to its header. One with nothing on it
-  /// has nothing to fold.
-  func isCollapsed(_ day: Date) -> Bool {
-    collapsed.contains(calendar.startOfDay(for: day)) && hasTime(on: day)
+  /// Whether a day is folded down to its header: every day but today, until
+  /// you open it. One with nothing on it has nothing to fold.
+  func isCollapsed(_ day: Date, now: Date = Date()) -> Bool {
+    guard hasTime(on: day) else { return false }
+    let d = calendar.startOfDay(for: day)
+    if folded.contains(d) { return true }
+    if opened.contains(d) { return false }
+    return !calendar.isDate(d, inSameDayAs: now)
   }
 
   /// Folds a day, or opens it. With `all`, every day with time follows it,
   /// as Option-click does for disclosure rows.
-  func toggleCollapsed(_ day: Date, all: Bool = false) {
-    let fold = !isCollapsed(day)
+  func toggleCollapsed(_ day: Date, all: Bool = false, now: Date = Date()) {
+    let fold = !isCollapsed(day, now: now)
     let targets = all ? days.filter { hasTime(on: $0) } : [day]
     for d in targets.map(calendar.startOfDay(for:)) {
-      if fold { collapsed.insert(d) } else { collapsed.remove(d) }
+      if fold {
+        folded.insert(d)
+        opened.remove(d)
+      } else {
+        opened.insert(d)
+        folded.remove(d)
+      }
     }
   }
 
   /// Opens a day, e.g. to jump to it from the week strip.
   func expand(_ day: Date) {
-    collapsed.remove(calendar.startOfDay(for: day))
+    let d = calendar.startOfDay(for: day)
+    opened.insert(d)
+    folded.remove(d)
   }
 
   /// Days off with nothing on them.

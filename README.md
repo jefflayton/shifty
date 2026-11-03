@@ -145,8 +145,8 @@ screens from its toolbar: Timesheet, Projects, and Settings.
   on top: clock in and out, time worked, and its breaks (click one to change it), over a timeline
   where project time is laid on the shift, so time on shift that no project has shows as bare
   shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**. Click
-  a day's header to fold it down to its total (Option-click folds or opens every day); clicking a
-  day in the strip opens it.
+  a day's header to open it or fold it down to its total (Option-click folds or opens every day);
+  every day but today starts folded, and clicking a day in the strip opens it.
 - **Days you work**: pick them from the menu by the week's dates, or in Settings. Other days are
   hidden unless they have time on them.
 - **Projects**: rename a project by editing its name, click its color to pick another, and delete
