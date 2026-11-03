@@ -18,7 +18,10 @@ struct TimesheetView: View {
             .padding(.top, 16)
             .padding(.bottom, 12)
           WeekStrip(model: model, now: now) { day in
-            withAnimation(.snappy) { proxy.scrollTo(day, anchor: .top) }
+            withAnimation(.snappy) {
+              model.expand(day)
+              proxy.scrollTo(day, anchor: .top)
+            }
           }
           .padding(.horizontal, 24)
           .padding(.bottom, 16)
@@ -247,9 +250,17 @@ struct DaySection: View {
     let entries = model.entries(on: day)
     let shifts = model.shifts(on: day)
     let empty = entries.isEmpty && shifts.isEmpty
+    let collapsed = model.isCollapsed(day)
     let (title, detail) = Self.title(day, now: now)
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline, spacing: 6) {
+        // Room for the chevron either way, so titles line up.
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .rotationEffect(.degrees(collapsed ? 0 : 90))
+          .frame(width: 12)
+          .opacity(empty ? 0 : 1)
         Text(title)
           .font(.headline)
           .foregroundStyle(empty ? .secondary : .primary)
@@ -277,8 +288,24 @@ struct DaySection: View {
           .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       }
       .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      // The header folds the day; Option-click folds or opens every day.
+      // The + menu keeps its own clicks.
+      .contentShape(Rectangle())
+      .onTapGesture {
+        guard !empty else { return }
+        let all = NSEvent.modifierFlags.contains(.option)
+        withAnimation(.snappy) { model.toggleCollapsed(day, all: all) }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityAddTraits(empty ? [] : .isButton)
+      .accessibilityHint(empty ? "" : collapsed ? "Shows the day" : "Hides the day")
+      .accessibilityAction {
+        if !empty { withAnimation(.snappy) { model.toggleCollapsed(day) } }
+      }
+      .help(empty ? "" : collapsed ? "Show this day (Option-click: every day)" : "Hide this day (Option-click: every day)")
 
-      if !empty {
+      if !empty && !collapsed {
         GroupedRows(minRowHeight: 38) {
           if !shifts.isEmpty {
             ShiftBlock(model: model, day: day, shifts: shifts, now: now)
@@ -287,6 +314,7 @@ struct DaySection: View {
             EntryRow(model: model, entry: entry, now: now)
           }
         }
+        .transition(.opacity)
       }
     }
   }

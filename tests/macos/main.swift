@@ -1002,5 +1002,28 @@ do {
   expectEqual(try! store.timesheet(DateInterval(start: at(0), end: at(23))).entries.first?.end, at(11), "ended when class began")
 }
 
+do {
+  // Days fold down to their header, one at a time or all at once.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(9), end: at(10))
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(9, day: -1), end: at(10, day: -1))
+  t.reload()
+  check(!t.isCollapsed(at(0)), "open to start")
+  t.toggleCollapsed(at(0))
+  check(t.isCollapsed(at(0)), "folded")
+  check(!t.isCollapsed(at(0, day: -1)), "only that day")
+  t.toggleCollapsed(at(0, day: -1), all: true)
+  check(t.isCollapsed(at(0)) && t.isCollapsed(at(0, day: -1)), "all folded")
+  check(!t.isCollapsed(at(0, day: 1)), "a day with nothing on it has nothing to fold")
+  t.toggleCollapsed(at(0), all: true)
+  check(!t.isCollapsed(at(0)) && !t.isCollapsed(at(0, day: -1)), "all open")
+  t.toggleCollapsed(at(0))
+  t.expand(at(0))
+  check(!t.isCollapsed(at(0)), "opened to jump to it")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)
