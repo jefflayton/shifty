@@ -598,6 +598,36 @@ test "break presets - the day's breaks are cut to the shift" {
     try testing.expectEqual(tue + 14 * h, planned[0].out_ts);
 }
 
+test "break presets - a planned break stops the timer where it starts" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try s.putBreakPreset(class(.v7(io), tue_thu, 11 * h, 14 * h), 0);
+    _ = try s.startShift(8 * h, at(tue + 9 * h));
+    const work = try s.startEntry(.{ .source = .tui }, at(tue + 9 * h));
+
+    // Before class nothing happens.
+    try testing.expectEqual(null, try s.stopForBreaks(a, tue + 10 * h));
+    // Looked at again mid-class, it ended when class began.
+    try testing.expect((try s.stopForBreaks(a, tue + 12 * h)).?.eql(work));
+    try testing.expectEqual(null, try s.runningEntry(a));
+    try testing.expectEqual(tue + 11 * h, (try s.entriesBetween(a, tue, tue + 24 * h))[0].out_ts.?);
+
+    // Started during class: you're working anyway, so it keeps running.
+    _ = try s.startEntry(.{ .source = .tui }, at(tue + 12 * h));
+    try testing.expectEqual(null, try s.stopForBreaks(a, tue + 13 * h));
+
+    // Housekeeping does it too, for the CLI and TUI.
+    _ = try s.stopEntry(tue + 13 * h);
+    _ = try s.startEntry(.{ .source = .tui }, at(tue + 14 * h));
+    _ = try s.addBreak((try s.currentShift(a)).?.id, tue + 15 * h, tue + 15 * h + 900, tue + 14 * h);
+    _ = try s.closeStaleShift(a, tue + 15 * h + 60);
+    try testing.expectEqual(null, try s.runningEntry(a));
+}
+
 // ── Alarms, settings, links ─────────────────────────────────────────────────
 
 test "alarm rules" {

@@ -225,6 +225,15 @@ export fn shifty_end_shift(h: *Handle, now: i64) Result {
     return if (ended == null) .none else .ok;
 }
 
+/// Stops the running entry where a planned break began; `ok` if one was
+/// stopped, `none` otherwise.
+export fn shifty_stop_for_breaks(h: *Handle, now: i64) Result {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const stopped = h.store.stopForBreaks(arena.allocator(), now) catch |e| return result(e);
+    return if (stopped == null) .none else .ok;
+}
+
 /// `ok` if a forgotten shift was closed, `none` if there was nothing to do.
 export fn shifty_close_stale_shift(h: *Handle, now: i64) Result {
     var arena: std.heap.ArenaAllocator = .init(gpa);

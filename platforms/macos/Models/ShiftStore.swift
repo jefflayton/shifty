@@ -94,6 +94,16 @@ final class ShiftStore {
     try check(shifty_delete_shift(handle, ShiftyId(id), ts(now)))
   }
 
+  /// Stops the running entry where a planned break began after it started.
+  /// Returns whether one was stopped.
+  @discardableResult
+  func stopForBreaks(now: Date = Date()) throws -> Bool {
+    let result = shifty_stop_for_breaks(handle, ts(now))
+    if result == SHIFTY_NONE { return false }
+    try check(result)
+    return true
+  }
+
   /// Whether a shift nobody clocked out of was closed.
   func closeStaleShift(now: Date = Date()) throws -> Bool {
     let result = shifty_close_stale_shift(handle, ts(now))

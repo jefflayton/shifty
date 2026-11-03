@@ -104,6 +104,9 @@ ShiftyResult shifty_set_shift_times(ShiftyStore *store, ShiftyId shift_id, int64
                                     int64_t out_ts, int64_t now);
 // Deletes a shift and its breaks; time tracked during it stays.
 ShiftyResult shifty_delete_shift(ShiftyStore *store, ShiftyId shift_id, int64_t now);
+// Stops the running entry where a planned break on the open shift began after
+// it started. SHIFTY_OK if one was stopped, SHIFTY_NONE otherwise.
+ShiftyResult shifty_stop_for_breaks(ShiftyStore *store, int64_t now);
 // SHIFTY_OK if a forgotten shift was closed, SHIFTY_NONE otherwise.
 ShiftyResult shifty_close_stale_shift(ShiftyStore *store, int64_t now);
 

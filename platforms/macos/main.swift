@@ -114,6 +114,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func checkStore() {
+    // A planned break, like a class, stops the timer when it begins.
+    if model.isClockedIn { tracking?.stopForBreaks(model.anchoredBreaks()) }
     guard let store, let version = try? store.dataVersion(), version != storeVersion else { return }
     storeVersion = version
     model.pull()

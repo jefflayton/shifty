@@ -977,5 +977,30 @@ do {
   check(m.todayBreak(for: during, now: at(16, 40), calendar: cal) == nil, "overlaps the break you're on")
 }
 
+do {
+  // A planned break stops the timer where it begins.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9)
+  m.breaks = [brk(at(11), at(14))]
+  m.clockInNow(now: at(9))
+  let tracking = TrackingModel(store: store)
+  var changed = 0
+  tracking.didChange = { changed += 1 }
+  try! store.startEntry(project: nil, workspace: nil, now: at(9))
+  tracking.reload(now: at(9))
+
+  tracking.stopForBreaks(m.anchoredBreaks(), now: at(10))
+  check(tracking.running != nil, "still working before class")
+  expectEqual(changed, 0, "nothing written")
+  tracking.stopForBreaks(m.anchoredBreaks(), now: at(11, 1))
+  check(tracking.running == nil, "stopped for class")
+  expectEqual(changed, 1, "the shift hears about it")
+  expectEqual(try! store.timesheet(DateInterval(start: at(0), end: at(23))).entries.first?.end, at(11), "ended when class began")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

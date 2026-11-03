@@ -805,13 +805,41 @@ pub const Store = struct {
         return shift_id;
     }
 
-    /// Housekeeping for a shift nobody clocked out of: once its expected
-    /// clock out is `stale_after_secs` past, it ends there. A break running
-    /// that long was forgotten, not taken, so it's dropped first. Returns
-    /// whether a shift was closed.
+    /// Stops the running entry where a planned break on the open shift
+    /// began, if one began after the entry started and by `now`: a class at
+    /// 11 isn't project time, even if nobody stopped the timer. An entry
+    /// started during the break is work anyway and keeps running. Returns
+    /// the entry stopped, if any.
+    pub fn stopForBreaks(self: *Store, arena: Allocator, now: i64) Error!?Uuid {
+        try self.begin();
+        errdefer self.rollback();
+        const stopped = try self.stopRunningForBreaks(arena, now);
+        try self.commit();
+        return stopped;
+    }
+
+    fn stopRunningForBreaks(self: *Store, arena: Allocator, now: i64) Error!?Uuid {
+        const entry = try self.runningEntry(arena) orelse return null;
+        const shift = try self.currentShift(arena) orelse return null;
+        var at: ?i64 = null;
+        for (try self.breaks(arena, shift.id)) |b| {
+            if (b.in_ts > entry.in_ts and b.in_ts <= now and (at == null or b.in_ts < at.?)) at = b.in_ts;
+        }
+        const end = at orelse return null;
+        try self.db.exec("UPDATE entries SET out_ts = ?, updated_ts = ? WHERE id = ?", .{ end, now, blob(&entry.id) });
+        return entry.id;
+    }
+
+    /// Housekeeping, run whenever a frontend looks at the store. A running
+    /// entry stops where a planned break began (see `stopForBreaks`). A
+    /// shift nobody clocked out of ends at its expected clock out once
+    /// that's `stale_after_secs` past; a break running that long was
+    /// forgotten, not taken, so it's dropped first. Returns whether a shift
+    /// was closed.
     pub fn closeStaleShift(self: *Store, arena: Allocator, now: i64) Error!bool {
         try self.begin();
         errdefer self.rollback();
+        _ = try self.stopRunningForBreaks(arena, now);
 
         try self.db.exec(
             \\UPDATE breaks SET deleted_ts = ?1, updated_ts = ?1
