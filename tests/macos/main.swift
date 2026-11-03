@@ -826,6 +826,23 @@ do {
   expectEqual(spans.map(\.1), [at(12), at(16)])
 }
 
+do {
+  // Starting a break: the popover's timeline can draw with a `now` from its
+  // last tick, before the break began. That once trapped ("Range requires
+  // lowerBound <= upperBound") on macOS 27.
+  var rule = LunchRule()
+  rule.isEnabled = true
+  let plan = rule.plan(
+    clockIn: at(9), worked: 8 * 3600, breaks: [.init(start: at(12, 0), end: nil)], now: at(12))!
+  let stale = at(11, 59)
+  check(ShiftSummary.lunchBreak(plan, clockIn: at(9), clockOut: at(17), now: stale) == nil, "nothing to draw yet")
+  check(ShiftSummary.lunchBreak(plan, clockIn: at(9), clockOut: at(17), now: at(12, 30)) != nil, "drawn once it's going")
+
+  let model = ShiftModel()
+  model.clockInTime = at(9)
+  model.startBreak(now: at(12))
+  check(model.lunch(rule, now: stale) != nil, "planning with a stale now is fine")
+}
 
 // MARK: Break presets
 
