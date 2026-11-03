@@ -89,7 +89,8 @@ shift starts (the popover rolling over to today, the TUI's clock in, or `shifty 
 the shift as an ordinary break and pushes clock out later. To skip or move it for one day, edit or
 remove that break in the popover or on the timesheet. A break that would start after clock out
 isn't added, and one already underway when you clock in counts from clock in. Changes apply from
-the next day's shift.
+the next day's shift; to put one on today's shift too, click **Add to Today** beside it (shown
+while it fits: it's for today, isn't over, and doesn't overlap a break you already have).
 
 With **Time Until Break** in the menu bar, Shifty counts down to the next break, then to the end
 of the one you're on; with no break left, it shows the time left. During a planned break the icon

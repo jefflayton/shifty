@@ -5,6 +5,8 @@ import SwiftUI
 struct SettingsView: View {
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
+  /// The menu bar's shift, for adding a scheduled break to it today.
+  var shift: ShiftModel? = nil
 
   var body: some View {
     Form {
@@ -35,7 +37,14 @@ struct SettingsView: View {
       if preferences.hasStore {
         Section {
           ForEach($preferences.scheduledBreaks) { $brk in
-            ScheduledBreakEditor(brk: $brk) {
+            ScheduledBreakEditor(
+              brk: $brk,
+              // A break made today otherwise waits for tomorrow's shift.
+              addToday: shift.flatMap { shift in
+                shift.todayBreak(for: brk, now: Date()) == nil
+                  ? nil : { shift.addToday(brk) }
+              }
+            ) {
               let id = brk.id
               preferences.scheduledBreaks.removeAll { $0.id == id }
             }
@@ -47,7 +56,7 @@ struct SettingsView: View {
           Text("Scheduled Breaks")
         } footer: {
           Text(
-            "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
+            "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later; Add to Today puts a new one on today's. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
           )
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -101,6 +110,8 @@ struct LunchSettings: View {
 /// One scheduled break: its name, days, and times.
 struct ScheduledBreakEditor: View {
   @Binding var brk: ScheduledBreak
+  /// Puts it on today's shift; nil when it doesn't fit there.
+  var addToday: (() -> Void)? = nil
   let onRemove: () -> Void
   var calendar: Calendar = .current
 
@@ -139,6 +150,9 @@ struct ScheduledBreakEditor: View {
               .font(.callout)
           } else if brk.weekdays.isEmpty {
             Text("No days").foregroundStyle(.secondary).font(.callout)
+          } else if let addToday {
+            Button("Add to Today", action: addToday)
+              .help("Put this break on today's shift too; otherwise it starts with the next one")
           }
         }
       }

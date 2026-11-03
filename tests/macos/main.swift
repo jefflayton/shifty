@@ -654,7 +654,7 @@ do {
       "\(rule.trigger) round-trips through the store")
   }
   expectEqual(LunchRule().quietReason(nil), "Lunch off")
-  expectEqual(rule.quietReason(nil), "No lunch needed")
+  expectEqual(rule.quietReason(nil), "Not needed")
   expectEqual(rule.quietReason(ate), "Had lunch")
 
   let late = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(14, 30), at(15))], now: at(16))!
@@ -932,6 +932,49 @@ do {
   pulled.store = store
   pulled.pull()
   check(pulled.alarms.elementsEqual(model.alarms, by: AlarmRule.sameRule), "round trip")
+}
+
+do {
+  // A scheduled break made today can be added to today's shift by hand.
+  // Wednesday Oct 28, 9 to 5.
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  let today = ScheduledBreak(name: "Class", weekdays: [3], start: 14 * 3600, end: 15 * 3600)
+  let added = m.todayBreak(for: today, now: at(10), calendar: cal)
+  expectEqual(added?.inDate, at(14), "today's times")
+  expectEqual(added?.outDate, at(15))
+
+  var tomorrow = today
+  tomorrow.weekdays = [4]
+  check(m.todayBreak(for: tomorrow, now: at(10), calendar: cal) == nil, "not today's weekday")
+  var off = today
+  off.isEnabled = false
+  check(m.todayBreak(for: off, now: at(10), calendar: cal) == nil, "turned off")
+  check(m.todayBreak(for: today, now: at(15, 30), calendar: cal) == nil, "already over")
+  var early = today
+  early.start = 8 * 3600
+  early.end = 10 * 3600
+  expectEqual(m.todayBreak(for: early, now: at(9, 30), calendar: cal)?.inDate, at(9), "cut to clock in")
+  var late = today
+  late.start = 18 * 3600
+  late.end = 19 * 3600
+  check(m.todayBreak(for: late, now: at(10), calendar: cal) == nil, "after clock out")
+  check(m.todayBreak(for: today, now: at(10, day: 1), calendar: cal) == nil, "the shift isn't today's")
+
+  check(m.addToday(today, now: at(10), calendar: cal), "added")
+  expectEqual(m.breaks.map(\.inDate), [at(14)])
+  check(m.todayBreak(for: today, now: at(10), calendar: cal) == nil, "not twice")
+  check(!m.addToday(today, now: at(10), calendar: cal), "second add does nothing")
+  var overlapping = today
+  overlapping.start = 14.5 * 3600
+  overlapping.end = 16 * 3600
+  check(m.todayBreak(for: overlapping, now: at(10), calendar: cal) == nil, "overlaps a break")
+  m.startBreak(now: at(16, 30))
+  var during = today
+  during.start = 16 * 3600
+  during.end = 17 * 3600
+  check(m.todayBreak(for: during, now: at(16, 40), calendar: cal) == nil, "overlaps the break you're on")
 }
 
 print("\(count - failures)/\(count) checks passed")

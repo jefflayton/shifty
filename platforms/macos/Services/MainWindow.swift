@@ -11,10 +11,15 @@ final class MainWindow: NSObject, NSWindowDelegate {
   private let projects: ProjectsModel?
   private let preferences: Preferences
   private let loginItem: LoginItem
+  /// The menu bar's shift, for adding a scheduled break to it today.
+  private let shift: ShiftModel?
   private let navigation = MainNavigation()
   private var window: NSWindow?
 
-  init(store: ShiftStore?, preferences: Preferences, loginItem: LoginItem) {
+  init(
+    store: ShiftStore?, preferences: Preferences, loginItem: LoginItem, shift: ShiftModel? = nil
+  ) {
+    self.shift = shift
     timesheet = store.map { TimesheetModel(store: $0, preferences: preferences) }
     projects = store.map { ProjectsModel(store: $0) }
     self.preferences = preferences
@@ -75,7 +80,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
     let host = NSHostingController(
       rootView: MainView(
         timesheet: timesheet, projects: projects, preferences: preferences, loginItem: loginItem,
-        navigation: navigation))
+        shift: shift, navigation: navigation))
     // Let the views' .toolbar fill the window's.
     host.sceneBridgingOptions = [.toolbars]
     window.contentViewController = host

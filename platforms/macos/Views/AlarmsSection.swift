@@ -43,7 +43,7 @@ struct AlarmsSection: View {
           fireDate: rule.fireDate(
             clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch, breaks: breaks, now: now),
           idle: rule.isLunch
-            ? preferences.lunch.quietReason(lunch) : rule.isBreak ? "No break ahead" : nil,
+            ? preferences.lunch.quietReason(lunch) : rule.isBreak ? "No break" : nil,
           paused: model.isOnBreak && rule.followsClockOut,
           onRemove: {
             let id = rule.id
@@ -123,10 +123,13 @@ struct AlarmRow: View {
       Spacer()
 
       // A set-time alarm's picker already shows when it rings.
+      // The status gives way before the row outgrows the popover: it
+      // shrinks a little, then truncates (the full text is its tooltip).
       if paused {
         Text("After break")
           .foregroundStyle(.secondary)
-          .fixedSize()
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
           .opacity(rule.isEnabled ? 1 : 0.5)
       } else if showsFireDate, let fireDate {
         Text(fireDate, style: .time)
@@ -137,7 +140,9 @@ struct AlarmRow: View {
       } else if let idle {
         Text(idle)
           .foregroundStyle(.secondary)
-          .fixedSize()
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+          .help(idle)
           .opacity(rule.isEnabled ? 1 : 0.5)
       }
 

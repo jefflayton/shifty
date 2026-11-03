@@ -120,6 +120,41 @@ import Observation
     }
   }
 
+  /// A scheduled break as it would go on this shift today, if it fits:
+  /// it's on, it's for the shift's weekday, the shift is today's (or still
+  /// going), it isn't over yet, it starts before clock out, and no break
+  /// already overlaps it. It counts from clock in, as when clocking in.
+  func todayBreak(for preset: ScheduledBreak, now: Date, calendar: Calendar = .current)
+    -> Interval?
+  {
+    guard preset.isEnabled, preset.isValid,
+      preset.weekdays.contains(Preferences.isoWeekday(clockInTime, calendar: calendar))
+    else { return nil }
+    let clockOut = clockOut(now: now)
+    guard calendar.isDate(clockInTime, inSameDayAs: now) || clockOut > now else { return nil }
+
+    let day = calendar.startOfDay(for: clockInTime)
+    let start = max(day.addingTimeInterval(preset.start), clockInTime)
+    let end = day.addingTimeInterval(preset.end)
+    guard end > now, end > start, start < clockOut else { return nil }
+
+    var taken = anchoredBreaks()
+    if let breakStart { taken.append((breakStart, .distantFuture)) }
+    guard !taken.contains(where: { $0.start < end && start < $0.end }) else { return nil }
+    return Interval(inDate: start, outDate: end)
+  }
+
+  /// Puts a scheduled break on this shift today, if it fits (see
+  /// `todayBreak`). Returns whether it did.
+  @discardableResult
+  func addToday(_ preset: ScheduledBreak, now: Date = Date(), calendar: Calendar = .current)
+    -> Bool
+  {
+    guard let brk = todayBreak(for: preset, now: now, calendar: calendar) else { return false }
+    breaks.append(brk)
+    return true
+  }
+
   /// The clock-in picker only edits hour and minute, so a menu bar app left
   /// running overnight would compute today's shift on yesterday's date and
   /// every alarm would already be in the past. Once a shift is stale, start
