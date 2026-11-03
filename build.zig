@@ -4,6 +4,11 @@ const Build = std.Build;
 pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Everything else is a dev build: its own database, and on macOS its own
+    // bundle id, so testing a branch can't touch the installed app's data.
+    const release = b.option(bool, "release", "Build for release: use the real database and bundle id") orelse false;
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "release", release);
 
     const core = b.createModule(.{
         .root_source_file = b.path("src/core/root.zig"),
@@ -33,6 +38,7 @@ pub fn build(b: *Build) void {
         .link_libc = true,
     });
     store.addImport("core", core);
+    store.addOptions("build_options", build_options);
     store.addImport("c", sqlite_h.createModule());
     // An object Zig merges into whatever links the store, including the
     // macOS app's Zig object. Not a static library, whose members Apple's ld
@@ -70,7 +76,7 @@ pub fn build(b: *Build) void {
     const integrations_tests = b.addTest(.{ .root_module = integrations });
     test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
 
-    const macos_step = buildMacOS(b, optimize, .{ .core = core, .store = store });
+    const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store });
     b.getInstallStep().dependOn(macos_step);
 
     const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
@@ -173,6 +179,7 @@ fn buildTui(
 fn buildMacOS(
     b: *Build,
     optimize: std.builtin.OptimizeMode,
+    release: bool,
     deps: struct { core: *Build.Module, store: *Build.Module },
 ) *Build.Step {
     const macos_step = b.step("macos", "Build the macOS app");
@@ -204,11 +211,22 @@ fn buildMacOS(
         bundle_path ++ "/Resources",
     });
 
-    // Install plist
-    const inst_info_plist = b.addInstallFile(
-        b.path(macos ++ "/Info.plist"),
-        "Shifty.app/Contents/Info.plist",
-    );
+    // Install plist. A dev build gets its own bundle id (and so its own
+    // UserDefaults, login item, and notifications) and no update feed, so
+    // Sparkle never swaps it for the release.
+    const info_plist = if (release) b.path(macos ++ "/Info.plist") else blk: {
+        const dev_plist = b.addSystemCommand(&.{
+            "sh",
+            "-c",
+            "cp \"$1\" \"$2\" && /usr/libexec/PlistBuddy" ++
+                " -c 'Set :CFBundleIdentifier com.jeffreylayton.shifty.dev'" ++
+                " -c 'Set :CFBundleName Shifty Dev' -c 'Delete :SUFeedURL' \"$2\"",
+            "_",
+        });
+        dev_plist.addFileArg(b.path(macos ++ "/Info.plist"));
+        break :blk dev_plist.addOutputFileArg("Info.plist");
+    };
+    const inst_info_plist = b.addInstallFile(info_plist, "Shifty.app/Contents/Info.plist");
 
     const inst_alarm = b.addInstallFile(b.path(macos ++ "/Resources/alarm.caf"), "Shifty.app/Contents/Resources/alarm.caf");
 

@@ -53,9 +53,20 @@ zig build all               # tests + every frontend for this platform
 zig build test-macos        # menu bar app model tests (macOS only)
 ```
 
+Builds are dev builds unless you pass `-Drelease`, so you can test a branch next to the installed
+app without touching its data:
+
+- The TUI, CLI, and app share `~/Library/Application Support/Shifty Dev/shifty.db` instead of the
+  real database. A branch's migration can't upgrade the database the installed app reads.
+- The app is "Shifty Dev" (`com.jeffreylayton.shifty.dev`), with its own settings, login item,
+  notifications, and log (`~/Library/Logs/Shifty Dev`), and no update feed.
+
+Set `SHIFTY_DB` to use another database. `-Drelease` builds use the real one and the real bundle
+id; the release workflow builds with it.
+
 Set `SHIFTY_OPEN_ON_LAUNCH=1` to open the menu bar popover at launch, e.g.
 `open --env SHIFTY_OPEN_ON_LAUNCH=1 zig-out/Shifty.app`, or `SHIFTY_OPEN_TIMESHEET=1` to open the
-timesheet window. Set `SHIFTY_DB` to a scratch path to keep a dev build off your real data.
+timesheet window.
 
 ## Menu bar
 

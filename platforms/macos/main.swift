@@ -244,8 +244,13 @@ func setupMenu() {
   NSApp.mainMenu = mainMenu
 }
 
+/// "Shifty", or "Shifty Dev" for a build without `-Drelease`.
+let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Shifty"
+
 func setupLogs() {
-  let dir = "\(NSHomeDirectory())/Library/Logs/Shifty"
+  // A dev build logs on its own, so its errors aren't mistaken for the
+  // installed app's.
+  let dir = "\(NSHomeDirectory())/Library/Logs/\(appName)"
   try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
   let path = "\(dir)/shifty.log"
   freopen(path, "a+", stdout)

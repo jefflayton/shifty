@@ -69,7 +69,7 @@ jobs:
             # Naming any step replaces the default `install` step, so list it
             # explicitly or the app and DMG are never built.
             - name: Build
-              run: zig build -Dbundle install sparkle-tools
+              run: zig build -Drelease -Dbundle install sparkle-tools
 
             - name: Check build outputs
               run: |
