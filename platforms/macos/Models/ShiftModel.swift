@@ -305,14 +305,27 @@ extension AlarmRule {
       ShiftyAlarmRule(
         id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_AT_TIME.rawValue),
         enabled: isEnabled ? 1 : 0, value: Int64(Self.secondsSinceMidnight(time)))
+    case .lunchOpens:
+      ShiftyAlarmRule(
+        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue),
+        enabled: isEnabled ? 1 : 0, value: 0)
+    case .beforeLunchCloses(let minutes):
+      ShiftyAlarmRule(
+        id: ShiftyId(id), kind: Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue),
+        enabled: isEnabled ? 1 : 0, value: Int64(minutes))
     }
   }
 
   init(storeRow row: ShiftyAlarmRule, calendar: Calendar = .current) {
     let trigger: Trigger =
-      row.kind == Int32(SHIFTY_ALARM_AT_TIME.rawValue)
-      ? .atTime(calendar.startOfDay(for: Date()).addingTimeInterval(TimeInterval(row.value)))
-      : .beforeClockOut(minutes: Int(row.value))
+      switch row.kind {
+      case Int32(SHIFTY_ALARM_AT_TIME.rawValue):
+        .atTime(calendar.startOfDay(for: Date()).addingTimeInterval(TimeInterval(row.value)))
+      case Int32(SHIFTY_ALARM_LUNCH_OPENS.rawValue): .lunchOpens
+      case Int32(SHIFTY_ALARM_BEFORE_LUNCH_CLOSES.rawValue):
+        .beforeLunchCloses(minutes: Int(row.value))
+      default: .beforeClockOut(minutes: Int(row.value))
+      }
     self.init(id: UUID(row.id), trigger: trigger, isEnabled: row.enabled != 0)
   }
 

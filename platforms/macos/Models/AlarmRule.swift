@@ -8,18 +8,39 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     case beforeClockOut(minutes: Int)
     /// Rings at a fixed time of day during the shift.
     case atTime(Date)
+    /// Rings when the lunch window opens.
+    case lunchOpens
+    /// Rings `minutes` before the lunch window closes.
+    case beforeLunchCloses(minutes: Int)
   }
 
   var id = UUID()
   var trigger: Trigger
   var isEnabled = true
 
-  func fireDate(clockIn: Date, clockOut: Date, calendar: Calendar = .current) -> Date {
+  /// When it rings on this shift. A lunch alarm doesn't ring without a
+  /// lunch window, or once you've had lunch (or are on a break).
+  func fireDate(
+    clockIn: Date, clockOut: Date, lunch: LunchPlan? = nil, calendar: Calendar = .current
+  ) -> Date? {
     switch trigger {
     case .beforeClockOut(let minutes):
-      clockOut.addingTimeInterval(-TimeInterval(minutes) * 60)
+      return clockOut.addingTimeInterval(-TimeInterval(minutes) * 60)
     case .atTime(let time):
-      ShiftTimes.anchor(time: time, clockIn: clockIn, calendar: calendar)
+      return ShiftTimes.anchor(time: time, clockIn: clockIn, calendar: calendar)
+    case .lunchOpens:
+      guard let lunch, lunch.lunch == nil else { return nil }
+      return lunch.opens
+    case .beforeLunchCloses(let minutes):
+      guard let lunch, lunch.lunch == nil else { return nil }
+      return lunch.closes.addingTimeInterval(-TimeInterval(minutes) * 60)
+    }
+  }
+
+  var isLunch: Bool {
+    switch trigger {
+    case .lunchOpens, .beforeLunchCloses: true
+    case .beforeClockOut, .atTime: false
     }
   }
 
@@ -34,6 +55,9 @@ struct AlarmRule: Identifiable, Codable, Equatable {
     case .beforeClockOut(0): "Time to clock out"
     case .beforeClockOut(let minutes): "\(minutes) min until clock out"
     case .atTime: "Shifty alarm"
+    case .lunchOpens: "Time for lunch"
+    case .beforeLunchCloses(0): "Lunch window closing"
+    case .beforeLunchCloses(let minutes): "\(minutes) min left to start lunch"
     }
   }
 }

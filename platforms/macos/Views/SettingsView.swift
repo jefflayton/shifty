@@ -26,7 +26,7 @@ struct SettingsView: View {
         Text("Lunch")
       } footer: {
         Text(
-          "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work."
+          "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work. Add lunch alarms from the menu bar."
         )
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -56,7 +56,8 @@ struct SettingsView: View {
   }
 }
 
-/// The lunch window's bounds, what counts as lunch, and the reminder.
+/// The lunch window's bounds and what counts as lunch. Reminders are alarms,
+/// set in the menu bar.
 struct LunchSettings: View {
   @Binding var rule: LunchRule
 
@@ -72,20 +73,6 @@ struct LunchSettings: View {
     DurationStepper(
       "Lunch is a break of at least", value: $rule.minimum, in: (5 * 60)...(2 * 3600),
       step: 5 * 60)
-    Toggle(
-      "Remind me",
-      isOn: Binding(
-        get: { rule.remindAt != nil },
-        set: { on in
-          let middle = ((rule.earliest + rule.latest) / 2 / Self.quarter).rounded() * Self.quarter
-          rule.remindAt = on ? middle : nil
-        }))
-    if let remind = rule.remindAt {
-      DurationStepper(
-        "Remind after",
-        value: Binding(get: { remind }, set: { rule.remindAt = $0 }),
-        in: rule.earliest...rule.latest, step: Self.quarter, suffix: "of work")
-    }
   }
 }
 

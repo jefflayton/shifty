@@ -44,7 +44,33 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(1, stmt.int(0));
+    try testing.expectEqual(2, stmt.int(0));
+}
+
+test "open - lunch alarms migration keeps existing rules" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    // A database as the first schema left it, with a rule in it.
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(tmp.path).?) catch {};
+    const db: store.sqlite.Db = try .open(tmp.path);
+    try db.execScript(@embedFile("migrations/0001_init.sql"));
+    try db.execScript("PRAGMA user_version = 1");
+    try db.execScript(
+        \\INSERT INTO alarm_rules (id, kind, minutes, enabled, created_ts, updated_ts)
+        \\VALUES (x'0102030405060708090a0b0c0d0e0f10', 'before_clock_out', 15, 0, 1, 1)
+    );
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const rules = try s.alarmRules(arena.allocator());
+    try testing.expectEqual(1, rules.len);
+    try testing.expectEqual(15, rules[0].trigger.before_clock_out);
+    try testing.expect(!rules[0].enabled);
+    _ = try s.addAlarmRule(.lunch_opens, 2);
 }
 
 test "open - refuses a database from a newer Shifty" {
@@ -410,6 +436,19 @@ test "alarm rules" {
     try testing.expect(rules[0].enabled);
     try testing.expectEqual(12 * h, rules[1].trigger.at_time);
     try testing.expect(!rules[1].enabled);
+
+    const opens = try s.addAlarmRule(.lunch_opens, 1);
+    const closing = try s.addAlarmRule(.{ .before_lunch_closes = 30 }, 1);
+    try testing.expectError(error.Conflict, s.addAlarmRule(.{ .before_lunch_closes = -5 }, 1));
+    rules = try s.alarmRules(a);
+    try testing.expectEqual(4, rules.len);
+    try testing.expect(rules[2].id.eql(opens));
+    try testing.expectEqual(.lunch_opens, std.meta.activeTag(rules[2].trigger));
+    try testing.expectEqual(30, rules[3].trigger.before_lunch_closes);
+    try s.putAlarmRule(.{ .id = closing, .trigger = .{ .before_lunch_closes = 15 }, .enabled = true }, 2);
+    try testing.expectEqual(15, (try s.alarmRules(a))[3].trigger.before_lunch_closes);
+    try s.deleteAlarmRule(opens, 2);
+    try s.deleteAlarmRule(closing, 2);
 
     try s.deleteAlarmRule(ten, 2);
     rules = try s.alarmRules(a);

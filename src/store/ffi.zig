@@ -55,13 +55,14 @@ pub const Break = extern struct {
     running: i32,
 };
 
-pub const AlarmKind = enum(i32) { before_clock_out = 0, at_time = 1, _ };
+pub const AlarmKind = enum(i32) { before_clock_out = 0, at_time = 1, lunch_opens = 2, before_lunch_closes = 3, _ };
 
 pub const AlarmRule = extern struct {
     id: Id,
     kind: AlarmKind,
     enabled: i32,
-    /// Minutes before clock out, or seconds since local midnight.
+    /// Minutes before clock out or before the lunch window closes, seconds
+    /// since local midnight, or nothing (lunch opens).
     value: i64,
 };
 
@@ -216,10 +217,15 @@ export fn shifty_alarm_rules(h: *Handle, out: [*]AlarmRule, cap: usize, count: *
     defer arena.deinit();
     const rules = h.store.alarmRules(arena.allocator()) catch |e| return result(e);
     count.* = rules.len;
-    for (rules[0..@min(rules.len, cap)], out) |r, *o| o.* = switch (r.trigger) {
-        .before_clock_out => |m| .{ .id = .{ .bytes = r.id.bytes }, .kind = .before_clock_out, .enabled = @intFromBool(r.enabled), .value = m },
-        .at_time => |t| .{ .id = .{ .bytes = r.id.bytes }, .kind = .at_time, .enabled = @intFromBool(r.enabled), .value = t },
-    };
+    for (rules[0..@min(rules.len, cap)], out) |r, *o| {
+        const kind: AlarmKind, const value: i64 = switch (r.trigger) {
+            .before_clock_out => |m| .{ .before_clock_out, m },
+            .at_time => |t| .{ .at_time, t },
+            .lunch_opens => .{ .lunch_opens, 0 },
+            .before_lunch_closes => |m| .{ .before_lunch_closes, m },
+        };
+        o.* = .{ .id = .{ .bytes = r.id.bytes }, .kind = kind, .enabled = @intFromBool(r.enabled), .value = value };
+    }
     return .ok;
 }
 
@@ -227,6 +233,8 @@ export fn shifty_put_alarm_rule(h: *Handle, rule: AlarmRule, now: i64) Result {
     const trigger: store.AlarmRule.Trigger = switch (rule.kind) {
         .before_clock_out => .{ .before_clock_out = rule.value },
         .at_time => .{ .at_time = rule.value },
+        .lunch_opens => .lunch_opens,
+        .before_lunch_closes => .{ .before_lunch_closes = rule.value },
         _ => return .conflict,
     };
     h.store.putAlarmRule(.{ .id = id(rule.id), .trigger = trigger, .enabled = rule.enabled != 0 }, now) catch |e| return result(e);

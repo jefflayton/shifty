@@ -10,10 +10,8 @@ struct LunchRule: Codable, Equatable {
   var earliest: TimeInterval = 3 * 3600
   /// Worked time lunch has to start by.
   var latest: TimeInterval = 5 * 3600
-  /// Shorter breaks are rests, not lunch.
+  /// Shorter breaks are rests, not lunch. Reminders are alarms.
   var minimum: TimeInterval = 30 * 60
-  /// Worked time to be reminded at, or nil for no reminder.
-  var remindAt: TimeInterval? = 4 * 3600
 
   init() {}
 
@@ -40,9 +38,14 @@ struct LunchRule: Codable, Equatable {
     return LunchPlan(
       opens: ShiftTimes.afterWork(earliest, clockIn: clockIn, breaks: before),
       closes: ShiftTimes.afterWork(latest, clockIn: clockIn, breaks: before),
-      lunch: lunch,
-      remind: lunch == nil
-        ? remindAt.map { ShiftTimes.afterWork($0, clockIn: clockIn, breaks: before) } : nil)
+      lunch: lunch)
+  }
+
+  /// Why a lunch alarm won't ring on a shift with `plan`, for when it won't.
+  func quietReason(_ plan: LunchPlan?) -> String {
+    guard active != nil else { return "Lunch off" }
+    guard let plan else { return "No lunch needed" }
+    return plan.lunch?.end == nil ? "On break" : "Had lunch"
   }
 
   // Stored as whole minutes, so the TUI and CLI can read it without
@@ -52,7 +55,6 @@ struct LunchRule: Codable, Equatable {
     case earliest = "earliest_mins"
     case latest = "latest_mins"
     case minimum = "minimum_mins"
-    case remindAt = "remind_mins"
   }
 
   init(from decoder: Decoder) throws {
@@ -65,7 +67,6 @@ struct LunchRule: Codable, Equatable {
     earliest = try minutes(.earliest) ?? defaults.earliest
     latest = try minutes(.latest) ?? defaults.latest
     minimum = try minutes(.minimum) ?? defaults.minimum
-    remindAt = try minutes(.remindAt)
   }
 
   func encode(to encoder: Encoder) throws {
@@ -75,7 +76,6 @@ struct LunchRule: Codable, Equatable {
     try c.encode(minutes(earliest), forKey: .earliest)
     try c.encode(minutes(latest), forKey: .latest)
     try c.encode(minutes(minimum), forKey: .minimum)
-    try c.encodeIfPresent(remindAt.map(minutes), forKey: .remindAt)
   }
 }
 
@@ -91,8 +91,6 @@ struct LunchPlan: Equatable {
   var opens: Date
   var closes: Date
   var lunch: Span?
-  /// When to remind you, until you've had lunch.
-  var remind: Date?
 
   enum Status: Equatable {
     /// The window hasn't opened yet.

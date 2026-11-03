@@ -616,7 +616,6 @@ do {
   let plain = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [], now: at(10))!
   expectEqual(plain.opens, at(12), "opens after 3h of work")
   expectEqual(plain.closes, at(14), "closes after 5h of work")
-  expectEqual(plain.remind, at(13), "reminds after 4h of work")
   expectEqual(plain.status(now: at(11)), .upcoming)
   expectEqual(plain.status(now: at(13)), .open)
   expectEqual(plain.status(now: at(14, 1)), .missed)
@@ -637,7 +636,23 @@ do {
   expectEqual(ate.lunch?.start, at(13), "30 min is lunch")
   expectEqual(ate.closes, at(14, 10))
   expectEqual(ate.status(now: at(15)), .taken)
-  check(ate.remind == nil, "no reminder once you've eaten")
+
+  // Lunch alarms ring off the window, until you've had lunch.
+  let opens = AlarmRule(trigger: .lunchOpens)
+  let closing = AlarmRule(trigger: .beforeLunchCloses(minutes: 15))
+  expectEqual(opens.fireDate(clockIn: at(9), clockOut: at(17), lunch: plain), at(12))
+  expectEqual(closing.fireDate(clockIn: at(9), clockOut: at(17), lunch: plain), at(13, 45))
+  check(opens.fireDate(clockIn: at(9), clockOut: at(17), lunch: ate) == nil, "quiet after lunch")
+  check(closing.fireDate(clockIn: at(9), clockOut: at(17), lunch: nil) == nil, "quiet without a window")
+  check(opens.isLunch && !AlarmRule(trigger: .atTime(at(12))).isLunch, "lunch kinds")
+  for rule in [opens, closing] {
+    check(
+      AlarmRule.sameRule(AlarmRule(storeRow: rule.storeRow, calendar: cal), rule),
+      "\(rule.trigger) round-trips through the store")
+  }
+  expectEqual(LunchRule().quietReason(nil), "Lunch off")
+  expectEqual(rule.quietReason(nil), "No lunch needed")
+  expectEqual(rule.quietReason(ate), "Had lunch")
 
   let late = r.plan(clockIn: at(9), worked: 8 * 3600, breaks: [span(at(14, 30), at(15))], now: at(16))!
   expectEqual(late.status(now: at(16)), .late)
@@ -648,7 +663,6 @@ do {
   // Saved in whole minutes; turning it off keeps the window.
   var custom = rule
   custom.earliest = 3.5 * 3600
-  custom.remindAt = nil
   let text = Preferences.format(custom)!
   check(text.contains("\"earliest_mins\":210"), "minutes: \(text)")
   expectEqual(Preferences.lunch(from: text), custom, "round trip")

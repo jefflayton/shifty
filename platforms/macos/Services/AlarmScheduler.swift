@@ -42,29 +42,31 @@ final class AlarmScheduler {
       }
     var live = Set<String>()
 
+    let lunch = model.lunch(preferences.lunch, now: now)
+
     for rule in model.alarms where rule.isEnabled {
       let id = rule.id.uuidString
+      // A lunch alarm with no lunch to come (none needed, had it, or on a
+      // break) is dropped, so one ringing stops when you go.
+      guard
+        let fireDate = rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut, lunch: lunch)
+      else { continue }
       live.insert(id)
-      apply(
-        id: id, title: rule.title, body: body, link: preferences.clockOutLink,
-        fireDate: rule.fireDate(clockIn: model.clockInTime, clockOut: clockOut),
-        held: model.isOnBreak && rule.followsClockOut, now: now)
-    }
-
-    // Until you've had lunch. Going on a break counts, so it stops ringing.
-    if let lunch = model.lunch(preferences.lunch, now: now), let remind = lunch.remind {
-      live.insert(Self.lunchID)
-      apply(
-        id: Self.lunchID, title: "Time for lunch",
-        body: "Start lunch by \(lunch.closes.formatted(date: .omitted, time: .shortened))",
-        link: nil, fireDate: remind, held: false, now: now)
+      if rule.isLunch, let lunch {
+        apply(
+          id: id, title: rule.title,
+          body: "Start lunch by \(lunch.closes.formatted(date: .omitted, time: .shortened))",
+          link: nil, fireDate: fireDate, held: false, now: now)
+      } else {
+        apply(
+          id: id, title: rule.title, body: body, link: preferences.clockOutLink,
+          fireDate: fireDate, held: model.isOnBreak && rule.followsClockOut, now: now)
+      }
     }
 
     // Deleted or disabled rules
     controller.cancelAll(except: live)
   }
-
-  static let lunchID = "lunch"
 
   /// Brings one alarm's pending notification in line with its fire date.
   private func apply(

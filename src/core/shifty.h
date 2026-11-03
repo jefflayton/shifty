@@ -51,6 +51,8 @@ typedef struct {
 typedef enum {
   SHIFTY_ALARM_BEFORE_CLOCK_OUT = 0, // value: minutes before clock out
   SHIFTY_ALARM_AT_TIME = 1,          // value: seconds since local midnight
+  SHIFTY_ALARM_LUNCH_OPENS = 2,      // value: unused
+  SHIFTY_ALARM_BEFORE_LUNCH_CLOSES = 3, // value: minutes before the lunch window closes
 } ShiftyAlarmKind;
 
 typedef struct {

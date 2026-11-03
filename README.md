@@ -88,8 +88,10 @@ when it opens and closes, counted in time worked (3h and 5h by default), and how
 to be to count as lunch (30 min). Shorter breaks before lunch push the window later.
 
 On a shift long enough to need lunch, the popover's shift bar highlights the window until you
-take it, and a reminder rings at the time you choose (4h of work by default). Going on a break
-quiets it; a break shorter than lunch brings it back. The timesheet shows the window on each day
+take it, then tints the break that was lunch. Add lunch alarms from the **+** next to *Alarms*:
+**When lunch opens**, or **N min before lunch closes**. Adding one turns the lunch window on. They
+ring until you've had lunch: going on a break quiets them, and a break shorter than lunch brings
+them back. The timesheet shows the window on each day
 and flags a lunch that started late or never happened.
 
 ### Alarms
@@ -99,6 +101,7 @@ Add alarms from the **+** next to *Alarms*:
 - **At clock out**, or **N min before clock out**: these follow your clock-out time, so adding an
   unexpected break moves them later, even re-arming one that already rang.
 - **At a set time**: a fixed time of day during your shift.
+- **When lunch opens**, or **N min before lunch closes**: see [Lunch window](#lunch-window).
 
 During a break, alarms that follow clock out wait for it to end, since clock out isn't known
 until then. Set-time alarms still ring, so one can remind you when to come back.

@@ -109,7 +109,7 @@ struct PopoverView: View {
         }
       }
 
-      AlarmsSection(model: model)
+      AlarmsSection(model: model, preferences: preferences)
 
       VStack(alignment: .leading, spacing: 2) {
         Divider().padding(.bottom, 4)
@@ -175,6 +175,10 @@ struct ShiftSummaryView: View {
           breaks: ShiftSummary.breakSpans(breaks, clockIn: model.clockInTime, clockOut: clockOut),
           lunch: plan.flatMap {
             ShiftSummary.span($0, clockIn: model.clockInTime, clockOut: clockOut, now: context.date)
+          },
+          lunchBreak: plan.flatMap {
+            ShiftSummary.lunchBreak(
+              $0, clockIn: model.clockInTime, clockOut: clockOut, now: context.date)
           },
           now: context.date
         )
