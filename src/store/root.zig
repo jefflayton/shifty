@@ -1166,19 +1166,32 @@ pub const Store = struct {
     }
 };
 
+/// Which database a build uses by default. Only release builds
+/// (`zig build -Drelease`) touch the real one; the rest get their own, so a
+/// branch's migration can't upgrade it out from under the installed app.
+pub const Flavor = enum { release, dev };
+pub const flavor: Flavor = if (@import("build_options").release) .release else .dev;
+
 /// Where the shared database lives: `$SHIFTY_DB` if set, else
 /// `~/Library/Application Support/Shifty/shifty.db` on macOS and
-/// `$XDG_DATA_HOME/shifty/shifty.db` elsewhere.
+/// `$XDG_DATA_HOME/shifty/shifty.db` elsewhere ("Shifty Dev" and
+/// "shifty-dev" for dev builds).
 pub fn defaultPath(gpa: Allocator, env: *const std.process.Environ.Map) error{ OutOfMemory, NoHome }![:0]u8 {
+    return pathFor(gpa, env, flavor);
+}
+
+pub fn pathFor(gpa: Allocator, env: *const std.process.Environ.Map, f: Flavor) error{ OutOfMemory, NoHome }![:0]u8 {
     if (env.get("SHIFTY_DB")) |p| return gpa.dupeZ(u8, p);
     const home = env.get("HOME") orelse return error.NoHome;
     if (builtin.os.tag == .macos) {
-        return std.fmt.allocPrintSentinel(gpa, "{s}/Library/Application Support/Shifty/shifty.db", .{home}, 0);
+        const dir = if (f == .release) "Shifty" else "Shifty Dev";
+        return std.fmt.allocPrintSentinel(gpa, "{s}/Library/Application Support/{s}/shifty.db", .{ home, dir }, 0);
     }
+    const dir = if (f == .release) "shifty" else "shifty-dev";
     if (env.get("XDG_DATA_HOME")) |data| {
-        if (data.len > 0) return std.fmt.allocPrintSentinel(gpa, "{s}/shifty/shifty.db", .{data}, 0);
+        if (data.len > 0) return std.fmt.allocPrintSentinel(gpa, "{s}/{s}/shifty.db", .{ data, dir }, 0);
     }
-    return std.fmt.allocPrintSentinel(gpa, "{s}/.local/share/shifty/shifty.db", .{home}, 0);
+    return std.fmt.allocPrintSentinel(gpa, "{s}/.local/share/{s}/shifty.db", .{ home, dir }, 0);
 }
 
 fn blob(u: *const Uuid) Blob {

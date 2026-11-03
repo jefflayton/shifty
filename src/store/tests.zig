@@ -304,10 +304,10 @@ test "defaultPath" {
     defer env.deinit();
     const gpa = testing.allocator;
 
-    try testing.expectError(error.NoHome, store.defaultPath(gpa, &env));
+    try testing.expectError(error.NoHome, store.pathFor(gpa, &env, .release));
 
     try env.put("HOME", "/home/jeff");
-    const home = try store.defaultPath(gpa, &env);
+    const home = try store.pathFor(gpa, &env, .release);
     defer gpa.free(home);
     const want = if (builtin.os.tag == .macos)
         "/home/jeff/Library/Application Support/Shifty/shifty.db"
@@ -315,8 +315,17 @@ test "defaultPath" {
         "/home/jeff/.local/share/shifty/shifty.db";
     try testing.expectEqualStrings(want, home);
 
+    // Builds that aren't releases keep off the real database.
+    const dev = try store.pathFor(gpa, &env, .dev);
+    defer gpa.free(dev);
+    const want_dev = if (builtin.os.tag == .macos)
+        "/home/jeff/Library/Application Support/Shifty Dev/shifty.db"
+    else
+        "/home/jeff/.local/share/shifty-dev/shifty.db";
+    try testing.expectEqualStrings(want_dev, dev);
+
     try env.put("SHIFTY_DB", "/tmp/dev.db");
-    const override = try store.defaultPath(gpa, &env);
+    const override = try store.pathFor(gpa, &env, .release);
     defer gpa.free(override);
     try testing.expectEqualStrings("/tmp/dev.db", override);
 }
