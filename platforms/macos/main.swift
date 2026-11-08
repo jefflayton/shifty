@@ -5,8 +5,11 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   var popover: NSPopover!
+  /// Close the popover on a click or focus anywhere else; see `watchFocus`.
+  private var clickMonitors: [Any] = []
+  private var focusObservers: [NSObjectProtocol] = []
   var item: NSStatusItem!
   /// The database the CLI and TUI share. Without it the app still works,
   /// as a calculator only.
@@ -54,6 +57,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     alarmScheduler = AlarmScheduler(
       model: model, preferences: preferences, controller: .shared)
+    AlarmController.shared.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
+    AlarmController.shared.endShift = { [weak self] in self?.clockOutFromAlarm() ?? false }
     watchStore()
 
     setupMenu()
@@ -77,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     host.sizingOptions = .preferredContentSize
     popover.contentViewController = host
     popover.behavior = .transient
+    popover.delegate = self
 
     // Development: open the main window without clicking.
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
@@ -130,6 +136,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     mainWindow.show(.timesheet)
   }
 
+  /// An alarm's Clock Out: ends the shift as the popover's would, without
+  /// the link prompt (the alarm opens the link itself).
+  private func clockOutFromAlarm() -> Bool {
+    guard model.isClockedIn else { return false }
+    model.clockOutNow()
+    tracking?.reload()
+    if mainWindow.isVisible { mainWindow.reload() }
+    return true
+  }
+
   /// Clocked in or out from the popover: close it so the browser comes to
   /// the front, then open the clock link or ask to.
   func offerClockLink(clockingIn: Bool) {
@@ -149,7 +165,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
     -> Bool
   {
-    if !flag { mainWindow.show() }
+    if !flag {
+      popover.close()
+      mainWindow.show()
+    }
     return true
   }
 
@@ -160,7 +179,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
       NSApp.activate(ignoringOtherApps: true)
       popover.show(
         relativeTo: item.button!.bounds, of: item.button!, preferredEdge: NSRectEdge.maxY)
+      watchFocus()
     }
+  }
+
+  // MARK: Popover dismissal
+
+  /// A transient popover only closes on an outside click while Shifty is
+  /// active, and macOS doesn't always let a menu bar app activate. Nor does
+  /// it close when the main window is clicked or comes forward. So close it
+  /// on any click elsewhere, in Shifty or another app, and whenever another
+  /// window takes focus or Shifty loses it.
+  private func watchFocus() {
+    guard clickMonitors.isEmpty, focusObservers.isEmpty else { return }
+    let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+
+    if let global = NSEvent.addGlobalMonitorForEvents(matching: clicks, handler: { [weak self] _ in
+      MainActor.assumeIsolated { self?.popover.close() }
+    }) {
+      clickMonitors.append(global)
+    }
+    if let local = NSEvent.addLocalMonitorForEvents(matching: clicks, handler: { [weak self] event in
+      MainActor.assumeIsolated { self?.closeIfOutside(event.window) }
+      return event
+    }) {
+      clickMonitors.append(local)
+    }
+
+    let center = NotificationCenter.default
+    focusObservers.append(
+      center.addObserver(
+        forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.popover.close() }
+      })
+    focusObservers.append(
+      center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) {
+        [weak self] note in
+        MainActor.assumeIsolated { self?.closeIfOutside(note.object as? NSWindow) }
+      })
+  }
+
+  /// Closes the popover unless `window` is part of it: the popover itself,
+  /// a menu or pop-up it opened, or the status item (its click toggles).
+  private func closeIfOutside(_ window: NSWindow?) {
+    guard popover.isShown else { return }
+    if let window {
+      let popoverWindow = popover.contentViewController?.view.window
+      if window === popoverWindow || window === item.button?.window { return }
+      if window.level >= .popUpMenu { return }
+      var parent = window.parent
+      while let p = parent {
+        if p === popoverWindow { return }
+        parent = p.parent
+      }
+    }
+    popover.close()
+  }
+
+  private func unwatchFocus() {
+    clickMonitors.forEach(NSEvent.removeMonitor)
+    clickMonitors = []
+    focusObservers.forEach(NotificationCenter.default.removeObserver)
+    focusObservers = []
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    unwatchFocus()
   }
 }
 
