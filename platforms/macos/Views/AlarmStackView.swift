@@ -18,12 +18,13 @@ struct AlarmStackView: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
 
+          let clockOut = controller.canClockOut(alarm)
           HStack(spacing: 10) {
             Button("Snooze") { controller.snooze(id: alarm.id) }
               .keyboardShortcut("s", modifiers: [])
 
-            // With a link, clocking out is the main action.
-            if alarm.link != nil {
+            // When it can clock out, that's the main action.
+            if clockOut {
               Button("Stop") { controller.stop(id: alarm.id) }
                 .keyboardShortcut(.cancelAction)
             } else {
@@ -34,17 +35,20 @@ struct AlarmStackView: View {
           }
           .controlSize(.large)
 
-          if let link = alarm.link {
+          if clockOut {
             Button {
               controller.clockOut(id: alarm.id)
             } label: {
-              Label("Clock Out", systemImage: "arrow.up.forward.square")
-                .frame(maxWidth: .infinity)
+              Label(
+                "Clock Out",
+                systemImage: alarm.link == nil ? "clock.badge.checkmark" : "arrow.up.forward.square"
+              )
+              .frame(maxWidth: .infinity)
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .help("Open \(link.host() ?? link.absoluteString) and stop the alarm")
+            .help(clockOutHelp(alarm))
           }
         }
         .padding(14)
@@ -54,5 +58,16 @@ struct AlarmStackView: View {
 
     .padding(20)
     .frame(width: 320)
+  }
+
+  private func clockOutHelp(_ alarm: AlarmController.Alarm) -> String {
+    let ends = alarm.clocksOut && controller.isClockedIn()
+    let site = alarm.link.map { $0.host() ?? $0.absoluteString }
+    switch (ends, site) {
+    case (true, let site?): return "End the shift, open \(site), and stop the alarm"
+    case (true, nil): return "End the shift and stop the alarm"
+    case (false, let site?): return "Open \(site) and stop the alarm"
+    case (false, nil): return "Stop the alarm"
+    }
   }
 }

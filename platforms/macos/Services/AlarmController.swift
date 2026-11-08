@@ -12,8 +12,10 @@ final class AlarmController: ObservableObject {
     let title: String
     var body: String
     var fireDate: Date
-    /// Where to clock out, shown as a button when it rings.
+    /// Where to clock out, opened by the Clock Out button.
     var link: URL? = nil
+    /// Whether it's about the end of the shift, so Clock Out also ends it.
+    var clocksOut = false
   }
 
   @Published private(set) var ringing: [Alarm] = []
@@ -24,6 +26,12 @@ final class AlarmController: ObservableObject {
     let snoozed: Bool
   }
   private var pending: [String: Pending] = [:]
+
+  /// Ends the shift in progress for an alarm's Clock Out; returns false if
+  /// there's none (not clocked in, or no store).
+  var endShift: () -> Bool = { false }
+  /// Whether there's a shift in progress for Clock Out to end.
+  var isClockedIn: () -> Bool = { false }
 
   private var player: AVAudioPlayer?
   private var attentionRequestId = 0
@@ -64,16 +72,22 @@ final class AlarmController: ObservableObject {
     UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
   }
 
-  func schedule(id: String, title: String, body: String, link: URL? = nil, at date: Date) {
-    schedule(id: id, title: title, body: body, link: link, at: date, snoozed: false)
+  func schedule(
+    id: String, title: String, body: String, link: URL? = nil, clocksOut: Bool = false,
+    at date: Date
+  ) {
+    schedule(
+      id: id, title: title, body: body, link: link, clocksOut: clocksOut, at: date, snoozed: false)
   }
 
   private func schedule(
-    id: String, title: String, body: String, link: URL?, at date: Date, snoozed: Bool
+    id: String, title: String, body: String, link: URL?, clocksOut: Bool, at date: Date,
+    snoozed: Bool
   ) {
     cancel(id: id)
 
-    let alarm = Alarm(id: id, title: title, body: body, fireDate: date, link: link)
+    let alarm = Alarm(
+      id: id, title: title, body: body, fireDate: date, link: link, clocksOut: clocksOut)
     pending[id] = Pending(alarm: alarm, timer: makeTimer(id: id, at: date), snoozed: snoozed)
     scheduleBackstop(for: alarm)
 
@@ -135,11 +149,19 @@ final class AlarmController: ObservableObject {
     refreshRingingState()
   }
 
-  /// Opens the alarm's clock-out link and stops it.
+  /// Whether the alarm has a Clock Out button: it has a link to open, or
+  /// it's about the end of a shift that's still going.
+  func canClockOut(_ alarm: Alarm) -> Bool {
+    alarm.link != nil || (alarm.clocksOut && isClockedIn())
+  }
+
+  /// A full clock out: ends the shift (for an end-of-shift alarm), opens
+  /// the clock-out link, and stops the alarm.
   func clockOut(id: String) {
-    guard let link = ringing.first(where: { $0.id == id })?.link else { return }
-    NSWorkspace.shared.open(link)
+    guard let alarm = ringing.first(where: { $0.id == id }) else { return }
     stop(id: id)
+    if alarm.clocksOut { _ = endShift() }
+    if let link = alarm.link { NSWorkspace.shared.open(link) }
   }
 
   func snooze(id: String) {
@@ -147,7 +169,7 @@ final class AlarmController: ObservableObject {
     ringing.removeAll { $0.id == id }
     refreshRingingState()
     schedule(
-      id: id, title: a.title, body: a.body, link: a.link,
+      id: id, title: a.title, body: a.body, link: a.link, clocksOut: a.clocksOut,
       at: Date().addingTimeInterval(snoozeInterval), snoozed: true)
   }
 

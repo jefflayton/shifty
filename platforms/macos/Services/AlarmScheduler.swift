@@ -62,15 +62,15 @@ final class AlarmScheduler {
         apply(
           id: id, title: rule.title,
           body: "Break \((brk.start..<brk.end).formatted(.interval.hour().minute()))",
-          link: nil, fireDate: fireDate, held: false, now: now)
+          link: nil, clocksOut: false, fireDate: fireDate, held: false, now: now)
       } else if rule.isLunch, let lunch {
         apply(
           id: id, title: rule.title,
           body: "Start lunch by \(lunch.closes.formatted(date: .omitted, time: .shortened))",
-          link: nil, fireDate: fireDate, held: false, now: now)
+          link: nil, clocksOut: false, fireDate: fireDate, held: false, now: now)
       } else {
         apply(
-          id: id, title: rule.title, body: body, link: preferences.clockOutLink,
+          id: id, title: rule.title, body: body, link: preferences.clockOutLink, clocksOut: true,
           fireDate: fireDate, held: model.isOnBreak && rule.followsClockOut, now: now)
       }
     }
@@ -106,7 +106,8 @@ final class AlarmScheduler {
 
   /// Brings one alarm's pending notification in line with its fire date.
   private func apply(
-    id: String, title: String, body: String, link: URL?, fireDate: Date, held: Bool, now: Date
+    id: String, title: String, body: String, link: URL?, clocksOut: Bool, fireDate: Date,
+    held: Bool, now: Date
   ) {
     let pending = controller.pendingAlarm(id: id)
     let snoozed = controller.isSnoozed(id: id)
@@ -114,7 +115,8 @@ final class AlarmScheduler {
       fireDate: fireDate, pending: pending?.fireDate, snoozed: snoozed, held: held, now: now)
     switch action {
     case .schedule(let date):
-      controller.schedule(id: id, title: title, body: body, link: link, at: date)
+      controller.schedule(
+        id: id, title: title, body: body, link: link, clocksOut: clocksOut, at: date)
     case .cancelPending:
       controller.cancelPending(id: id)
     case .keep:
@@ -122,8 +124,10 @@ final class AlarmScheduler {
       // have changed.
       if let pending, !snoozed,
         pending.title != title || pending.body != body || pending.link != link
+          || pending.clocksOut != clocksOut
       {
-        controller.schedule(id: id, title: title, body: body, link: link, at: fireDate)
+        controller.schedule(
+          id: id, title: title, body: body, link: link, clocksOut: clocksOut, at: fireDate)
       }
     }
   }
