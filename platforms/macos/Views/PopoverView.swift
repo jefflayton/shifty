@@ -172,10 +172,13 @@ struct ShiftSummaryView: View {
               .contentTransition(.numericText())
           }
           Spacer()
-          Text(ShiftSummary.relative(clockOut, now: context.date))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
+          let over = model.isClockedIn && context.date.timeIntervalSince(clockOut) >= 60
+          Text(
+            ShiftSummary.relative(clockOut, now: context.date, isClockedIn: model.isClockedIn)
+          )
+          .font(.callout)
+          .foregroundStyle(over ? AnyShapeStyle(OverStyle.color) : AnyShapeStyle(.secondary))
+          .monospacedDigit()
         }
 
         ShiftBar(
@@ -189,7 +192,8 @@ struct ShiftSummaryView: View {
             ShiftSummary.lunchBreak(
               $0, clockIn: model.clockInTime, clockOut: clockOut, now: context.date)
           },
-          now: context.date
+          now: context.date,
+          showsOver: model.isClockedIn
         )
 
         HStack {

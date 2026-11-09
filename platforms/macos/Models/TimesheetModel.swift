@@ -174,6 +174,18 @@ import Observation
     Spans.total(work(of: shift, now: now))
   }
 
+  /// Time worked on a shift past its length, or 0. Under a minute doesn't
+  /// count, so a shift clocked out on time doesn't read "+0m".
+  func over(_ shift: ShiftStore.SheetShift, now: Date) -> TimeInterval {
+    let over = worked(shift, now: now) - shift.length
+    return over >= 60 ? over : 0
+  }
+
+  /// Time worked this week past each shift's length.
+  func over(now: Date) -> TimeInterval {
+    sheet.shifts.reduce(0) { $0 + over($1, now: now) }
+  }
+
   /// Time on break during a shift.
   func onBreak(_ shift: ShiftStore.SheetShift, now: Date) -> TimeInterval {
     max(0, (shift.end ?? now).timeIntervalSince(shift.start) - worked(shift, now: now))

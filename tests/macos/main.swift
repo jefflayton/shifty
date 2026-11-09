@@ -202,6 +202,8 @@ expectEqual(ShiftSummary.duration(3600 + 5 * 60), "1 hr 5 min")
 expectEqual(ShiftSummary.relative(at(17, 30), now: at(14, 18)), "in 3 hr 12 min")
 expectEqual(ShiftSummary.relative(at(17), now: at(17, 0).addingTimeInterval(20)), "now")
 expectEqual(ShiftSummary.relative(at(17), now: at(17, 12)), "12 min ago")
+expectEqual(ShiftSummary.relative(at(17), now: at(17, 12), isClockedIn: true), "12 min over")
+expectEqual(ShiftSummary.relative(at(17, 30), now: at(14, 18), isClockedIn: true), "in 3 hr 12 min")
 
 // MARK: Break in progress
 
@@ -255,7 +257,27 @@ do {
   expectEqual(MenuBarDisplay.timeLeft.title(clockOut: at(17), now: at(14, 50)), "2h 10m")
   check(MenuBarDisplay.clockOut.title(clockOut: at(17), now: at(14)) != nil, "clock-out time")
   check(MenuBarDisplay.iconOnly.title(clockOut: at(17), now: at(14)) == nil, "icon only")
-  check(MenuBarDisplay.timeLeft.title(clockOut: at(17), now: at(17, 1)) == nil, "shift over")
+  check(MenuBarDisplay.timeLeft.title(clockOut: at(17), now: at(17, 1)) == nil, "draft over")
+  check(MenuBarDisplay.clockOut.title(clockOut: at(17), now: at(17, 1)) == nil, "draft over")
+
+  // Clocked in, past clock out counts up, and the clock-out time stays.
+  let over = { (d: MenuBarDisplay, now: Date) in
+    d.title(clockOut: at(17), now: now, isClockedIn: true)
+  }
+  expectEqual(over(.timeLeft, at(17, 25)), "+25m")
+  expectEqual(over(.timeLeft, at(18, 5)), "+1h 5m")
+  expectEqual(over(.timeLeft, at(17).addingTimeInterval(20)), "+1m", "rounds up")
+  expectEqual(over(.timeLeft, at(17)), "+1m", "never +0m")
+  expectEqual(over(.untilBreak, at(17, 25)), "+25m", "no break left")
+  expectEqual(over(.clockOut, at(17, 25)), at(17).formatted(date: .omitted, time: .shortened))
+  expectEqual(over(.clockOutThenOver, at(17, 25)), "+25m", "then time over")
+  expectEqual(
+    over(.clockOutThenOver, at(16, 50)), at(17).formatted(date: .omitted, time: .shortened),
+    "clock-out time until then")
+  check(
+    MenuBarDisplay.clockOutThenOver.title(clockOut: at(17), now: at(17, 25)) == nil, "draft over")
+  check(over(.iconOnly, at(17, 25)) == nil, "icon only")
+  expectEqual(over(.timeLeft, at(16, 50)), "10m", "before clock out, as before")
 
   let suite = "shifty-tests-\(UUID().uuidString)"
   let defaults = UserDefaults(suiteName: suite)!
@@ -1081,6 +1103,34 @@ do {
   t.toggleCollapsed(at(0), now: now)
   t.expand(at(0))
   check(!t.isCollapsed(at(0), now: now), "opened to jump to it")
+}
+
+do {
+  // Time past a shift's length shows as over, by shift and for the week.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  // A shift added after the fact is as long as it ran: 8 to 4, 8 hr.
+  _ = try! store.addShift(start: at(8), end: at(16))
+  _ = try! store.addShift(start: at(8, day: -1), end: at(16, day: -1))
+  t.reload()
+  var s = t.shifts(on: at(0)).first!
+  expectEqual(t.over(s, now: at(18)), 0, "on time")
+
+  t.setEnd(s, to: at(16, 25))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(t.over(s, now: at(18)), 25 * 60, "stayed 25 min")
+  expectEqual(t.over(now: at(18)), 25 * 60, "the week adds up shifts")
+
+  t.setEnd(s, to: at(16).addingTimeInterval(30))
+  s = t.shifts(on: at(0)).first!
+  expectEqual(t.over(s, now: at(18)), 0, "under a minute isn't over")
+
+  try! store.putBreak(.init(id: UUID(), start: at(12), end: at(12, 30)), shift: s.id)
+  t.reload()
+  s = t.shifts(on: at(0)).first!
+  expectEqual(t.over(s, now: at(18)), 0, "short isn't negative")
 }
 
 do {

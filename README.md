@@ -98,6 +98,11 @@ screen of Shifty's window: what the menu bar shows (clock-out time, time left, t
 next break, or just the icon), whether Shifty opens at login, the clock links, the days you
 work, the lunch window, and scheduled breaks.
 
+Stay past clock out while you're clocked in, and Shifty counts the time over: **Time Left** (and
+**Time Until Break**, with no break left) reads `+25m`, and the popover shows how far over you
+are, with the time past the end on the shift bar. **Clock-Out Time** keeps showing the time; pick
+**Clock-Out Time, Then Time Over** to see the clock-out time until you pass it and `+25m` after.
+
 ### Scheduled breaks
 
 For a break at the same time on the same days, like a class on Tuesdays and Thursdays from 11 to
@@ -159,7 +164,8 @@ screens from its toolbar: Timesheet, Projects, and Settings.
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
   by project inside the time you were on shift; click a day to jump to it. A day's shift sits
-  on top: clock in and out, time worked, and its breaks (click one to change it), over a timeline
+  on top: clock in and out, time worked (and how far past the shift's length, like `+25m`), and
+  its breaks (click one to change it), over a timeline
   where project time is laid on the shift, so time on shift that no project has shows as bare
   shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**. Click
   a day's header to open it or fold it down to its total (Option-click folds or opens every day);
