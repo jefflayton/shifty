@@ -534,6 +534,11 @@ struct WeekTotals: View {
         if worked > 0 {
           TotalsList(title: "Shifts") {
             FigureRow(name: "Worked", seconds: worked)
+            let over = model.over(now: now)
+            if over > 0 {
+              FigureRow(name: "Over", seconds: over)
+                .help("Time past each shift's length")
+            }
             FigureRow(name: "Untracked", seconds: model.untracked(now: now))
               .help("Time on shift with no project entry")
           }

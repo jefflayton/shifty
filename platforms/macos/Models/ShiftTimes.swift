@@ -133,9 +133,12 @@ enum ShiftSummary {
   }
 
   /// When clock out is relative to now: "in 3 hr 12 min", "now", "12 min ago".
-  static func relative(_ clockOut: Date, now: Date) -> String {
+  /// "in 3 hr 12 min", "now", "12 min ago"; or, on a shift you're clocked
+  /// in to, "12 min over".
+  static func relative(_ clockOut: Date, now: Date, isClockedIn: Bool = false) -> String {
     let seconds = clockOut.timeIntervalSince(now)
     if abs(seconds) < 60 { return "now" }
-    return seconds > 0 ? "in \(duration(seconds))" : "\(duration(-seconds)) ago"
+    if seconds > 0 { return "in \(duration(seconds))" }
+    return "\(duration(-seconds)) \(isClockedIn ? "over" : "ago")"
   }
 }

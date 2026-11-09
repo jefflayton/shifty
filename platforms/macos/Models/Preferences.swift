@@ -5,6 +5,8 @@ import Observation
 enum MenuBarDisplay: String, CaseIterable, Identifiable {
   case iconOnly
   case clockOut
+  /// The clock-out time until you pass it, then how far over you are.
+  case clockOutThenOver
   case timeLeft
   case untilBreak
 
@@ -14,20 +16,33 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     switch self {
     case .iconOnly: "Icon Only"
     case .clockOut: "Clock-Out Time"
+    case .clockOutThenOver: "Clock-Out Time, Then Time Over"
     case .timeLeft: "Time Left"
     case .untilBreak: "Time Until Break"
     }
   }
 
-  /// The text beside the icon, or nil for none. A finished shift shows none.
-  /// `nextBreak` is when the next break starts, or the one you're on ends;
-  /// without one, time until break shows the time left.
-  func title(clockOut: Date, now: Date, nextBreak: Date? = nil) -> String? {
-    guard clockOut > now else { return nil }
+  /// The text beside the icon, or nil for none. `nextBreak` is when the next
+  /// break starts, or the one you're on ends; without one, time until break
+  /// shows the time left. Past clock out, a shift you're clocked in to counts
+  /// up ("+25m"), except plain clock-out time, which stays; a draft shows
+  /// nothing.
+  func title(clockOut: Date, now: Date, nextBreak: Date? = nil, isClockedIn: Bool = false)
+    -> String?
+  {
+    guard clockOut > now else {
+      guard isClockedIn else { return nil }
+      switch self {
+      case .iconOnly: return nil
+      case .clockOut: return clockOut.formatted(date: .omitted, time: .shortened)
+      case .clockOutThenOver, .timeLeft, .untilBreak:
+        return "+" + Self.compact(now.timeIntervalSince(clockOut))
+      }
+    }
     switch self {
     case .iconOnly:
       return nil
-    case .clockOut:
+    case .clockOut, .clockOutThenOver:
       return clockOut.formatted(date: .omitted, time: .shortened)
     case .timeLeft:
       return Self.compact(clockOut.timeIntervalSince(now))
@@ -37,9 +52,10 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
   }
 
-  /// "2h 15m", "45m". Rounds up, so it never reads "0m" before clock out.
+  /// "2h 15m", "45m". Rounds up, and never reads "0m", before clock out or
+  /// past it.
   static func compact(_ seconds: TimeInterval) -> String {
-    let minutes = max(0, Int((seconds / 60).rounded(.up)))
+    let minutes = max(1, Int((seconds / 60).rounded(.up)))
     let (h, m) = (minutes / 60, minutes % 60)
     return h == 0 ? "\(m)m" : "\(h)h \(m)m"
   }

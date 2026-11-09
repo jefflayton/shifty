@@ -49,7 +49,8 @@ final class StatusItemController {
   private func update(now: Date = Date()) {
     let onBreak = model.isOnBreak || model.isInPlannedBreak(now: now)
     let title = preferences.menuBarDisplay.title(
-      clockOut: model.clockOut(now: now), now: now, nextBreak: model.untilBreak(now: now))
+      clockOut: model.clockOut(now: now), now: now, nextBreak: model.untilBreak(now: now),
+      isClockedIn: model.isClockedIn)
     guard let button = item.button, shown?.onBreak != onBreak || shown?.title != title else {
       return
     }

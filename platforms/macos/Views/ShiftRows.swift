@@ -62,6 +62,15 @@ struct ShiftLine: View {
           .frame(width: 62, alignment: .trailing)
           .help("Worked, breaks not counted")
 
+        let over = model.over(shift, now: now)
+        if over > 0 {
+          Text("+" + TimesheetFormat.duration(over))
+            .font(.callout)
+            .monospacedDigit()
+            .foregroundStyle(OverStyle.color)
+            .help("Past the shift's \(TimesheetFormat.duration(shift.length))")
+        }
+
         HStack(spacing: 6) {
           ForEach(shift.breaks) { brk in
             BreakChip(

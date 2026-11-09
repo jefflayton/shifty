@@ -3,7 +3,8 @@ import SwiftUI
 /// The shift from clock in to clock out: work in the accent color, breaks as
 /// gaps, time already worked solid and time ahead faded, and a dot for now.
 /// The lunch window, while lunch is still to come, is a band behind it; once
-/// you've gone, the gap that was lunch is tinted.
+/// you've gone, the gap that was lunch is tinted. Past clock out on a shift
+/// you're still on, the bar runs on to now, the time over in its own color.
 struct ShiftBar: View {
   let clockIn: Date
   let clockOut: Date
@@ -14,6 +15,8 @@ struct ShiftBar: View {
   /// Fractions of the shift you were (or are) at lunch, or nil.
   var lunchBreak: ClosedRange<Double>? = nil
   let now: Date
+  /// Draw time past clock out up to `now`, for a shift you're clocked in to.
+  var showsOver = false
 
   private let height: CGFloat = 6
   private let dot: CGFloat = 12
@@ -24,9 +27,20 @@ struct ShiftBar: View {
     return min(max(now.timeIntervalSince(clockIn) / total, 0), 1)
   }
 
+  /// The share of the bar the shift itself takes: 1, or less once you're
+  /// over and the rest is overtime.
+  private var shiftShare: Double {
+    guard showsOver, now > clockOut else { return 1 }
+    let total = now.timeIntervalSince(clockIn)
+    guard total > 0 else { return 1 }
+    return clockOut.timeIntervalSince(clockIn) / total
+  }
+
   var body: some View {
     GeometryReader { geo in
-      let width = geo.size.width
+      let full = geo.size.width
+      // The shift's own width; everything below is laid out in it.
+      let width = full * CGFloat(shiftShare)
       ZStack(alignment: .leading) {
         if let lunch {
           RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -56,6 +70,14 @@ struct ShiftBar: View {
             Rectangle().frame(width: width * CGFloat(progress))
           }
 
+        if shiftShare < 1 {
+          Capsule()
+            .fill(OverStyle.color)
+            .frame(width: max(height, full - width), height: height)
+            .offset(x: width)
+            .help("Past clock out")
+        }
+
         if progress > 0 && progress < 1 {
           Circle()
             .fill(.white)
@@ -69,7 +91,10 @@ struct ShiftBar: View {
     .frame(height: dot)
     .accessibilityElement()
     .accessibilityLabel("Shift progress")
-    .accessibilityValue("\(Int(progress * 100)) percent")
+    .accessibilityValue(
+      shiftShare < 1
+        ? "\(ShiftSummary.duration(now.timeIntervalSince(clockOut))) over"
+        : "\(Int(progress * 100)) percent")
   }
 
   /// One rounded segment per stretch of work between breaks.
@@ -87,4 +112,10 @@ struct ShiftBar: View {
     }
     return path
   }
+}
+
+enum OverStyle {
+  /// Time past a shift's length, wherever it's drawn. Not the lunch window's
+  /// orange, and not red, which means something's wrong.
+  static let color = Color.purple
 }
