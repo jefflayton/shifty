@@ -3,6 +3,14 @@
 
 test {
     _ = @import("situ.zig");
+    _ = @import("git.zig");
+    _ = @import("place.zig");
+    _ = @import("here.zig");
+    _ = @import("ffi.zig");
 }
 
 pub const situ = @import("situ.zig");
+pub const git = @import("git.zig");
+pub const place = @import("place.zig");
+pub const here = @import("here.zig");
+pub const ffi = @import("ffi.zig");
