@@ -129,6 +129,11 @@ breaks against. Turn on **Lunch window** in Settings and set
 when it opens and closes, counted in time worked (3h and 5h by default), and how long a break has
 to be to count as lunch (30 min). Shorter breaks before lunch push the window later.
 
+On a shift long enough to need lunch, clock out counts lunch before you take it: the popover, menu
+bar, and clock-out alarms add the minimum lunch length to the shift until you go on lunch. On
+lunch, clock out holds until that much has passed, then moves with the clock; once lunch ends it
+counts the lunch you took. (The TUI and CLI don't count it ahead yet.)
+
 On a shift long enough to need lunch, the popover's shift bar highlights the window until you
 take it, then tints the break that was lunch. Add lunch alarms from the **+** next to *Alarms*:
 **When lunch opens**, or **N min before lunch closes**. Adding one turns the lunch window on. They

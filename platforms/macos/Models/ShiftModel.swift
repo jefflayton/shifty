@@ -18,6 +18,9 @@ import Observation
   @ObservationIgnored var breakStartID = UUID()
   /// The store's open shift, while clocked in.
   var shiftID: UUID?
+  /// The lunch window, kept up with the settings. Until you've taken lunch,
+  /// clock out counts its minimum for it.
+  var lunchRule: LunchRule?
 
   @ObservationIgnored var store: ShiftStore?
 
@@ -29,8 +32,25 @@ import Observation
 
   var clockOut: Date { clockOut(now: Date()) }
 
-  /// Clock out if the break in progress (if any) ended at `now`.
+  /// Clock out if the break in progress (if any) ended at `now`, with lunch
+  /// still to come counted as `lunchAhead`.
   func clockOut(now: Date) -> Date {
+    workedOut(now: now).addingTimeInterval(lunchAhead(now: now))
+  }
+
+  /// Lunch time clock out counts before you've had it: the lunch window's
+  /// minimum until you take lunch, then what's left of it while you're on
+  /// it, then nothing. None when the window is off or the shift doesn't need
+  /// lunch.
+  func lunchAhead(now: Date) -> TimeInterval {
+    guard let rule = lunchRule?.active, let plan = lunch(rule, now: now) else { return 0 }
+    guard let lunch = plan.lunch else { return rule.minimum }
+    guard lunch.end == nil else { return 0 }
+    return max(0, rule.minimum - now.timeIntervalSince(lunch.start))
+  }
+
+  /// Clock out from the work and breaks so far, with no lunch to come.
+  private func workedOut(now: Date) -> Date {
     let intervals = breaks(now: now).filter(\.isValid).map { brk in
       let (start, end) = ShiftTimes.anchor(brk, clockIn: clockInTime)
       return ShiftInterval(

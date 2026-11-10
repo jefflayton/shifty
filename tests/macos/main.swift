@@ -1533,5 +1533,47 @@ do {
   check(!short.isOnLunch(rule, now: at(11)), "short shift")
 }
 
+do {
+  // Clock out counts lunch before you take it: 9 AM, 8h, lunch at least
+  // 30 min.
+  var rule = LunchRule()
+  rule.isEnabled = true
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  expectEqual(m.clockOut(now: at(10)), at(17), "no lunch window, no lunch counted")
+  m.lunchRule = rule
+  expectEqual(m.clockOut(now: at(10)), at(17, 30), "lunch's minimum counted ahead")
+  rule.minimum = 45 * 60
+  m.lunchRule = rule
+  expectEqual(m.clockOut(now: at(10)), at(17, 45), "as long as lunch has to be")
+  rule.minimum = 30 * 60
+  m.lunchRule = rule
+
+  // A rest too short to be lunch adds to it.
+  m.startBreak(now: at(10))
+  m.endBreak(now: at(10, 10))
+  expectEqual(m.clockOut(now: at(11)), at(17, 40), "rest, then lunch to come")
+
+  // On lunch, clock out holds until the minimum, then moves with the clock.
+  m.startBreak(now: at(12))
+  expectEqual(m.clockOut(now: at(12, 15)), at(17, 40), "early in lunch")
+  expectEqual(m.clockOut(now: at(12, 45)), at(17, 55), "a long lunch")
+  m.endBreak(now: at(13))
+  expectEqual(m.clockOut(now: at(14)), at(18, 10), "the lunch you took")
+  expectEqual(m.lunchAhead(now: at(14)), 0, "none left")
+
+  // Off, or on a shift too short to need lunch, nothing is counted.
+  let short = ShiftModel()
+  short.clockInTime = at(9)
+  short.shiftLength = 4
+  short.lunchRule = rule
+  expectEqual(short.clockOut(now: at(10)), at(13), "short shift")
+  rule.isEnabled = false
+  m.lunchRule = rule
+  m.breaks = []
+  expectEqual(m.clockOut(now: at(10)), at(17), "lunch window off")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

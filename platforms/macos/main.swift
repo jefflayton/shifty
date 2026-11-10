@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import Sparkle
 import SwiftUI
 import UserNotifications
@@ -61,6 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     NSApp.setActivationPolicy(.accessory)
 
+    followLunch()
     alarmScheduler = AlarmScheduler(
       model: model, preferences: preferences, controller: .shared)
     AlarmController.shared.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
@@ -112,6 +114,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
       // Wait for the status item to be placed in the menu bar.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
+    }
+  }
+
+  /// Keeps the shift's lunch window, which clock out counts, up with the
+  /// settings.
+  private func followLunch() {
+    withObservationTracking {
+      model.lunchRule = preferences.lunch
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.followLunch() }
     }
   }
 
