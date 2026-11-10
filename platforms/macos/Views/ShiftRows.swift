@@ -136,7 +136,7 @@ struct ShiftNote: View {
     let untracked = model.untracked(shift, now: now)
     Group {
       if let lunch, LunchStatus.hasNote(lunch, now: now) {
-        LunchStatus(plan: lunch, now: now)
+        LunchStatus(plan: lunch, now: now, symbol: model.preferences?.lunch.symbol ?? BreakIcon.lunch)
       } else if untracked >= 60 {
         Text("\(TimesheetFormat.duration(untracked)) untracked")
           .foregroundStyle(.secondary)
@@ -149,7 +149,7 @@ struct ShiftNote: View {
 }
 
 /// A break, as a row among the day's entries: its times (editable), how
-/// long, and whether it was lunch.
+/// long, and whether it was lunch or a scheduled break, with its icon.
 struct BreakLine: View {
   let model: TimesheetModel
   let shift: ShiftStore.SheetShift
@@ -166,10 +166,19 @@ struct BreakLine: View {
     let running = brk.end == nil
     let isLunch = lunch?.lunch?.start == brk.start
     let late = isLunch && lunch?.status(now: now) == .late
+    let preferences = model.preferences
+    let scheduled =
+      isLunch ? nil : preferences?.scheduledBreak(start: times.start, end: times.end)
+    let rest = preferences?.breakSymbol ?? BreakIcon.rest
+    let symbol =
+      isLunch
+      ? preferences?.lunch.symbol ?? BreakIcon.lunch
+      : scheduled?.symbol(rest: rest) ?? rest
+    let name = isLunch ? "Lunch" : scheduled.map { $0.name.isEmpty ? "Break" : $0.name } ?? "Break"
 
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 10) {
-        Image(systemName: isLunch ? "fork.knife" : "cup.and.saucer")
+        Image(systemName: symbol)
           .foregroundStyle(.secondary)
           .frame(width: 16)
 
@@ -193,8 +202,9 @@ struct BreakLine: View {
           .foregroundStyle(invalid ? .red : .secondary)
           .frame(width: 62, alignment: .trailing)
 
-        Text(isLunch ? "Lunch" : "Break")
+        Text(name)
           .foregroundStyle(.secondary)
+          .lineLimit(1)
           .frame(width: 140, alignment: .leading)
 
         if late {
@@ -370,6 +380,8 @@ enum LunchStyle {
 struct LunchStatus: View {
   let plan: LunchPlan
   let now: Date
+  /// Lunch's icon.
+  var symbol = BreakIcon.lunch
 
   static func hasNote(_ plan: LunchPlan, now: Date) -> Bool {
     [.upcoming, .open, .missed].contains(plan.status(now: now))
@@ -381,11 +393,11 @@ struct LunchStatus: View {
     case .upcoming:
       Label(
         "Lunch \((plan.opens..<plan.closes).formatted(.interval.hour().minute()))",
-        systemImage: "fork.knife"
+        systemImage: symbol
       )
       .foregroundStyle(.secondary)
     case .open:
-      Label("Lunch by \(closes)", systemImage: "fork.knife")
+      Label("Lunch by \(closes)", systemImage: symbol)
         .foregroundStyle(LunchStyle.color)
     case .missed:
       Label("No lunch by \(closes)", systemImage: "exclamationmark.triangle.fill")

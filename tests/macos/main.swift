@@ -1399,5 +1399,139 @@ do {
 for name in ["shifty-tests", "shifty-tests-none"] {
   UserDefaults.standard.removePersistentDomain(forName: name)
 }
+
+// MARK: Break icons and the lunch clock link
+
+do {
+  // Lunch saved before icons reads as the fork and knife, clocked out for.
+  let old = Preferences.lunch(
+    from: #"{"enabled":true,"earliest_mins":180,"latest_mins":300,"minimum_mins":30}"#)!
+  check(old.icon == nil, "no icon saved")
+  expectEqual(old.symbol, BreakIcon.lunch)
+  check(old.clockLink, "lunch is clocked out for by default")
+
+  var rule = old
+  rule.icon = "takeoutbag.and.cup.and.straw"
+  rule.clockLink = false
+  let back = Preferences.lunch(from: Preferences.format(rule)!)!
+  expectEqual(back, rule, "icon and clock link round-trip")
+  expectEqual(back.symbol, "takeoutbag.and.cup.and.straw")
+
+  expectEqual(BreakIcon.symbol(nil, or: "cup.and.saucer"), "cup.and.saucer")
+  expectEqual(BreakIcon.symbol("", or: "cup.and.saucer"), "cup.and.saucer", "empty is the default")
+  expectEqual(BreakIcon.choices(including: "fork.knife").count, BreakIcon.choices.count)
+  expectEqual(
+    BreakIcon.choices(including: "airplane").last?.symbol, "airplane",
+    "an icon picked elsewhere still shows")
+  check(BreakIcon.choices.contains { $0.symbol == BreakIcon.lunch }, "lunch's default is offered")
+  check(BreakIcon.choices.contains { $0.symbol == BreakIcon.rest }, "the cup is offered")
+}
+
+do {
+  // A scheduled break on the clock: Wednesday Oct 28, class 11 to 2.
+  var cls = ScheduledBreak(name: "Class", weekdays: [3], start: 11 * 3600, end: 14 * 3600)
+  check(cls.matches(start: at(11), end: at(14), calendar: cal), "same times, its day")
+  check(cls.matches(start: at(11, 30), end: at(14), calendar: cal), "cut by a later clock in")
+  check(!cls.matches(start: at(11), end: at(13), calendar: cal), "moved for the day")
+  check(!cls.matches(start: at(11, day: 1), end: at(14, day: 1), calendar: cal), "not its day")
+  check(!cls.matches(start: at(11), end: nil, calendar: cal), "one running isn't scheduled")
+  expectEqual(cls.symbol(rest: "mug"), "mug", "no icon of its own: the break icon")
+  cls.icon = "graduationcap"
+  expectEqual(cls.symbol(rest: "mug"), "graduationcap")
+  cls.isEnabled = false
+  check(!cls.matches(start: at(11), end: at(14), calendar: cal), "off")
+}
+
+do {
+  // Icons and the lunch clock link live in the store, for every frontend.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = testDefaults()
+  let prefs = Preferences(defaults: defaults, store: store)
+  check(prefs.lunch.clockLink, "a new store's lunch is clocked out for")
+  check(prefs.breakIcon == nil, "no break icon by default")
+  expectEqual(prefs.breakSymbol, BreakIcon.rest)
+
+  prefs.lunch.isEnabled = true
+  prefs.lunch.icon = "carrot"
+  prefs.breakIcon = "mug"
+  var cls = ScheduledBreak(name: "Class", weekdays: [3], start: 11 * 3600, end: 14 * 3600)
+  cls.icon = "graduationcap"
+  prefs.scheduledBreaks.append(cls)
+
+  let presets = try! store.breakPresets()
+  expectEqual(presets.map(\.icon), ["carrot", "graduationcap"], "icons stored with the presets")
+  expectEqual(presets.map(\.clockLink), [true, false], "lunch offers the links, class doesn't")
+  expectEqual(try! store.setting(Preferences.breakIconSetting), "mug")
+
+  let again = Preferences(defaults: defaults, store: store)
+  expectEqual(again.lunch.symbol, "carrot", "read back")
+  expectEqual(again.breakSymbol, "mug")
+  expectEqual(again.scheduledBreaks.first?.icon, "graduationcap")
+  expectEqual(
+    again.scheduledBreak(start: at(11), end: at(14), calendar: cal)?.name, "Class",
+    "a break on the clock finds its scheduled break")
+
+  // Changed from the TUI or CLI.
+  try! ShiftStore(path: path).setSetting(Preferences.breakIconSetting, nil)
+  again.pull()
+  check(again.breakIcon == nil, "break icon cleared elsewhere")
+
+  // Back to the default stores none.
+  prefs.lunch.icon = nil
+  check(try! store.breakPresets().first?.icon == nil, "default lunch icon stored as none")
+
+  // The lunch clock link follows the clock link mode, and only with lunch
+  // on and clocked out for.
+  prefs.clockOutLink = URL(string: "https://example.com/clock")
+  prefs.clockLinkMode = .always
+  let url = URL(string: "https://example.com/clock")!
+  expectEqual(prefs.clockLinkAction(for: .lunchStarts), .open(url), "lunch opens the link")
+  expectEqual(prefs.clockLinkAction(for: .lunchEnds), .open(url), "and again after")
+  prefs.clockLinkMode = .ask
+  expectEqual(prefs.clockLinkAction(for: .lunchStarts), .ask(url), "asks when set to ask")
+  prefs.lunch.clockLink = false
+  expectEqual(prefs.clockLinkAction(for: .lunchStarts), .none, "lunch not clocked out for")
+  expectEqual(prefs.clockLinkAction(for: .clockOut), .ask(url), "clocking out still does")
+  prefs.lunch.clockLink = true
+  prefs.lunch.isEnabled = false
+  expectEqual(prefs.clockLinkAction(for: .lunchEnds), .none, "no lunch window, no lunch")
+  check(!Preferences(defaults: defaults, store: store).lunch.isEnabled, "saved off")
+  check(Preferences(defaults: defaults, store: store).lunch.clockLink, "clock link kept")
+
+  check(ClockEvent.lunchEnds.clockingIn && ClockEvent.clockIn.clockingIn, "back in")
+  check(!ClockEvent.lunchStarts.clockingIn && !ClockEvent.clockOut.clockingIn, "out")
+}
+
+do {
+  // Which break is lunch, as Start and End Break see it: 9 AM, 8h.
+  var rule = LunchRule()
+  rule.isEnabled = true
+  let m = ShiftModel()
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  check(!m.isOnLunch(rule, now: at(10)), "not on a break")
+
+  // A 10-minute rest before lunch isn't it, but it was while it ran.
+  m.startBreak(now: at(10))
+  check(m.isOnLunch(rule, now: at(10)), "the first break might be lunch")
+  m.endBreak(now: at(10, 10))
+  m.startBreak(now: at(12, 30))
+  check(m.isOnLunch(rule, now: at(12, 30)), "the next one is lunch")
+  m.endBreak(now: at(13))
+  m.startBreak(now: at(15))
+  check(!m.isOnLunch(rule, now: at(15)), "after lunch, a break is a break")
+  check(!m.isOnLunch(nil, now: at(15)), "no rule, no lunch")
+  m.endBreak(now: at(15, 10))
+
+  // A shift too short to need lunch never has one.
+  let short = ShiftModel()
+  short.clockInTime = at(9)
+  short.shiftLength = 4
+  short.startBreak(now: at(11))
+  check(!short.isOnLunch(rule, now: at(11)), "short shift")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

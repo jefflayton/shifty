@@ -125,9 +125,20 @@ pub const BreakPreset = struct {
     /// ISO weekdays it applies on: bit 0 is Monday, bit 6 Sunday.
     weekdays: u7 = all_days,
     enabled: bool = true,
+    /// An SF Symbol name, like "fork.knife"; null for the frontend's default.
+    icon: ?[]const u8 = null,
+    /// Whether starting and ending the break offers the clock links, as
+    /// clocking out and in does. On for lunch, off otherwise, by default.
+    clock_link: ?bool = null,
     rule: Rule,
 
     pub const all_days: u7 = 0b1111111;
+
+    /// Whether the break offers the clock links: as set, else for a window
+    /// (lunch) and not for a scheduled break.
+    pub fn clockLink(p: BreakPreset) bool {
+        return p.clock_link orelse (p.rule == .window);
+    }
 
     pub const Rule = union(enum) {
         /// A break at set local times, seconds since midnight, put on the
@@ -191,6 +202,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0002_lunch_alarms.sql"),
     @embedFile("migrations/0003_break_presets.sql"),
     @embedFile("migrations/0004_link_deletes.sql"),
+    @embedFile("migrations/0005_break_icons.sql"),
 };
 
 pub const Store = struct {
@@ -1084,7 +1096,7 @@ pub const Store = struct {
     pub fn breakPresets(self: *Store, arena: Allocator) Error![]BreakPreset {
         var stmt = try self.db.prepare(
             \\SELECT id, name, kind, weekdays, enabled, start_secs, end_secs,
-            \\       earliest_secs, latest_secs, minimum_secs
+            \\       earliest_secs, latest_secs, minimum_secs, icon, clock_link
             \\FROM break_presets WHERE deleted_ts IS NULL
             \\ORDER BY kind <> 'window', created_ts, rowid
         );
@@ -1098,6 +1110,8 @@ pub const Store = struct {
                 .name = try stmt.text(arena, 1),
                 .weekdays = std.math.cast(u7, stmt.int(3)) orelse return error.Corrupt,
                 .enabled = stmt.int(4) != 0,
+                .icon = if (stmt.isNull(10)) null else try stmt.text(arena, 10),
+                .clock_link = stmt.int(11) != 0,
                 .rule = switch (kind) {
                     .scheduled => .{ .scheduled = .{ .start_secs = stmt.int(5), .end_secs = stmt.int(6) } },
                     .window => .{ .window = .{
@@ -1122,21 +1136,24 @@ pub const Store = struct {
             .window => |w| .{ w.earliest_secs, w.latest_secs, w.minimum_secs },
             .scheduled => .{ null, null, null },
         };
+        // An empty icon is the default, like none.
+        const icon: ?[]const u8 = if (p.icon) |i| (if (i.len == 0) null else i) else null;
         try self.db.exec(
             \\INSERT INTO break_presets (id, name, kind, weekdays, enabled, start_secs, end_secs,
             \\                           earliest_secs, latest_secs, minimum_secs, created_ts,
-            \\                           updated_ts)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?11, ?11)
+            \\                           updated_ts, icon, clock_link)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?11, ?11, ?, ?)
             \\ON CONFLICT (id) DO UPDATE SET
             \\    name = excluded.name, kind = excluded.kind, weekdays = excluded.weekdays,
             \\    enabled = excluded.enabled, start_secs = excluded.start_secs,
             \\    end_secs = excluded.end_secs, earliest_secs = excluded.earliest_secs,
             \\    latest_secs = excluded.latest_secs, minimum_secs = excluded.minimum_secs,
+            \\    icon = excluded.icon, clock_link = excluded.clock_link,
             \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
         , .{
             blob(&p.id), p.name, @tagName(p.rule), @as(i64, p.weekdays), p.enabled,
             start,       end,    earliest,         latest,               minimum,
-            now,
+            now,         icon,   p.clockLink(),
         });
     }
 

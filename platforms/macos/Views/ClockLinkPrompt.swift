@@ -67,16 +67,17 @@ enum ClockLinkPrompt {
     }
   }
 
-  /// After clocking in or out from the menu bar: opens the link, or asks
-  /// first, remembering "Don't ask again" as the answer from now on.
-  static func offer(clockingIn: Bool, preferences: Preferences) {
+  /// After clocking in or out, or starting or ending lunch, from the menu
+  /// bar: opens the link, or asks first, remembering "Don't ask again" as the
+  /// answer from now on.
+  static func offer(_ event: ClockEvent, preferences: Preferences) {
     let link: URL
-    switch preferences.clockLinkAction(clockingIn: clockingIn) {
+    switch preferences.clockLinkAction(for: event) {
     case .none: return
     case .open(let url): link = url
     case .ask(let url):
       let alert = NSAlert()
-      alert.messageText = clockingIn ? "Clock in on your timeclock too?" : "Clock out on your timeclock too?"
+      alert.messageText = event.question
       alert.informativeText = "Opens \(url.host() ?? url.absoluteString)."
       alert.addButton(withTitle: "Open")
       alert.addButton(withTitle: "Not Now")
@@ -91,5 +92,31 @@ enum ClockLinkPrompt {
       link = url
     }
     NSWorkspace.shared.open(link)
+  }
+}
+
+/// Something done in the menu bar that may call for punching the timeclock
+/// too.
+enum ClockEvent: Equatable {
+  case clockIn
+  case clockOut
+  /// Started lunch, which is clocked out for.
+  case lunchStarts
+  /// Back from lunch: clock back in.
+  case lunchEnds
+
+  /// Whether it opens the clock-in link rather than the clock-out one.
+  var clockingIn: Bool { self == .clockIn || self == .lunchEnds }
+
+  var isLunch: Bool { self == .lunchStarts || self == .lunchEnds }
+
+  /// What the prompt asks.
+  var question: String {
+    switch self {
+    case .clockIn: "Clock in on your timeclock too?"
+    case .clockOut: "Clock out on your timeclock too?"
+    case .lunchStarts: "Clock out for lunch on your timeclock too?"
+    case .lunchEnds: "Clock back in from lunch on your timeclock too?"
+    }
   }
 }

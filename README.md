@@ -91,12 +91,13 @@ like a [scheduled one](#scheduled-breaks), stops it where the break begins, even
 open then; a timer you start during the break keeps running.
 
 For a break you didn't plan, click **Start Break** when you leave and **End Break** when you're back.
-Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
+Until then, the menu bar icon turns into the break's icon (a cup, unless you pick another under
+*Other Breaks* in Settings) and clock out moves later as the break goes on.
 
 The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
 window. **General**: the days you work, what the menu bar shows (clock-out time, time left, time
 until your next break, or just the icon), and whether Shifty opens at login. **Breaks**: the lunch
-window and scheduled breaks. **Clock Links**: the links Clock In and Clock Out open.
+window, scheduled breaks, and break icons. **Clock Links**: the links Clock In and Clock Out open.
 
 Stay past clock out while you're clocked in, and Shifty counts the time over: **Time Left** (and
 **Time Until Break**, with no break left) reads `+25m`, and the popover shows how far over you
@@ -116,7 +117,8 @@ while it fits: it's for today, isn't over, and doesn't overlap a break you alrea
 
 With **Time Until Break** in the menu bar, Shifty counts down to the next break, then to the end
 of the one you're on; with no break left, it shows the time left. During a planned break the icon
-turns into a cup, as it does for one you start yourself.
+turns into the break's, as it does for one you start yourself. Each scheduled break can have its
+own icon, picked from the button beside its name; without one it uses the break icon.
 
 ### Lunch window
 
@@ -133,6 +135,15 @@ take it, then tints the break that was lunch. Add lunch alarms from the **+** ne
 ring until you've had lunch: going on a break quiets them, and a break shorter than lunch brings
 them back. The timesheet shows the window on each day
 and flags a lunch that started late or never happened.
+
+Lunch shows a fork and knife; pick another **Icon** for it in Settings, and the menu bar, popover,
+alarms, and timesheet use it. With **Clock out for lunch** on (it is unless you turn it off),
+**Start Break** on the break that counts as lunch offers the [clock link](#alarms) as **Clock Out**
+does, and **End Lunch** offers the clock-in link as **Clock In** does, following the same
+**Ask first**, **Always**, or **Never** setting. It needs the lunch window on and a clocked-in
+shift long enough to need lunch. The icon and the setting are stored with the lunch window
+(`icon` and `clock_link` on the break preset), and the break icon in the `break_icon` setting, so
+the TUI and CLI can read them.
 
 ### Alarms
 

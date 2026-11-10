@@ -75,6 +75,7 @@ typedef struct {
   int32_t kind; // ShiftyPresetKind
   int32_t enabled;
   int32_t weekdays; // ISO weekdays: bit 0 is Monday, bit 6 Sunday
+  int32_t clock_link; // nonzero: starting and ending it offers the clock links
   int64_t start_secs, end_secs; // scheduled: local seconds since midnight
   int64_t earliest_secs, latest_secs, minimum_secs; // window: time worked
 } ShiftyBreakPreset;
@@ -126,12 +127,13 @@ ShiftyResult shifty_put_alarm_rule(ShiftyStore *store, ShiftyAlarmRule rule, int
 ShiftyResult shifty_delete_alarm_rule(ShiftyStore *store, ShiftyId rule_id, int64_t now);
 
 // Break presets, windows first, as a UTF-8 JSON array of {"id","name","kind",
-// "enabled","weekdays","start_secs","end_secs","earliest_secs","latest_secs",
-// "minimum_secs"} (times null where they don't apply). Release with
-// shifty_free.
+// "enabled","weekdays","icon","clock_link","start_secs","end_secs",
+// "earliest_secs","latest_secs","minimum_secs"} (times null where they don't
+// apply; icon null for the default). Release with shifty_free.
 ShiftyResult shifty_break_presets_json(ShiftyStore *store, char **out, size_t *len);
+// `icon` is an SF Symbol name, or NULL (or "") for the default.
 ShiftyResult shifty_put_break_preset(ShiftyStore *store, ShiftyBreakPreset preset,
-                                     const char *name, int64_t now);
+                                     const char *name, const char *icon, int64_t now);
 // Deletes a break preset and its alarms; breaks it put on shifts stay.
 ShiftyResult shifty_delete_break_preset(ShiftyStore *store, ShiftyId preset_id, int64_t now);
 

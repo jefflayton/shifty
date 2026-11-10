@@ -45,6 +45,8 @@ struct AlarmsSection: View {
           idle: rule.isLunch
             ? preferences.lunch.quietReason(lunch) : rule.isBreak ? "No break" : nil,
           paused: model.isOnBreak && rule.followsClockOut,
+          lunchSymbol: preferences.lunch.symbol,
+          breakSymbol: preferences.breakSymbol,
           onRemove: {
             let id = rule.id
             model.alarms.removeAll { $0.id == id }
@@ -71,6 +73,8 @@ struct AlarmRow: View {
   let idle: String?
   /// Waiting for a break to end, when clock out is known again.
   let paused: Bool
+  var lunchSymbol = BreakIcon.lunch
+  var breakSymbol = BreakIcon.rest
   let onRemove: () -> Void
 
   var body: some View {
@@ -92,25 +96,25 @@ struct AlarmRow: View {
             .labelsHidden()
             .fixedSize()
         case .lunchOpens:
-          Label("Lunch opens", systemImage: "fork.knife")
+          Label("Lunch opens", systemImage: lunchSymbol)
             .fixedSize()
             .help("Rings when the lunch window opens, unless you've had lunch")
         case .beforeLunchCloses(let minutes):
-          Label(minutes == 0 ? "Lunch closes" : "\(minutes) min left", systemImage: "fork.knife")
+          Label(minutes == 0 ? "Lunch closes" : "\(minutes) min left", systemImage: lunchSymbol)
             .monospacedDigit()
             .fixedSize()
             .help("Rings before the lunch window closes, unless you've had lunch")
           Stepper("Minutes before lunch closes", value: lunchMinutes, in: 0...120, step: 5)
             .labelsHidden()
         case .beforeBreak(let minutes):
-          Label(minutes == 0 ? "Break starts" : "\(minutes) min before", systemImage: "cup.and.saucer")
+          Label(minutes == 0 ? "Break starts" : "\(minutes) min before", systemImage: breakSymbol)
             .monospacedDigit()
             .fixedSize()
             .help("Rings before each break on your shift starts")
           Stepper("Minutes before a break", value: breakMinutes, in: 0...120, step: 5)
             .labelsHidden()
         case .beforeBreakEnds(let minutes):
-          Label(minutes == 0 ? "Break ends" : "\(minutes) min left", systemImage: "cup.and.saucer")
+          Label(minutes == 0 ? "Break ends" : "\(minutes) min left", systemImage: breakSymbol)
             .monospacedDigit()
             .fixedSize()
             .help("Rings before each break on your shift ends, like when class lets out")

@@ -92,7 +92,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         loginItem: loginItem, tracking: tracking, autoSwitch: autoSwitch,
         openTimesheet: store == nil ? nil : { [weak self] in self?.showMainWindow() },
         openSettings: { [weak self] in self?.showSettings() },
-        clocked: { [weak self] clockingIn in self?.offerClockLink(clockingIn: clockingIn) }))
+        clocked: { [weak self] event in self?.offerClockLink(event) }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
@@ -191,13 +191,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     return true
   }
 
-  /// Clocked in or out from the popover: close it so the browser comes to
-  /// the front, then open the clock link or ask to.
-  func offerClockLink(clockingIn: Bool) {
-    guard preferences.clockLinkAction(clockingIn: clockingIn) != .none else { return }
+  /// Clocked in or out, or started or ended lunch, from the popover: close
+  /// it so the browser comes to the front, then open the clock link or ask
+  /// to.
+  func offerClockLink(_ event: ClockEvent) {
+    guard preferences.clockLinkAction(for: event) != .none else { return }
     popover.close()
     DispatchQueue.main.async { [preferences] in
-      ClockLinkPrompt.offer(clockingIn: clockingIn, preferences: preferences)
+      ClockLinkPrompt.offer(event, preferences: preferences)
     }
   }
 

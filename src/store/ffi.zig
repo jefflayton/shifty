@@ -84,6 +84,8 @@ pub const BreakPreset = extern struct {
     enabled: i32,
     /// ISO weekdays: bit 0 is Monday, bit 6 Sunday.
     weekdays: i32,
+    /// Nonzero: starting and ending the break offers the clock links.
+    clock_link: i32,
     /// Scheduled: local seconds since midnight.
     start_secs: i64,
     end_secs: i64,
@@ -341,6 +343,8 @@ const PresetJson = struct {
     kind: PresetKind,
     enabled: bool,
     weekdays: i64,
+    icon: ?[]const u8,
+    clock_link: bool,
     start_secs: ?i64 = null,
     end_secs: ?i64 = null,
     earliest_secs: ?i64 = null,
@@ -359,7 +363,15 @@ export fn shifty_break_presets_json(h: *Handle, out: *?[*]u8, len: *usize) Resul
     const presets = h.store.breakPresets(a) catch |e| return result(e);
     const rows = a.alloc(PresetJson, presets.len) catch return .no_memory;
     for (presets, rows) |p, *r| {
-        r.* = .{ .id = p.id, .name = p.name, .kind = .scheduled, .enabled = p.enabled, .weekdays = p.weekdays };
+        r.* = .{
+            .id = p.id,
+            .name = p.name,
+            .kind = .scheduled,
+            .enabled = p.enabled,
+            .weekdays = p.weekdays,
+            .icon = p.icon,
+            .clock_link = p.clockLink(),
+        };
         switch (p.rule) {
             .scheduled => |t| {
                 r.start_secs = t.start_secs;
@@ -379,9 +391,9 @@ export fn shifty_break_presets_json(h: *Handle, out: *?[*]u8, len: *usize) Resul
     return .ok;
 }
 
-/// Creates or replaces a break preset. `conflict` if its times don't make
-/// sense.
-export fn shifty_put_break_preset(h: *Handle, preset: BreakPreset, name: [*:0]const u8, now: i64) Result {
+/// Creates or replaces a break preset. `icon` is an SF Symbol name, or null
+/// (or empty) for the default. `conflict` if its times don't make sense.
+export fn shifty_put_break_preset(h: *Handle, preset: BreakPreset, name: [*:0]const u8, icon: ?[*:0]const u8, now: i64) Result {
     const rule: store.BreakPreset.Rule = switch (preset.kind) {
         .scheduled => .{ .scheduled = .{ .start_secs = preset.start_secs, .end_secs = preset.end_secs } },
         .window => .{ .window = .{
@@ -396,6 +408,8 @@ export fn shifty_put_break_preset(h: *Handle, preset: BreakPreset, name: [*:0]co
         .name = std.mem.span(name),
         .weekdays = std.math.cast(u7, preset.weekdays) orelse return .conflict,
         .enabled = preset.enabled != 0,
+        .icon = if (icon) |i| std.mem.span(i) else null,
+        .clock_link = preset.clock_link != 0,
         .rule = rule,
     }, now) catch |e| return result(e);
     return .ok;
@@ -786,16 +800,17 @@ test "C API - break presets" {
         .kind = .scheduled,
         .enabled = 1,
         .weekdays = 0b1111111,
+        .clock_link = 0,
         .start_secs = 11 * 3600,
         .end_secs = 14 * 3600,
         .earliest_secs = 0,
         .latest_secs = 0,
         .minimum_secs = 0,
     };
-    try testing.expectEqual(Result.ok, shifty_put_break_preset(s, class, "Class", 0));
+    try testing.expectEqual(Result.ok, shifty_put_break_preset(s, class, "Class", "graduationcap", 0));
     var bad = class;
     bad.end_secs = 10 * 3600;
-    try testing.expectEqual(Result.conflict, shifty_put_break_preset(s, bad, "Class", 0));
+    try testing.expectEqual(Result.conflict, shifty_put_break_preset(s, bad, "Class", null, 0));
 
     var ptr: ?[*]u8 = null;
     var len: usize = 0;
@@ -806,6 +821,8 @@ test "C API - break presets" {
         kind: PresetKind,
         enabled: bool,
         weekdays: i64,
+        icon: ?[]const u8,
+        clock_link: bool,
         start_secs: ?i64,
         earliest_secs: ?i64,
     };
@@ -817,9 +834,13 @@ test "C API - break presets" {
         try testing.expectEqualStrings("Lunch", parsed.value[0].name);
         try testing.expectEqual(PresetKind.window, parsed.value[0].kind);
         try testing.expectEqual(3 * 3600, parsed.value[0].earliest_secs.?);
+        try testing.expectEqual(null, parsed.value[0].icon);
+        try testing.expect(parsed.value[0].clock_link);
         try testing.expectEqualStrings("Class", parsed.value[1].name);
         try testing.expectEqual(11 * 3600, parsed.value[1].start_secs.?);
         try testing.expectEqual(null, parsed.value[1].earliest_secs);
+        try testing.expectEqualStrings("graduationcap", parsed.value[1].icon.?);
+        try testing.expect(!parsed.value[1].clock_link);
     }
 
     // Every day, so whatever the zone, clocking in at 9 local gets class.

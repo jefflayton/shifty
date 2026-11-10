@@ -16,14 +16,15 @@ struct PopoverView: View {
   /// Opens the main window; nil without the store.
   let openTimesheet: (() -> Void)?
   let openSettings: () -> Void
-  /// After Clock In (true) or Clock Out from here, for the clock link.
-  let clocked: (Bool) -> Void
+  /// After Clock In or Out, or starting or ending lunch, from here, for
+  /// the clock link.
+  let clocked: (ClockEvent) -> Void
 
   init(
     updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
     tracking: TrackingModel? = nil, autoSwitch: AutoSwitchModel? = nil,
     openTimesheet: (() -> Void)? = nil,
-    openSettings: @escaping () -> Void, clocked: @escaping (Bool) -> Void = { _ in }
+    openSettings: @escaping () -> Void, clocked: @escaping (ClockEvent) -> Void = { _ in }
   ) {
     self.updater = updater
     self.model = model
@@ -43,7 +44,7 @@ struct PopoverView: View {
     VStack(alignment: .leading, spacing: 16) {
       ShiftSummaryView(model: model, lunch: preferences.lunch)
 
-      ShiftActions(model: model, clocked: clocked)
+      ShiftActions(model: model, preferences: preferences, clocked: clocked)
 
       FormSection("Shift") {
         if model.isClockedIn {
@@ -85,7 +86,10 @@ struct PopoverView: View {
         AddButton(help: "Add a break") { model.breaks.append(Interval()) }
       } content: {
         if let start = model.breakStart {
-          OngoingBreakRow(start: start)
+          let lunch = model.isOnLunch(preferences.lunch)
+          OngoingBreakRow(
+            start: start, symbol: lunch ? preferences.lunch.symbol : preferences.breakSymbol,
+            isLunch: lunch)
         } else if model.breaks.isEmpty {
           Text("No breaks").foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -190,7 +194,7 @@ struct ShiftSummaryView: View {
         .monospacedDigit()
 
         if let plan {
-          LunchStatus(plan: plan, now: context.date)
+          LunchStatus(plan: plan, now: context.date, symbol: lunch.symbol)
             .font(.caption)
         }
       }
@@ -203,13 +207,16 @@ struct ShiftSummaryView: View {
 /// Break above ends it.
 struct OngoingBreakRow: View {
   let start: Date
+  var symbol = BreakIcon.rest
+  var isLunch = false
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 30)) { context in
       HStack(spacing: 6) {
-        Image(systemName: "cup.and.saucer.fill")
+        Image(systemName: symbol)
+          .symbolVariant(.fill)
           .foregroundStyle(.secondary)
-          .help("On break")
+          .help(isLunch ? "On lunch" : "On break")
         Text("Since \(start, style: .time)")
         Spacer()
         Text(ShiftSummary.duration(context.date.timeIntervalSince(start)))
@@ -225,8 +232,9 @@ struct OngoingBreakRow: View {
 /// Clock In or Out, and Start or End Break.
 struct ShiftActions: View {
   let model: ShiftModel
-  /// After Clock In (true) or Clock Out, for the clock link.
-  let clocked: (Bool) -> Void
+  let preferences: Preferences
+  /// After Clock In or Out, or starting or ending lunch, for the clock link.
+  let clocked: (ClockEvent) -> Void
 
   var body: some View {
     HStack(spacing: 8) {
@@ -235,7 +243,7 @@ struct ShiftActions: View {
         if model.isClockedIn {
           Button {
             model.clockOutNow()
-            clocked(false)
+            clocked(.clockOut)
           } label: {
             Label("Clock Out", systemImage: "stop.fill").frame(maxWidth: .infinity)
           }
@@ -244,7 +252,7 @@ struct ShiftActions: View {
         } else {
           Button {
             model.clockInNow()
-            clocked(true)
+            clocked(.clockIn)
           } label: {
             Label("Clock In", systemImage: "play.fill").frame(maxWidth: .infinity)
           }
@@ -253,17 +261,29 @@ struct ShiftActions: View {
         }
       }
       if model.isOnBreak {
+        let lunch = model.isOnLunch(preferences.lunch)
         Button {
+          // Lunch you clocked out for, you clock back in from. Read before
+          // the break ends, while it's still the one you're on.
+          let backFromLunch = lunch && model.isClockedIn
           model.endBreak()
+          if backFromLunch { clocked(.lunchEnds) }
         } label: {
-          Label("End Break", systemImage: "cup.and.saucer.fill").frame(maxWidth: .infinity)
+          Label(
+            lunch ? "End Lunch" : "End Break",
+            systemImage: lunch ? preferences.lunch.symbol : preferences.breakSymbol
+          )
+          .symbolVariant(.fill)
+          .frame(maxWidth: .infinity)
         }
-        .help("End the break now")
+        .help(lunch ? "End lunch now" : "End the break now")
       } else {
         Button {
           model.startBreak()
+          // The break that counts as lunch is clocked out for.
+          if model.isClockedIn && model.isOnLunch(preferences.lunch) { clocked(.lunchStarts) }
         } label: {
-          Label("Start Break", systemImage: "cup.and.saucer").frame(maxWidth: .infinity)
+          Label("Start Break", systemImage: preferences.breakSymbol).frame(maxWidth: .infinity)
         }
         .help("Start a break now; end it when you're back")
       }

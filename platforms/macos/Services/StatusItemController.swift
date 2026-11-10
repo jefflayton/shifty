@@ -1,24 +1,30 @@
 import AppKit
 import Observation
 
-/// Keeps the menu bar item's icon and text current: a cup while you're on a
-/// break (one you started, or one planned like a class), and the clock-out
-/// time, time left, or time until break beside it.
+/// Keeps the menu bar item's icon and text current: the break's icon while
+/// you're on one (one you started, lunch, or one planned like a class), and
+/// the clock-out time, time left, or time until break beside it.
 @MainActor
 final class StatusItemController {
   private let item: NSStatusItem
   private let model: ShiftModel
   private let preferences: Preferences
   private var timer: Timer?
-  private var shown: (onBreak: Bool, title: String?)?
+  /// The break symbol shown, nil for the shift icon, and the text.
+  private var shown: (symbol: String?, title: String?)?
 
   private static let shiftIcon =
     NSImage(
       systemSymbolName: "clock.arrow.trianglehead.clockwise.rotate.90.path.dotted",
       accessibilityDescription: "Shifty")
     ?? NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: "Shifty")
-  private static let breakIcon = NSImage(
-    systemSymbolName: "cup.and.saucer", accessibilityDescription: "Shifty, on break")
+
+  /// A break's icon, else the cup, else the shift icon.
+  private static func breakIcon(_ symbol: String) -> NSImage? {
+    NSImage(systemSymbolName: symbol, accessibilityDescription: "Shifty, on break")
+      ?? NSImage(systemSymbolName: BreakIcon.rest, accessibilityDescription: "Shifty, on break")
+      ?? shiftIcon
+  }
 
   init(item: NSStatusItem, model: ShiftModel, preferences: Preferences) {
     self.item = item
@@ -47,16 +53,16 @@ final class StatusItemController {
   }
 
   private func update(now: Date = Date()) {
-    let onBreak = model.isOnBreak || model.isInPlannedBreak(now: now)
+    let symbol = breakSymbol(now: now)
     let title = preferences.menuBarDisplay.title(
       clockOut: model.clockOut(now: now), now: now, nextBreak: model.untilBreak(now: now),
       isClockedIn: model.isClockedIn)
-    guard let button = item.button, shown?.onBreak != onBreak || shown?.title != title else {
+    guard let button = item.button, shown?.symbol != symbol || shown?.title != title else {
       return
     }
-    shown = (onBreak, title)
+    shown = (symbol, title)
 
-    button.image = onBreak ? Self.breakIcon ?? Self.shiftIcon : Self.shiftIcon
+    button.image = symbol.flatMap(Self.breakIcon) ?? Self.shiftIcon
     if let title {
       button.attributedTitle = NSAttributedString(
         string: title,
@@ -68,5 +74,22 @@ final class StatusItemController {
       button.title = ""
       button.imagePosition = .imageOnly
     }
+  }
+
+  /// The icon of the break you're on: lunch's, a scheduled break's, or the
+  /// one for breaks you start; nil off a break.
+  private func breakSymbol(now: Date) -> String? {
+    if model.isOnBreak {
+      return model.isOnLunch(preferences.lunch, now: now)
+        ? preferences.lunch.symbol : preferences.breakSymbol
+    }
+    guard
+      let planned = model.anchoredBreaks().first(where: { $0.start <= now && now < $0.end })
+    else { return nil }
+    if model.lunch(preferences.lunch, now: now)?.lunch?.start == planned.start {
+      return preferences.lunch.symbol
+    }
+    return preferences.scheduledBreak(start: planned.start, end: planned.end)?
+      .symbol(rest: preferences.breakSymbol) ?? preferences.breakSymbol
   }
 }

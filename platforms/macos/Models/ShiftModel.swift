@@ -62,6 +62,14 @@ import Observation
     return rule.plan(clockIn: clockInTime, worked: shiftLength * 3600, breaks: spans, now: now)
   }
 
+  /// Whether the break you're on now is lunch under `rule`: the first break
+  /// long enough to be, or the one you're on if none before it was. False
+  /// off a break, or when the shift doesn't need lunch.
+  func isOnLunch(_ rule: LunchRule?, now: Date = Date()) -> Bool {
+    guard let breakStart, let lunch = lunch(rule, now: now)?.lunch else { return false }
+    return lunch.end == nil && lunch.start == breakStart
+  }
+
   /// The saved breaks, plus the one in progress as if it ended at `now`.
   func breaks(now: Date) -> [Interval] {
     guard let breakStart else { return breaks }
