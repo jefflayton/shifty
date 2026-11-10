@@ -219,6 +219,12 @@ export fn shifty_delete_shift(h: *Handle, shift_id: Id, now: i64) Result {
     return .ok;
 }
 
+/// Brings back a deleted shift and the breaks deleted with it.
+export fn shifty_restore_shift(h: *Handle, shift_id: Id, now: i64) Result {
+    h.store.restoreShift(id(shift_id), now) catch |e| return result(e);
+    return .ok;
+}
+
 /// Clocks out at `now`; `none` if no shift was open.
 export fn shifty_end_shift(h: *Handle, now: i64) Result {
     const ended = h.store.endShift(now) catch |e| return result(e);
@@ -504,6 +510,12 @@ export fn shifty_edit_entry(h: *Handle, entry_id: Id, project_id: ?*const Id, wo
 
 export fn shifty_delete_entry(h: *Handle, entry_id: Id, now: i64) Result {
     h.store.deleteEntry(id(entry_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Brings back a deleted entry as it was.
+export fn shifty_restore_entry(h: *Handle, entry_id: Id, now: i64) Result {
+    h.store.restoreEntry(id(entry_id), now) catch |e| return result(e);
     return .ok;
 }
 

@@ -532,6 +532,24 @@ pub const Store = struct {
         return Io.Clock.real.now(self.io).toSeconds();
     }
 
+    /// Brings back a deleted entry as it was, e.g. to undo deleting it.
+    /// `NotFound` unless it's deleted; `Conflict` if it was running and
+    /// another entry runs now.
+    pub fn restoreEntry(self: *Store, entry_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        const running = try self.oneInt(
+            \\SELECT out_ts IS NULL FROM entries WHERE id = ? AND deleted_ts IS NOT NULL
+        , .{blob(&entry_id)}) orelse return error.NotFound;
+        if (running != 0 and try self.oneInt(
+            \\SELECT 1 FROM entries WHERE out_ts IS NULL AND deleted_ts IS NULL
+        , .{}) != null) return error.Conflict;
+        try self.db.exec(
+            \\UPDATE entries SET deleted_ts = NULL, updated_ts = ? WHERE id = ?
+        , .{ now, blob(&entry_id) });
+        try self.commit();
+    }
+
     /// Replaces an entry's note; null clears it.
     pub fn setEntryNote(self: *Store, entry_id: Uuid, note: ?[]const u8, now: i64) Error!void {
         try self.db.exec(
@@ -772,6 +790,31 @@ pub const Store = struct {
         try self.db.exec(
             \\UPDATE breaks SET deleted_ts = ?, updated_ts = ?1 WHERE shift_id = ? AND deleted_ts IS NULL
         , .{ now, blob(&shift_id) });
+        try self.commit();
+    }
+
+    /// Brings back a deleted shift and the breaks deleted with it, e.g. to
+    /// undo deleting it. `NotFound` unless it's deleted; `Conflict` if it
+    /// was open and another shift is open now.
+    pub fn restoreShift(self: *Store, shift_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        const deleted = try self.oneInt(
+            \\SELECT deleted_ts FROM shifts WHERE id = ? AND deleted_ts IS NOT NULL
+        , .{blob(&shift_id)}) orelse return error.NotFound;
+        const was_open = try self.oneInt(
+            \\SELECT out_ts IS NULL FROM shifts WHERE id = ?
+        , .{blob(&shift_id)}) orelse 0;
+        if (was_open != 0 and try self.oneInt(
+            \\SELECT 1 FROM shifts WHERE out_ts IS NULL AND deleted_ts IS NULL
+        , .{}) != null) return error.Conflict;
+        try self.db.exec(
+            \\UPDATE shifts SET deleted_ts = NULL, updated_ts = ? WHERE id = ?
+        , .{ now, blob(&shift_id) });
+        // Only the breaks that went with it, not ones deleted before.
+        try self.db.exec(
+            \\UPDATE breaks SET deleted_ts = NULL, updated_ts = ? WHERE shift_id = ? AND deleted_ts = ?
+        , .{ now, blob(&shift_id), deleted });
         try self.commit();
     }
 
