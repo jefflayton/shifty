@@ -413,7 +413,8 @@ fn buildMacOS(
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
     const run_step = b.step("run-macos", "Run macOS executable");
-    run_cmd.step.dependOn(&link.step);
+    // The whole app, signed and with its bundled CLI, not just the binary.
+    run_cmd.step.dependOn(&codesign.step);
     run_step.dependOn(&run_cmd.step);
 
     return macos_step;

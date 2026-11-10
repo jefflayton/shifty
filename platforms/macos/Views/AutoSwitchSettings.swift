@@ -31,6 +31,14 @@ struct AutoSwitchSettings: View {
       }
       .pickerStyle(.segmented)
       .labelsHidden()
+      if !FileManager.default.isExecutableFile(atPath: Self.cliPath) {
+        Label(
+          "This build of Shifty is missing its command line tool, so the hook can't run. Rebuild it with zig build macos.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+      }
       HStack(alignment: .firstTextBaseline) {
         Text(shell.line(cli: Self.cliPath))
           .font(.system(.callout, design: .monospaced))
