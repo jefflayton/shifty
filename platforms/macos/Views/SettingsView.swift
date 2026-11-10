@@ -31,6 +31,7 @@ struct SettingsPane: View {
   let loginItem: LoginItem
   /// The menu bar's shift, for adding a scheduled break to it today.
   var shift: ShiftModel? = nil
+  @State private var tool = CommandLineTool.status
 
   var body: some View {
     Form {
@@ -60,6 +61,18 @@ struct SettingsPane: View {
     } footer: {
       Text("The timesheet hides other days unless they have time on them.")
         .foregroundStyle(.secondary)
+    }
+
+    Section {
+      CommandLineToolRow(status: $tool)
+    } header: {
+      Text("Command Line")
+    } footer: {
+      Text(
+        "Track time, link repos, and see your day from a terminal, with the same data as the menu bar. Installing links the command in \(CommandLineTool.directory) to the one inside Shifty, so updates keep it current."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
     }
 
     Section("Menu Bar") {

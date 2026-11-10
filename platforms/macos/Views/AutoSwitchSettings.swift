@@ -5,6 +5,12 @@ import SwiftUI
 struct AutoSwitchSettings: View {
   @Bindable var preferences: Preferences
   @AppStorage("autoSwitch.shell") private var shell: HookShell = .zsh
+  @State private var tool = CommandLineTool.status
+
+  /// What the hook line runs: the command once it's in PATH.
+  private var command: String {
+    tool == .installed ? CommandLineTool.name : CommandLineTool.bundled
+  }
 
   var body: some View {
     Section {
@@ -31,22 +37,15 @@ struct AutoSwitchSettings: View {
       }
       .pickerStyle(.segmented)
       .labelsHidden()
-      if !FileManager.default.isExecutableFile(atPath: Self.cliPath) {
-        Label(
-          "This build of Shifty is missing its command line tool, so the hook can't run. Rebuild it with zig build macos.",
-          systemImage: "exclamationmark.triangle.fill"
-        )
-        .foregroundStyle(.orange)
-        .fixedSize(horizontal: false, vertical: true)
-      }
+      CommandLineToolRow(status: $tool, compact: true)
       HStack(alignment: .firstTextBaseline) {
-        Text(shell.line(cli: Self.cliPath))
+        Text(shell.line(cli: command))
           .font(.system(.callout, design: .monospaced))
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
         Button("Copy") {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(shell.line(cli: Self.cliPath), forType: .string)
+          NSPasteboard.general.setString(shell.line(cli: command), forType: .string)
         }
       }
     } header: {
@@ -81,11 +80,6 @@ struct AutoSwitchSettings: View {
     }
   }
 
-  /// The command line tool inside the app, which the hooks run.
-  static var cliPath: String {
-    Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/shifty").path
-  }
-
   static func seconds(_ s: TimeInterval) -> String {
     s < 60 ? "\(Int(s)) seconds" : s == 60 ? "1 minute" : "\(Int(s / 60)) minutes"
   }
@@ -115,14 +109,67 @@ enum HookShell: String, CaseIterable, Identifiable {
     }
   }
 
-  /// The config line that loads `shifty hook` from `cli`.
+  /// The config line that loads `shifty hook` from `cli`: a command name,
+  /// or a path, which gets quoted.
   func line(cli: String) -> String {
-    let quoted = "'" + cli.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let quoted =
+      cli.contains("/") ? "'" + cli.replacingOccurrences(of: "'", with: "'\\''") + "'" : cli
     switch self {
     case .zsh: return "eval \"$(\(quoted) hook zsh)\""
     case .bash: return "eval \"$(\(quoted) hook bash)\""
     case .fish: return "\(quoted) hook fish | source"
     case .nvim: return "load(vim.fn.system({ \(quoted), \"hook\", \"nvim\" }))()"
     }
+  }
+}
+
+/// Whether the `shifty` command is in your PATH, with a button to put it
+/// there or take it out.
+struct CommandLineToolRow: View {
+  @Binding var status: CommandLineTool.Status
+  /// In the Terminals section: only says something when there's something
+  /// to do.
+  var compact = false
+
+  var body: some View {
+    Group {
+      switch status {
+      case .missing:
+        Label(
+          "This build of Shifty is missing its command line tool, so hooks can't run. Rebuild it with zig build macos.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+      case .installed:
+        if !compact {
+          LabeledContent("\(CommandLineTool.name) command") {
+            HStack {
+              Text(CommandLineTool.link).foregroundStyle(.secondary)
+              Button("Uninstall") { run { CommandLineTool.uninstall() } }
+            }
+          }
+        }
+      case .notInstalled, .taken:
+        LabeledContent {
+          Button(status == .notInstalled ? "Install…" : "Replace…") {
+            run { CommandLineTool.install() }
+          }
+        } label: {
+          Text("\(CommandLineTool.name) command")
+          if case .taken(let other) = status {
+            Text("\(CommandLineTool.link) is another copy, at \(other).")
+          } else {
+            Text("Run \(CommandLineTool.name) from any terminal\(compact ? ", and use a shorter line below" : "").")
+          }
+        }
+      }
+    }
+    .onAppear { status = CommandLineTool.status }
+  }
+
+  private func run(_ action: () -> Bool) {
+    _ = action()
+    status = CommandLineTool.status
   }
 }

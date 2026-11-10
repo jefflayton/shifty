@@ -198,7 +198,7 @@ Shifty knows where you are by:
 
 - **Terminals**: a prompt hook records each shell's folder. Settings shows the line to add for
   zsh, fish, bash, or Neovim (Neovim reports the folder of the file you're in). It runs the CLI
-  bundled in the app, `Shifty.app/Contents/Helpers/shifty`, so there's nothing to install.
+  bundled in the app, so it works whether or not you've installed the `shifty` command.
 - **Editors** like VS Code and Zed: the folder the front window has open, which needs the
   Accessibility permission.
 - **Apps**: the app in front, for apps linked as a whole.
@@ -207,6 +207,11 @@ A repo links by its Situ ids if it has a `situ.toml`, else its git remote (so ev
 matches), else its path.
 
 ## CLI
+
+The app comes with the CLI. To run it from any terminal, choose **Shifty → Install Command Line
+Tool…** (or **Install…** in Settings → General). That links `/usr/local/bin/shifty` to the copy
+inside `Shifty.app`, asking for your password if needed, so updates keep it current. Dev builds
+install it as `shifty-dev`. To build it on its own, `zig build cli` puts it in `zig-out/bin/shifty`.
 
 ```
 Usage: shifty [options]

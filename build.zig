@@ -97,14 +97,11 @@ pub fn build(b: *Build) void {
     check.dependOn(macos_step);
 }
 
-fn buildCli(
-    b: *Build,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
-) struct { step: *Build.Step, tests: *Build.Step } {
-    const cli_step = b.step("cli", "Build the CLI");
+const Deps = struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module };
 
+/// The `shifty` command line tool. `zig build cli` builds it for this
+/// machine, and the macOS app bundles one (see `buildMacOS`).
+fn addCli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, deps: Deps) *Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
@@ -113,11 +110,19 @@ fn buildCli(
     mod.addImport("core", deps.core);
     mod.addImport("store", deps.store);
     mod.addImport("integrations", deps.integrations);
+    return b.addExecutable(.{ .name = "shifty", .root_module = mod });
+}
 
-    const exe = b.addExecutable(.{
-        .name = "shifty",
-        .root_module = mod,
-    });
+fn buildCli(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: Deps,
+) struct { step: *Build.Step, tests: *Build.Step } {
+    const cli_step = b.step("cli", "Build the CLI");
+
+    const exe = addCli(b, target, optimize, deps);
+    const mod = exe.root_module;
     const install_exe = b.addInstallArtifact(exe, .{});
     cli_step.dependOn(&install_exe.step);
 
@@ -137,7 +142,7 @@ fn buildTui(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
+    deps: Deps,
 ) struct { step: *Build.Step, tests: *Build.Step } {
     const tui_step = b.step("tui", "Build the TUI");
 
@@ -180,7 +185,7 @@ fn buildMacOS(
     b: *Build,
     optimize: std.builtin.OptimizeMode,
     release: bool,
-    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
+    deps: Deps,
 ) *Build.Step {
     const macos_step = b.step("macos", "Build the macOS app");
 
@@ -342,25 +347,20 @@ fn buildMacOS(
     codesign_bin.addFileArg(bin);
     codesign_bin.step.dependOn(&link.step);
 
-    // The CLI rides along in Contents/Helpers, so the prompt hook the
-    // Auto-Switch settings show (`shifty hook`) works without installing
-    // anything. Same flavor as the app, so it records next to the app's
-    // database.
-    const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
+    // The CLI rides along in Contents/Helpers: the prompt hook auto-switch
+    // uses runs it, and Install Command Line Tool links it into PATH. Same
+    // flavor as the app, so it uses the app's database.
+    const cli = addCli(b, target, optimize, deps);
+    const inst_cli = b.addInstallArtifact(cli, .{
+        .dest_dir = .{ .override = .{ .custom = "Shifty.app/Contents/Helpers" } },
     });
-    cli_mod.addImport("core", deps.core);
-    cli_mod.addImport("store", deps.store);
-    cli_mod.addImport("integrations", deps.integrations);
-    const cli_exe = b.addExecutable(.{ .name = "shifty", .root_module = cli_mod });
-    const inst_cli = b.addInstallFile(cli_exe.getEmittedBin(), "Shifty.app/Contents/Helpers/shifty");
     inst_cli.step.dependOn(&link.step);
+    // Inside-out: the helper before the app that seals it.
     const codesign_cli = b.addSystemCommand(&.{
         "codesign", "--force", "--options=runtime",
-        "--sign",   "-",       bundle_path ++ "/Helpers/shifty",
+        "--sign",   "-",
     });
+    codesign_cli.addArg(bundle_path ++ "/Helpers/shifty");
     codesign_cli.step.dependOn(&inst_cli.step);
 
     const codesign = b.addSystemCommand(&.{

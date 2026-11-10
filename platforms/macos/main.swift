@@ -155,6 +155,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
   @objc func showTimesheet() { showMainWindow() }
 
+  /// Puts the bundled `shifty` command in PATH, and says how it went.
+  @objc func installCommandLineTool() {
+    let name = CommandLineTool.name
+    let alert = NSAlert()
+    switch CommandLineTool.status {
+    case .missing:
+      alert.messageText = "This build of Shifty has no command line tool."
+      alert.informativeText = "Rebuild it with zig build macos."
+    case .installed:
+      alert.messageText = "The \(name) command is installed."
+      alert.informativeText = "It's at \(CommandLineTool.link). Run \(name) --help to get started."
+    case .notInstalled, .taken:
+      guard CommandLineTool.install() else { return }
+      alert.messageText = "Installed the \(name) command."
+      alert.informativeText =
+        "Open a new terminal and run \(name) --help. To have auto-switch follow your terminal, add the hook from Settings → Auto-Switch."
+    }
+    NSApp.activate()
+    alert.runModal()
+  }
+
   @objc func showProjects() {
     popover.close()
     mainWindow?.show(.projects)
@@ -297,6 +318,9 @@ func setupMenu() {
   appMenu.addItem(.separator())
   appMenu.addItem(
     withTitle: "Settings…", action: #selector(AppDelegate.showSettings), keyEquivalent: ",")
+  appMenu.addItem(
+    withTitle: "Install Command Line Tool…",
+    action: #selector(AppDelegate.installCommandLineTool), keyEquivalent: "")
   appMenu.addItem(.separator())
   appMenu.addItem(
     withTitle: "Hide Shifty", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
