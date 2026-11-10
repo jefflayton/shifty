@@ -14,6 +14,7 @@ const Stamp = core.local.Stamp;
 
 pub const sqlite = @import("sqlite.zig");
 pub const report = @import("report.zig");
+pub const sheet = @import("sheet.zig");
 pub const ffi = @import("ffi.zig");
 const Blob = sqlite.Blob;
 
@@ -619,6 +620,14 @@ pub const Store = struct {
         return if (rows.len == 0) null else rows[0];
     }
 
+    /// An entry that isn't deleted, by id. Allocated in `arena`.
+    pub fn entryById(self: *Store, arena: Allocator, entry_id: Uuid) Error!?Entry {
+        const rows = try self.queryEntries(arena,
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{blob(&entry_id)});
+        return if (rows.len == 0) null else rows[0];
+    }
+
     /// Entries overlapping `[from, to)`, running ones included, oldest first.
     /// Allocated in `arena`.
     pub fn entriesBetween(self: *Store, arena: Allocator, from: i64, to: i64) Error![]Entry {
@@ -726,6 +735,14 @@ pub const Store = struct {
         const rows = try self.queryShifts(arena,
             \\WHERE out_ts IS NULL AND deleted_ts IS NULL
         , .{});
+        return if (rows.len == 0) null else rows[0];
+    }
+
+    /// A shift that isn't deleted, by id. Allocated in `arena`.
+    pub fn shiftById(self: *Store, arena: Allocator, shift_id: Uuid) Error!?Shift {
+        const rows = try self.queryShifts(arena,
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{blob(&shift_id)});
         return if (rows.len == 0) null else rows[0];
     }
 
@@ -930,6 +947,17 @@ pub const Store = struct {
             .out_ts = stmt.optInt(2),
         });
         return out.items;
+    }
+
+    /// A break that isn't deleted, by id.
+    pub fn breakById(self: *Store, break_id: Uuid) Error!?Break {
+        var stmt = try self.db.prepare(
+            \\SELECT shift_id, in_ts, out_ts FROM breaks WHERE id = ? AND deleted_ts IS NULL
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{blob(&break_id)});
+        if (!try stmt.step()) return null;
+        return .{ .id = break_id, .shift_id = try id(stmt, 0), .in_ts = stmt.int(1), .out_ts = stmt.optInt(2) };
     }
 
     /// Goes on break from the open shift, stopping the running entry.
@@ -1313,5 +1341,6 @@ fn optId(stmt: sqlite.Stmt, col: c_int) Error!?Uuid {
 test {
     _ = @import("ffi.zig");
     _ = @import("report.zig");
+    _ = @import("sheet.zig");
     _ = @import("tests.zig");
 }

@@ -15,18 +15,33 @@ const dur = fmt.dur;
 const store = @import("store");
 const Names = store.report.Names;
 const Store = store.Store;
+const sheet = store.sheet;
 const integrations = @import("integrations");
 const situ = integrations.situ;
 const place = integrations.place;
 const here_ = integrations.here;
+const clock_link = integrations.clock_link;
 
 pub const usage =
     \\Commands:
-    \\  status                     What's running: shift, break, timer
-    \\  in [-s <time>] [-l <len>]  Clock in (default: now, 8h), with the
-    \\                             day's scheduled breaks
-    \\  out                        Clock out
-    \\  break                      Start or end a break
+    \\  status                     What's running: shift, break, lunch, timer
+    \\  in [-s <time>] [-l <len>] [--open]
+    \\                             Clock in (default: now, 8h), with the
+    \\                             day's scheduled breaks. --open opens
+    \\                             the clock link
+    \\  out [--open]               Clock out
+    \\  break [--open]             Start or end a break; --open opens the
+    \\                             clock link for lunch
+    \\  sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
+    \\                             lunch, and time, with totals
+    \\  add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
+    \\                             Record time after the fact
+    \\  add --shift <start> <end> [-d <day>]
+    \\                             Record a shift you forgot to clock
+    \\  add --break <start> <end> [-d <day>]
+    \\                             Add a break to that day's shift
+    \\                             Days: today, yesterday, mon...sun (the
+    \\                             last one), or 2026-11-09
     \\  start [<project>[/<workspace>]] [-n <note>]
     \\                             Track time. With no project, use the
     \\                             project linked to the repo or folder
@@ -56,7 +71,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { status, in, out, @"break", start, stop, log, projects, project, workspace, clients, client, link, unlink, hook, here };
+const Command = enum { status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, hook, here };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -123,6 +138,8 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .in => try clockIn(&c, rest),
         .out => try clockOut(&c, rest),
         .@"break" => try toggleBreak(&c, rest),
+        .sheet => try timesheet(&c, rest),
+        .add => try add(&c, rest),
         .start => try start(&c, rest),
         .stop => try stop(&c, rest),
         .log => try log(&c, rest),
@@ -145,10 +162,19 @@ fn status(c: *Ctx, args: []const [:0]const u8) !void {
 
     if (try c.db.currentShift(c.arena)) |shift| {
         const brks = try c.db.breaks(c.arena, shift.id);
-        const out = store.clockOut(shift, brks, now);
+        const lunch = try sheet.Lunch.load(&c.db, c.arena);
+        const plan = if (lunch) |l| try l.planFor(c.arena, shift, brks, now) else null;
+        const out = try sheet.clockOut(c.arena, shift, brks, lunch, now);
         try c.out.print("On shift since {f}. Clock out at {f}", .{ clock(shift.in_ts, shift.utc_offset_secs), clock(out, c.now.utc_offset_secs) });
-        if (out > now) try c.out.print(" ({f} left).\n", .{dur(out - now)}) else try c.out.print(" ({f} ago).\n", .{dur(now - out)});
-        if (running(brks)) |b| try c.out.print("On break since {f} ({f}).\n", .{ clock(b.in_ts, shift.utc_offset_secs), dur(now - b.in_ts) });
+        if (out > now) try c.out.print(" ({f} left", .{dur(out - now)}) else try c.out.print(" ({f} over", .{dur(now - out)});
+        const ahead = if (lunch) |l| l.ahead(plan, now) else 0;
+        if (ahead > 0) try c.out.print(", {f} of it lunch to come", .{dur(ahead)});
+        try c.out.writeAll(").\n");
+        if (running(brks)) |b| {
+            const what = if (plan) |p| (if (p.isLunch(b.in_ts)) "lunch" else "break") else "break";
+            try c.out.print("On {s} since {f} ({f}).\n", .{ what, clock(b.in_ts, shift.utc_offset_secs), dur(now - b.in_ts) });
+        }
+        if (plan) |p| try lunchStatus(c, p, lunch.?, shift.utc_offset_secs);
     } else try c.out.writeAll("Off shift.\n");
 
     if (try c.db.runningEntry(c.arena)) |e| {
@@ -161,11 +187,13 @@ fn status(c: *Ctx, args: []const [:0]const u8) !void {
 fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
     var start_time: ?time.Time = null;
     var length: ?i64 = null;
+    var open = false;
     var it: Args = .{ .c = c, .cmd = "in", .list = args };
     while (it.next()) |arg| {
         if (eqlAny(arg, &.{ "-s", "--start" })) {
-            const v = try it.value(arg);
-            start_time = time.Time.fromStr(v) catch return c.fail("invalid time '{s}' for {s}", .{ v, arg });
+            start_time = try it.time(arg);
+        } else if (std.mem.eql(u8, arg, "--open")) {
+            open = true;
         } else if (eqlAny(arg, &.{ "-l", "--length" })) {
             const v = try it.value(arg);
             length = time.parseDuration(v) catch return c.fail("invalid length '{s}' for {s}", .{ v, arg });
@@ -192,9 +220,12 @@ fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
     // The day's break presets are on the shift now.
     const shift = (try c.db.currentShift(c.arena)).?;
     const brks = try c.db.breaks(c.arena, shift_id);
-    const out = store.clockOut(shift, brks, at.ts);
+    const lunch = try sheet.Lunch.load(&c.db, c.arena);
+    const out = try sheet.clockOut(c.arena, shift, brks, lunch, c.now.ts);
     try c.out.print("Clocked in at {f}. Clock out at {f}.\n", .{ clock(at.ts, at.utc_offset_secs), clock(out, at.utc_offset_secs) });
     for (brks) |b| try c.out.print("Break {f}-{f}.\n", .{ clock(b.in_ts, at.utc_offset_secs), clock(b.out_ts.?, at.utc_offset_secs) });
+    if (lunch) |l| if (try l.planFor(c.arena, shift, brks, c.now.ts)) |p| try lunchStatus(c, p, l, at.utc_offset_secs);
+    if (open) try openLink(c, .in);
 }
 
 fn defaultShiftSecs(c: *Ctx) !i64 {
@@ -203,7 +234,7 @@ fn defaultShiftSecs(c: *Ctx) !i64 {
 }
 
 fn clockOut(c: *Ctx, args: []const [:0]const u8) !void {
-    try noArgs(c, "out", args);
+    const open = try onlyOpen(c, "out", args);
     const now = c.now.ts;
     const shift = try c.db.currentShift(c.arena) orelse return c.fail("not on shift", .{});
     const brks = try c.db.breaks(c.arena, shift.id);
@@ -212,28 +243,315 @@ fn clockOut(c: *Ctx, args: []const [:0]const u8) !void {
     var worked = now - shift.in_ts;
     for (brks) |b| worked -= @max(0, @min(b.out_ts orelse now, now) - @max(b.in_ts, shift.in_ts));
     try c.out.print("Clocked out at {f}, {f} worked.\n", .{ clock(now, c.now.utc_offset_secs), dur(@max(0, worked)) });
+    if (open) try openLink(c, .out);
 }
 
 fn toggleBreak(c: *Ctx, args: []const [:0]const u8) !void {
-    try noArgs(c, "break", args);
+    const open = try onlyOpen(c, "break", args);
     const now = c.now.ts;
     const shift = try c.db.currentShift(c.arena) orelse return c.fail("not on shift; `shifty in` first", .{});
+    const lunch = try sheet.Lunch.load(&c.db, c.arena);
+    const before = try c.db.breaks(c.arena, shift.id);
 
-    if (running(try c.db.breaks(c.arena, shift.id))) |b| {
+    if (running(before)) |b| {
+        const was_lunch = if (lunch) |l| (if (try l.planFor(c.arena, shift, before, now)) |p| p.isLunch(b.in_ts) else false) else false;
         if (try c.db.endBreak(now) == null) {
             try c.out.writeAll("Break under a minute; dropped.\n");
         } else {
-            const out = store.clockOut(shift, try c.db.breaks(c.arena, shift.id), now);
-            try c.out.print("Back after {f}. Clock out at {f}.\n", .{ dur(now - b.in_ts), clock(out, c.now.utc_offset_secs) });
+            const out = try sheet.clockOut(c.arena, shift, try c.db.breaks(c.arena, shift.id), lunch, now);
+            try c.out.print("Back from {s} after {f}. Clock out at {f}.\n", .{ if (was_lunch) "lunch" else "the break", dur(now - b.in_ts), clock(out, c.now.utc_offset_secs) });
+            if (open and was_lunch and lunch.?.clock_link) try openLink(c, .in);
         }
         return;
     }
 
     const tracking = try c.db.runningEntry(c.arena);
     _ = try c.db.startBreak(now);
-    try c.out.print("On break since {f}.", .{clock(now, c.now.utc_offset_secs)});
+    const after = try c.db.breaks(c.arena, shift.id);
+    const is_lunch = if (lunch) |l| (if (try l.planFor(c.arena, shift, after, now)) |p| p.isLunch(now) else false) else false;
+    try c.out.print("On {s} since {f}.", .{ if (is_lunch) "lunch" else "break", clock(now, c.now.utc_offset_secs) });
     if (tracking) |e| try c.out.print(" Stopped tracking {s}.", .{try label(c, e.project_id, e.workspace_id)});
+    if (is_lunch) try c.out.print(" Clock out holds until you've had {f}.", .{dur(lunch.?.minimum_secs)});
     try c.out.writeAll("\n");
+    if (open and is_lunch and lunch.?.clock_link) try openLink(c, .out);
+}
+
+/// How lunch stands on the shift you're on.
+fn lunchStatus(c: *Ctx, p: sheet.Plan, l: sheet.Lunch, off: i64) !void {
+    const now = c.now.ts;
+    switch (p.status(now)) {
+        .upcoming => try c.out.print("Lunch opens at {f}; start it by {f}.\n", .{ clock(p.opens, off), clock(p.closes, off) }),
+        .open => try c.out.print("Lunch is open: start it by {f} ({f} left).\n", .{ clock(p.closes, off), dur(p.closes - now) }),
+        .on_lunch => try c.out.print("On lunch {f} of {f}.\n", .{ dur(now - p.lunch.?.start), dur(l.minimum_secs) }),
+        .taken => if (p.lunch.?.start > now)
+            try c.out.print("Lunch planned at {f}.\n", .{clock(p.lunch.?.start, off)})
+        else
+            try c.out.print("Had lunch at {f}.\n", .{clock(p.lunch.?.start, off)}),
+        .late => try c.out.print("Lunch started late, at {f}; the window closed at {f}.\n", .{ clock(p.lunch.?.start, off), clock(p.closes, off) }),
+        .missed => try c.out.print("Missed lunch: the window closed at {f}.\n", .{clock(p.closes, off)}),
+    }
+}
+
+/// Opens the clock link, if there is one.
+fn openLink(c: *Ctx, which: clock_link.Which) !void {
+    const url = try clock_link.get(&c.db, c.arena, which) orelse
+        return c.fail("no clock link set; set one in the menu bar's Settings", .{});
+    clock_link.open(c.io, url) catch |e| return c.fail("couldn't open {s}: {t}", .{ url, e });
+    try c.out.print("Opened {s}.\n", .{url});
+}
+
+/// `--open`, or nothing.
+fn onlyOpen(c: *Ctx, comptime cmd: []const u8, args: []const [:0]const u8) !bool {
+    if (args.len == 0) return false;
+    if (args.len == 1 and std.mem.eql(u8, args[0], "--open")) return true;
+    return c.fail(cmd ++ ": unexpected argument '{s}'", .{args[0]});
+}
+
+// ── Timesheet ───────────────────────────────────────────────────────────────
+
+fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
+    var day: ?i64 = null;
+    var last = false;
+    var it: Args = .{ .c = c, .cmd = "sheet", .list = args };
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--last")) {
+            last = true;
+        } else if (day == null and arg[0] != '-') {
+            day = try parseDay(c, arg);
+        } else return it.unexpected(arg);
+    }
+    var ref = (day orelse fmt.dayStart(c.now.ts, c.now.utc_offset_secs)) + std.time.s_per_day / 2;
+    if (last) ref -= 7 * std.time.s_per_day;
+    const first = sheet.weekStart(ref, local.utcOffset(ref), try sheet.weekStartDay(&c.db, c.arena));
+    const w: sheet.Week = try .load(&c.db, c.arena, sheet.weekDays(first, local.utcOffset));
+    const now = c.now.ts;
+    const this_week = now >= w.days[0] and now < w.days[7];
+    const a = c.arena;
+
+    try c.out.print("Week of {f}{s}\n", .{ fmt.date(w.days[0], local.utcOffset(w.days[0])), if (this_week) " (this week)" else "" });
+    var any = false;
+    for (0..7) |d| {
+        const is_today = this_week and w.dayOf(now) == d;
+        if (!w.hasTime(d) and !is_today) continue;
+        any = true;
+        const sum = try w.summary(a, d, now);
+        const head = try std.fmt.allocPrint(a, "{f}{s}", .{ fmt.date(w.days[d], local.utcOffset(w.days[d])), if (is_today) "  today" else "" });
+        try c.out.print("\n{s}", .{head});
+        if (sum.worked > 0 or sum.tracked > 0) {
+            const secs = if (sum.worked > 0) sum.worked else sum.tracked;
+            try c.out.print("{s}{s: >7}", .{ try spaces(a, 44 -| head.len), try padDur(c, secs) });
+            if (sum.over > 0) try c.out.print("  +{f}", .{dur(sum.over)});
+        }
+        try c.out.writeAll("\n");
+        if (!w.hasTime(d)) {
+            try c.out.writeAll("  Nothing yet.\n");
+            continue;
+        }
+        for (try w.shiftsOn(a, d)) |s| {
+            const off = s.shift.utc_offset_secs;
+            try printSpan(c, s.shift.in_ts, s.shift.out_ts, off);
+            try c.out.print("  {s: >7}  Shift", .{try padDur(c, try sheet.worked(a, s.shift, s.breaks, now))});
+            if (s.shift.out_ts == null) {
+                try c.out.print(", out at {f}", .{clock(try w.expectedEnd(a, s, now), c.now.utc_offset_secs)});
+            } else try c.out.print(" of {f}", .{dur(s.shift.target_secs)});
+            if (try w.lunchOf(a, s, now)) |p| try c.out.print("; {s}", .{switch (p.status(now)) {
+                .upcoming => try std.fmt.allocPrint(a, "lunch {f}-{f}", .{ clock(p.opens, off), clock(p.closes, off) }),
+                .open => try std.fmt.allocPrint(a, "lunch by {f}", .{clock(p.closes, off)}),
+                .on_lunch => "on lunch",
+                .taken => if (p.lunch.?.start > now) "lunch planned" else "had lunch",
+                .late => "lunch late",
+                .missed => "no lunch",
+            }});
+            try c.out.writeAll("\n");
+        }
+        for (try w.rows(a, d)) |r| switch (r) {
+            .entry => |e| {
+                try printSpan(c, @max(e.in_ts, w.days[0]), e.out_ts, e.utc_offset_secs);
+                try c.out.print("  {s: >7}  {s}", .{ try padDur(c, w.seconds(e, now)), try w.names.label(a, e.project_id, e.workspace_id) });
+                if (e.note) |n| try c.out.print("  {s}", .{n});
+                try c.out.writeAll("\n");
+            },
+            .brk => |b| {
+                try printSpan(c, b.brk.in_ts, b.brk.out_ts, b.shift.shift.utc_offset_secs);
+                const lunch = if (try w.lunchOf(a, b.shift, now)) |p| p.isLunch(b.brk.in_ts) else false;
+                try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, (b.brk.out_ts orelse @max(now, b.brk.in_ts)) - b.brk.in_ts), if (lunch) "Lunch" else "Break" });
+            },
+        };
+    }
+    if (!any) return c.out.writeAll("\nNothing this week.\n");
+
+    const s = try w.summary(a, null, now);
+    try c.out.writeAll("\nWeek\n");
+    try c.out.print("  {s: >7}  worked\n", .{try padDur(c, s.worked)});
+    if (s.over > 0) try c.out.print("  {s: >7}  over\n", .{try padDur(c, s.over)});
+    try c.out.print("  {s: >7}  on break\n", .{try padDur(c, s.on_break)});
+    try c.out.print("  {s: >7}  tracked\n", .{try padDur(c, s.tracked)});
+    try c.out.print("  {s: >7}  untracked\n", .{try padDur(c, s.untracked)});
+
+    const t = try w.totals(a, now);
+    if (t.by_project.len > 0) {
+        try c.out.writeAll("\nBy project\n");
+        for (t.by_project) |pt| {
+            try c.out.print("  {s: >7}  {s}", .{ try padDur(c, pt.secs), try w.names.label(a, pt.id, null) });
+            if (w.names.clientOf(pt.id)) |cl| try c.out.print("  ({s})", .{cl.name});
+            try c.out.writeAll("\n");
+        }
+    }
+    if (t.any_client) {
+        try c.out.writeAll("\nBy client\n");
+        for (t.by_client) |ct| {
+            const name = if (ct.id) |cid| w.names.client(cid).?.name else "(no client)";
+            try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, ct.secs), name });
+        }
+    }
+}
+
+fn printSpan(c: *Ctx, from: i64, end: ?i64, off: i64) !void {
+    try c.out.print("  {f} – ", .{clock(from, off)});
+    if (end) |e| try c.out.print("{f}", .{clock(e, off)}) else try c.out.writeAll("     now");
+}
+
+fn spaces(a: Allocator, n: usize) ![]const u8 {
+    const s = try a.alloc(u8, n);
+    @memset(s, ' ');
+    return s;
+}
+
+fn add(c: *Ctx, args: []const [:0]const u8) !void {
+    const Kind = enum { entry, shift, @"break" };
+    var kind: Kind = .entry;
+    var times: [2]time.Time = undefined;
+    var n_times: usize = 0;
+    var spec: ?[]const u8 = null;
+    var note: ?[]const u8 = null;
+    var day: ?i64 = null;
+    var it: Args = .{ .c = c, .cmd = "add", .list = args };
+    while (it.peek()) |arg| {
+        if (std.mem.eql(u8, arg, "--shift")) {
+            _ = it.next();
+            kind = .shift;
+        } else if (std.mem.eql(u8, arg, "--break")) {
+            _ = it.next();
+            kind = .@"break";
+        } else if (eqlAny(arg, &.{ "-n", "--note" })) {
+            _ = it.next();
+            note = try it.value(arg);
+        } else if (eqlAny(arg, &.{ "-d", "--day" })) {
+            _ = it.next();
+            day = try parseDay(c, try it.value(arg));
+        } else if (arg.len > 0 and arg[0] == '-') {
+            _ = it.next();
+            return it.unexpected(arg);
+        } else if (n_times < 2) {
+            times[n_times] = try it.time("add");
+            n_times += 1;
+        } else if (spec == null) {
+            spec = it.next();
+        } else {
+            _ = it.next();
+            return it.unexpected(arg);
+        }
+    }
+    if (n_times < 2) return c.fail("usage: shifty add <start> <end> [<project>] [-n <note>] [-d <day>]", .{});
+    if (kind != .entry and (spec != null or note != null)) return c.fail("add --{t} takes only times and -d", .{kind});
+
+    const now = c.now.ts;
+    // Today, or yesterday for a from that's still to come today.
+    const midnight = day orelse blk: {
+        const today = fmt.dayStart(now, c.now.utc_offset_secs);
+        break :blk if (today + times[0].toTs() > now) today - std.time.s_per_day else today;
+    };
+    const noon = midnight + std.time.s_per_day / 2;
+    const off = local.utcOffset(noon);
+    const a = c.arena;
+
+    switch (kind) {
+        .entry, .shift => {
+            const from = sheet.onDay(noon, off, times[0]);
+            const end = sheet.endAfter(from, off, times[1]);
+            if (!sheet.validEntry(from, end)) return c.fail("that's longer than 16 hours", .{});
+            if (end > now) return c.fail("that ends in the future; `shifty {s}` for now", .{if (kind == .entry) "start" else "in"});
+            const at: local.Stamp = .{ .ts = from, .utc_offset_secs = local.utcOffset(from), .tz = c.now.tz };
+            if (kind == .shift) {
+                _ = try c.db.addShift(at, end);
+                return c.out.print("Added a shift on {f}, {f} – {f} ({f}).\n", .{ fmt.date(from, at.utc_offset_secs), clock(from, at.utc_offset_secs), clock(end, at.utc_offset_secs), dur(end - from) });
+            }
+            const target = if (spec) |sp| try resolve(c, sp) else null;
+            _ = try c.db.addEntry(.{
+                .project_id = if (target) |t| t.project_id else null,
+                .workspace_id = if (target) |t| t.workspace_id else null,
+                .source = .cli,
+                .note = note,
+            }, at, end);
+            const name = if (target) |t| try label(c, t.project_id, t.workspace_id) else try label(c, null, null);
+            try c.out.print("Added {f} of {s} on {f}, {f} – {f}.\n", .{ dur(end - from), name, fmt.date(from, at.utc_offset_secs), clock(from, at.utc_offset_secs), clock(end, at.utc_offset_secs) });
+        },
+        .@"break" => {
+            const shifts = try c.db.shiftsBetween(a, midnight, midnight + std.time.s_per_day);
+            var found: ?store.Shift = null;
+            for (shifts) |s| if (s.in_ts >= midnight) {
+                found = s;
+                break;
+            };
+            const s = found orelse (if (shifts.len > 0) shifts[0] else null) orelse
+                return c.fail("no shift on {f}; `shifty add --shift` first", .{fmt.date(noon, off)});
+            const so = s.utc_offset_secs;
+            const from = sheet.anchorAfter(s.in_ts, so, times[0]);
+            const end = sheet.endAfter(from, so, times[1]);
+            if (!sheet.validBreak(from, end)) return c.fail("a break can't run longer than 12 hours", .{});
+            _ = try c.db.addBreak(s.id, from, end, now);
+            try c.out.print("Added a {f} break, {f} – {f}, to the shift on {f}.\n", .{ dur(end - from), clock(from, so), clock(end, so), fmt.date(s.in_ts, so) });
+            if (s.out_ts == null) {
+                const lunch = try sheet.Lunch.load(&c.db, a);
+                const out = try sheet.clockOut(a, s, try c.db.breaks(a, s.id), lunch, now);
+                try c.out.print("Clock out at {f}.\n", .{clock(out, c.now.utc_offset_secs)});
+            }
+        },
+    }
+}
+
+/// A day's local midnight: `today`, `yesterday`, a weekday (the last one,
+/// today included), or `YYYY-MM-DD`.
+fn parseDay(c: *Ctx, str: []const u8) !i64 {
+    const today = fmt.dayStart(c.now.ts, c.now.utc_offset_secs);
+    if (std.ascii.eqlIgnoreCase(str, "today")) return today;
+    if (std.ascii.eqlIgnoreCase(str, "yesterday")) return midnightOf(today - std.time.s_per_day / 2);
+    const names = [_][]const u8{ "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
+    for (names, 1..) |n, iso| {
+        if (str.len >= 3 and std.ascii.startsWithIgnoreCase(str, n) and std.ascii.startsWithIgnoreCase(fullDay(iso), str)) {
+            const wd = sheet.isoWeekday(c.now.ts + c.now.utc_offset_secs);
+            const back: i64 = @mod(@as(i64, wd) - @as(i64, @intCast(iso)), 7);
+            return midnightOf(today - back * std.time.s_per_day + std.time.s_per_day / 2);
+        }
+    }
+    const ymd = parseYmd(str) orelse return c.fail("can't read '{s}' as a day; use today, yesterday, mon...sun, or 2026-11-09", .{str});
+    return midnightOf(ymd * std.time.s_per_day + std.time.s_per_day / 2);
+}
+
+fn fullDay(iso: usize) []const u8 {
+    return ([_][]const u8{ "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday" })[iso - 1];
+}
+
+/// Local midnight of the day holding `ts`.
+fn midnightOf(ts: i64) i64 {
+    return fmt.dayStart(ts, local.utcOffset(ts));
+}
+
+/// Days since 1970-01-01 for `YYYY-MM-DD`.
+fn parseYmd(str: []const u8) ?i64 {
+    var it = std.mem.splitScalar(u8, str, '-');
+    const y = std.fmt.parseInt(i64, it.next() orelse return null, 10) catch return null;
+    const m = std.fmt.parseInt(i64, it.next() orelse return null, 10) catch return null;
+    const d = std.fmt.parseInt(i64, it.next() orelse return null, 10) catch return null;
+    if (it.next() != null or m < 1 or m > 12 or d < 1 or d > 31 or y < 1970) return null;
+    // Howard Hinnant's days_from_civil.
+    const yy = if (m <= 2) y - 1 else y;
+    const era = @divFloor(yy, 400);
+    const yoe = yy - era * 400;
+    const mp = @mod(m + 9, 12);
+    const doy = @divFloor(153 * mp + 2, 5) + d - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return era * 146097 + doe - 719468;
 }
 
 // ── Tracking ────────────────────────────────────────────────────────────────
@@ -636,12 +954,34 @@ const Args = struct {
         return a.next() orelse a.c.fail("{s} requires a value", .{flag});
     }
 
+    fn peek(a: *Args) ?[:0]const u8 {
+        return if (a.i == a.list.len) null else a.list[a.i];
+    }
+
+    /// A time of day, joining a following `AM`/`PM` so `9:30 PM` works
+    /// without quotes.
+    fn time(a: *Args, flag: []const u8) Error!core.time.Time {
+        var str: []const u8 = try a.value(flag);
+        if (a.peek()) |m| if (std.ascii.eqlIgnoreCase(m, "am") or std.ascii.eqlIgnoreCase(m, "pm")) {
+            _ = a.next();
+            str = std.fmt.allocPrint(a.c.arena, "{s} {s}", .{ str, m }) catch return a.c.fail("out of memory", .{});
+        };
+        return core.time.Time.fromStr(str) catch a.c.fail("invalid time '{s}' for {s}", .{ str, flag });
+    }
+
     fn unexpected(a: *Args, arg: []const u8) Error {
         return a.c.fail("{s}: unexpected argument '{s}'", .{ a.cmd, arg });
     }
 };
 
 const testing = std.testing;
+
+test "parseYmd" {
+    try testing.expectEqual(0, parseYmd("1970-01-01"));
+    try testing.expectEqual(20401, parseYmd("2025-11-09"));
+    try testing.expectEqual(null, parseYmd("2025-13-01"));
+    try testing.expectEqual(null, parseYmd("nov 9"));
+}
 
 test "isCommand" {
     try testing.expect(isCommand("start"));

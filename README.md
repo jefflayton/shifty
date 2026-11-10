@@ -132,7 +132,7 @@ to be to count as lunch (30 min). Shorter breaks before lunch push the window la
 On a shift long enough to need lunch, clock out counts lunch before you take it: the popover, menu
 bar, and clock-out alarms add the minimum lunch length to the shift until you go on lunch. On
 lunch, clock out holds until that much has passed, then moves with the clock; once lunch ends it
-counts the lunch you took. (The TUI and CLI don't count it ahead yet.)
+counts the lunch you took. The TUI and CLI count it the same way.
 
 On a shift long enough to need lunch, the popover's shift bar highlights the window until you
 take it, then tints the break that was lunch. Add lunch alarms from the **+** next to *Alarms*:
@@ -254,11 +254,24 @@ frontend shares: `~/Library/Application Support/Shifty/shifty.db` on macOS,
 `$XDG_DATA_HOME/shifty/shifty.db` elsewhere, or `$SHIFTY_DB` if set.
 
 ```
-status                     What's running: shift, break, timer
-in [-s <time>] [-l <len>]  Clock in (default: now, 8h), with the
-                           day's scheduled breaks
-out                        Clock out
-break                      Start or end a break
+status                     What's running: shift, break, lunch, timer
+in [-s <time>] [-l <len>] [--open]
+                           Clock in (default: now, 8h), with the
+                           day's scheduled breaks. --open opens
+                           the clock link
+out [--open]               Clock out
+break [--open]             Start or end a break; --open opens the
+                           clock link for lunch
+sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
+                           lunch, and time, with totals
+add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
+                           Record time after the fact
+add --shift <start> <end> [-d <day>]
+                           Record a shift you forgot to clock
+add --break <start> <end> [-d <day>]
+                           Add a break to that day's shift
+                           Days: today, yesterday, mon...sun (the
+                           last one), or 2026-11-09
 start [<project>[/<workspace>]] [-n <note>]
                            Track time. With no project, use the
                            project linked to the repo or folder
@@ -311,25 +324,65 @@ By client
    5h 00m  total
 ```
 
+`shifty sheet` prints the week as the [timesheet](#timesheet-and-projects) shows it: each day's
+shift (worked, past its length, and how lunch went), its breaks and tracked time, then the week's
+totals. `shifty sheet mon` shows the week holding that day; `--last`, the week before. `add` without
+`-d` puts the time on today, or yesterday if it starts later than now. With the lunch window on,
+`status`, `in`, and `break` count lunch in clock out and say where lunch stands.
+
+Weeks start on Sunday unless the `week_start` setting is an ISO weekday (`1` for Monday). Days you
+don't work (the `work_days` setting) are hidden unless they have time on them.
+
 Starting with no project inside a linked repo or folder tracks whatever `shifty link` pointed it
 at. A git repo links by its origin remote, so every clone matches; a Situ repo (one with a
 `situ.toml`) by its Situ ids.
 
 ## TUI
 
-`shifty-tui` opens on your day: the shift and its clock out, what you're tracking, today's
-entries, and totals by project and client. It reads the same database as the CLI and reloads
-every second, so a `shifty start` in another terminal shows up right away.
+`shifty-tui` opens on your day: the shift and its clock out, a bar of the shift (work done in
+green, breaks, the lunch window, time over in yellow), where lunch stands, what you're tracking,
+today's entries, and totals by project and client. It reads the same database as the CLI and
+reloads every second, so a `shifty start` in another terminal shows up right away. Clock out counts
+lunch still to come, as the menu bar does.
 
 | Key | Action |
 | --- | --- |
 | `s` | Start tracking: type to filter projects and workspaces, `↑`/`↓` to choose, `enter` to start. Inside a linked repo or folder, its project comes first |
 | `x` | Stop tracking |
 | `n` | Add or edit the running entry's note |
-| `b` | Start or end a break |
+| `b` | Start or end a break (or lunch) |
 | `i` / `o` | Clock in now / clock out (asks first) |
+| `e` | Edit the shift you're on: clock in and length |
+| `t` | Open the timesheet; `esc` comes back |
+| `l` | Open the clock link. After clocking in or out, or lunch with **Clock out for lunch** on, it's the one that fits |
 | `c` | Open the calculator; `esc` comes back |
 | `q` / `ctrl+c` | Quit |
+
+### Timesheet
+
+`t` opens the week as the menu bar app's timesheet shows it: a strip of each day's hours, the
+week's time worked, tracked, untracked, and on break, then each day with its shift, breaks, and
+tracked time in the order they started. A shift shows how far it ran past its length and how lunch
+went. Today starts open and other days folded. Every change goes straight to the database and can
+be undone.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓`, `j`/`k` | Move between days and rows (`g`/`G`: first, last) |
+| `tab`/`shift+tab`, `J`/`K` | Next or previous day |
+| `←`/`→`, `h`/`l`, `[`/`]` | Previous or next week; `t` this week |
+| `space`, `z` | Fold or open the day; `Z` every day |
+| `enter`, `e` | Edit the row's times: start and end, or the open shift's clock in and length. `tab` switches fields |
+| `a` | Add time on the day (after its last entry, or the hour before now), edit its times, then pick its project |
+| `A` | Add a shift you forgot to clock |
+| `b` | Add a half-hour break to the day's shift, at the lunch window if lunch is still to come |
+| `p` / `n` | Change the time's project or note |
+| `x` | Stop the running time, or end the break you're on |
+| `d`, `delete` | Delete; a shift goes with its breaks |
+| `u` / `U`, `ctrl+r` | Undo / redo |
+| `y` | Copy the row |
+| `w` | The week's totals by project and client |
+| `?` | Every key |
 
 The calculator works out a clock-out time live as you type, starting from the current shift.
 
