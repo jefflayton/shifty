@@ -32,6 +32,14 @@ func at(_ h: Int, _ m: Int = 0, day: Int = 0) -> Date {
 
 func brk(_ start: Date, _ end: Date) -> Interval { Interval(inDate: start, outDate: end) }
 
+/// Settings for one test, emptied first. Every test shares these few names:
+/// macOS keeps a domain's file even once it's emptied, so a fresh name per
+/// test would leave a file in ~/Library/Preferences for each one.
+func testDefaults(_ name: String = "shifty-tests") -> UserDefaults {
+  UserDefaults.standard.removePersistentDomain(forName: name)
+  return UserDefaults(suiteName: name)!
+}
+
 // MARK: ShiftTimes
 
 do {
@@ -148,9 +156,7 @@ do {
 // MARK: Persistence
 
 do {
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
 
   let m = ShiftModel()
   m.clockInTime = at(9)
@@ -170,7 +176,7 @@ do {
   expectEqual(loaded.alarms, m.alarms)
   expectEqual(loaded.breakStart, at(14), "break in progress survives a restart")
 
-  let empty = ShiftModel.load(from: UserDefaults(suiteName: suite + "-none")!)
+  let empty = ShiftModel.load(from: testDefaults("shifty-tests-none"))
   check(empty.alarms.isEmpty && empty.breaks.isEmpty, "missing data loads defaults")
 }
 
@@ -279,9 +285,7 @@ do {
   check(over(.iconOnly, at(17, 25)) == nil, "icon only")
   expectEqual(over(.timeLeft, at(16, 50)), "10m", "before clock out, as before")
 
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
   expectEqual(Preferences(defaults: defaults).menuBarDisplay, .clockOut, "default")
   Preferences(defaults: defaults).menuBarDisplay = .timeLeft
   expectEqual(Preferences(defaults: defaults).menuBarDisplay, .timeLeft, "saved")
@@ -300,9 +304,7 @@ do {
   check(Preferences.link(from: "not a link") == nil, "spaces")
   check(Preferences.link(from: "https://") == nil, "no host")
 
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
   check(Preferences(defaults: defaults).clockOutLink == nil, "no link by default")
   Preferences(defaults: defaults).clockOutLink = URL(string: "https://example.com")
   expectEqual(Preferences(defaults: defaults).clockOutLink, URL(string: "https://example.com"),
@@ -400,9 +402,7 @@ do {
   // Alarm rules move into the store once, then live there.
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
 
   let old = ShiftModel()
   old.alarms = [
@@ -430,9 +430,7 @@ do {
   // The clock-out link moves into the store once.
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
   Preferences(defaults: defaults).clockOutLink = URL(string: "https://example.com/clock")
 
   let store = try! ShiftStore(path: path)
@@ -455,9 +453,7 @@ do {
   // the menu bar asks before opening either until told otherwise.
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
-  let suite = "shifty-tests-\(UUID().uuidString)"
-  let defaults = UserDefaults(suiteName: suite)!
-  defer { defaults.removePersistentDomain(forName: suite) }
+  let defaults = testDefaults()
   let store = try! ShiftStore(path: path)
   let prefs = Preferences(defaults: defaults, store: store)
   let out = URL(string: "https://example.com/out")!
@@ -761,7 +757,7 @@ do {
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
   let store = try! ShiftStore(path: path)
-  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let defaults = testDefaults()
   let prefs = Preferences(defaults: defaults, store: store)
   expectEqual(prefs.workDays, Preferences.everyDay, "every day by default")
   prefs.workDays = [1, 2, 3, 4, 5]
@@ -781,7 +777,7 @@ do {
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
   let store = try! ShiftStore(path: path)
-  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let defaults = testDefaults()
   let prefs = Preferences(defaults: defaults, store: store)
   prefs.workDays = [1, 2, 3, 4, 5]
   prefs.lunch.isEnabled = true
@@ -910,7 +906,7 @@ do {
   let path = tempStorePath()
   defer { try? FileManager.default.removeItem(atPath: path) }
   let store = try! ShiftStore(path: path)
-  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let defaults = testDefaults()
   let prefs = Preferences(defaults: defaults, store: store)
   check(prefs.scheduledBreaks.isEmpty, "none by default")
   check(!prefs.lunch.isEnabled, "lunch off by default")
@@ -1266,5 +1262,142 @@ do {
   expectEqual(t.selection, .entry(morning), "the last row's delete selects the one above")
 }
 
+// MARK: Places and auto-switch
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let web = try! store.createProject(name: "Web")
+  let chat = try! store.createProject(name: "Chat")
+
+  // A git repo, linked by its remote.
+  let repo = NSTemporaryDirectory() + "shifty-tests-repo-\(UUID().uuidString)"
+  defer { try? FileManager.default.removeItem(atPath: repo) }
+  try! FileManager.default.createDirectory(
+    atPath: repo + "/.git", withIntermediateDirectories: true)
+  try! FileManager.default.createDirectory(
+    atPath: repo + "/src", withIntermediateDirectories: true)
+  try! "[remote \"origin\"]\n\turl = git@github.com:o/web.git\n".write(
+    toFile: repo + "/.git/config", atomically: true, encoding: .utf8)
+
+  var p = try! store.place(dir: repo + "/src", app: nil)
+  check(p.target == nil, "an unlinked repo has no project")
+  expectEqual(p.remote, "github.com/o/web")
+  expectEqual(try! store.link(dir: repo + "/src", to: .init(project: web)), .git)
+  try! store.link(app: "com.example.chat", to: .init(project: chat))
+  p = try! store.place(dir: repo + "/src", app: "com.example.chat")
+  expectEqual(p.via, .git, "the repo beats the app")
+  expectEqual(p.target, .init(project: web))
+  expectEqual(try! store.place(dir: nil, app: "com.example.chat").target, .init(project: chat))
+
+  let links = try! store.links()
+  expectEqual(links.map(\.externalId), ["github.com/o/web", "com.example.chat"])
+  try! store.unlink(links[1])
+  check(try! store.place(dir: nil, app: "com.example.chat").target == nil, "unlinked app")
+  check(try! store.spotsPath().hasSuffix("/here.tsv"), "the hook's record sits by the db")
+  expectEqual(try! store.spots(), [], "no hook yet")
+
+  // Auto-switch: a running timer on Web, then working somewhere that's Chat.
+  let defaults = testDefaults()
+  let prefs = Preferences(defaults: defaults)
+  prefs.autoSwitch = true
+  prefs.autoSwitchDelay = 30
+  prefs.autoSwitchCountdown = 10
+  let tracking = TrackingModel(store: store)
+  tracking.choose(project: web, workspace: nil, now: at(9))
+  tracking.reload(now: at(9, 1))
+  let auto = AutoSwitchModel(tracking: tracking, preferences: prefs)
+  let toChat = ShiftStore.Target(project: chat)
+
+  auto.observe(toChat, place: "Chat", now: at(10))
+  check(auto.offer == nil, "no offer before the delay")
+  auto.observe(nil, place: "Safari", now: at(10, 0) + 20)
+  check(auto.offer == nil, "an unknown place changes nothing")
+  auto.observe(toChat, place: "Chat", now: at(10, 0) + 31)
+  expectEqual(auto.offer?.name, "Chat", "offered after the delay")
+  expectEqual(auto.offer?.from, "Web")
+  expectEqual(auto.offer?.arrived, at(10), "from when you got there")
+  auto.tick(now: at(10, 0) + 35)
+  expectEqual(tracking.runningTarget, .init(project: web), "still counting down")
+  auto.tick(now: at(10, 0) + 41)
+  check(auto.offer == nil, "the countdown ran out")
+  expectEqual(tracking.runningTarget, toChat, "switched")
+  expectEqual(tracking.running?.start, at(10), "the new entry starts when you got there")
+  expectEqual(auto.switched?.name, "Chat")
+
+  auto.undoSwitch()
+  tracking.reload(now: at(10, 1))
+  expectEqual(tracking.runningTarget, .init(project: web), "undo puts Web back")
+  expectEqual(tracking.running?.start, at(9), "running from where it was")
+  check(auto.switched == nil, "undo dismisses")
+
+  // Back where the timer's project is: the offer goes.
+  auto.observe(toChat, place: "Chat", now: at(11))
+  auto.observe(toChat, place: "Chat", now: at(11, 1))
+  check(auto.offer != nil, "offered again")
+  auto.observe(.init(project: web), place: "web", now: at(11, 2))
+  check(auto.offer == nil, "back in Web's repo")
+
+  // Keep holds off the same project.
+  auto.observe(toChat, place: "Chat", now: at(12))
+  auto.observe(toChat, place: "Chat", now: at(12, 1))
+  auto.keep(now: at(12, 1))
+  check(auto.offer == nil, "kept")
+  auto.observe(toChat, place: "Chat", now: at(12, 10))
+  auto.observe(toChat, place: "Chat", now: at(12, 20))
+  check(auto.offer == nil, "not offered again so soon")
+  auto.observe(toChat, place: "Chat", now: at(12, 40))
+  auto.observe(toChat, place: "Chat", now: at(12, 41))
+  check(auto.offer != nil, "offered once Keep wears off")
+  auto.switchNow(now: at(12, 41))
+  expectEqual(tracking.runningTarget, toChat, "Switch Now")
+
+  // Off, or no timer: nothing.
+  prefs.autoSwitch = false
+  auto.observe(.init(project: web), place: "web", now: at(13))
+  auto.observe(.init(project: web), place: "web", now: at(13, 5))
+  check(auto.offer == nil, "off")
+  prefs.autoSwitch = true
+  tracking.stop(now: at(14))
+  tracking.reload(now: at(14, 1))
+  auto.observe(.init(project: web), place: "web", now: at(14, 1))
+  auto.observe(.init(project: web), place: "web", now: at(14, 5))
+  check(auto.offer == nil, "no timer running")
+
+  // On shift with no timer: it offers to start one.
+  var onShift: Date? = at(14)
+  auto.onShiftSince = { onShift }
+  auto.observe(toChat, place: "Chat", now: at(14, 20))
+  auto.observe(toChat, place: "Chat", now: at(14, 21))
+  expectEqual(auto.offer?.starts, true, "offers to start")
+  check(auto.offer?.from == nil, "from nothing")
+  auto.tick(now: at(14, 21) + 11)
+  expectEqual(tracking.runningTarget, toChat, "started")
+  expectEqual(tracking.running?.start, at(14, 20), "from when you got there")
+  expectEqual(auto.switched?.started, true)
+  auto.undoSwitch()
+  tracking.reload(now: at(14, 33))
+  check(tracking.running == nil, "undo takes the timer back")
+  onShift = nil
+  auto.observe(toChat, place: "Chat", now: at(14, 40))
+  check(auto.offer == nil, "off shift (or on a break): nothing")
+  auto.observe(toChat, place: "Chat", now: at(14, 45))
+  check(auto.offer == nil, "still nothing")
+
+  // An unassigned timer just gets the project.
+  tracking.choose(project: nil, workspace: nil, now: at(15))
+  tracking.reload(now: at(15, 1))
+  let undo = tracking.switchTo(toChat, since: at(15, 30), now: at(15, 31))
+  expectEqual(tracking.runningTarget, toChat)
+  expectEqual(tracking.running?.start, at(15), "all of it")
+  undo?()
+  tracking.reload(now: at(15, 32))
+  check(tracking.running != nil && tracking.runningTarget == nil, "undo unassigns it")
+}
+
+for name in ["shifty-tests", "shifty-tests-none"] {
+  UserDefaults.standard.removePersistentDomain(forName: name)
+}
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)
