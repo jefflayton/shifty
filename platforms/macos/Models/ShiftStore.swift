@@ -6,6 +6,17 @@ final class ShiftStore {
   struct Error: Swift.Error, CustomStringConvertible {
     let result: ShiftyResult
     var description: String { "store error \(result.rawValue)" }
+
+    /// What went wrong, for people.
+    var explanation: String {
+      switch result {
+      case SHIFTY_TOO_NEW: "It was saved by a newer version of Shifty. Update this one."
+      case SHIFTY_BUSY: "Another app has it locked. Quit the TUI or CLI, then reopen Shifty."
+      case SHIFTY_CORRUPT: "It looks damaged."
+      case SHIFTY_NO_MEMORY: "Shifty ran out of memory opening it."
+      default: "Shifty couldn't read or create it."
+      }
+    }
   }
 
   struct Shift: Equatable {

@@ -13,14 +13,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   var item: NSStatusItem!
   /// The database the CLI and TUI share. Without it the app still works,
   /// as a calculator only.
-  let store = AppDelegate.openStore()
+  private let opened = AppDelegate.openStore()
+  var store: ShiftStore? { opened.store }
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
   /// The timesheet, projects, and settings; only settings without the
   /// store.
   lazy var mainWindow: MainWindow = {
     let window = MainWindow(
-      store: store, preferences: preferences, loginItem: loginItem,
+      store: store, storeError: opened.error, preferences: preferences, loginItem: loginItem,
       shift: store == nil ? nil : model)
     // A clock in or break moved on the timesheet: the popover reads it before
     // it saves its own copy over it.
@@ -94,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
         loginItem: loginItem, tracking: tracking, autoSwitch: autoSwitch,
-        openTimesheet: store == nil ? nil : { [weak self] in self?.showMainWindow() },
+        openTimesheet: { [weak self] in self?.showMainWindow() },
         openSettings: { [weak self] in self?.showSettings() },
         clocked: { [weak self] clockingIn in self?.offerClockLink(clockingIn: clockingIn) }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
@@ -119,12 +120,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
   }
 
-  private static func openStore() -> ShiftStore? {
+  /// The store, or why it couldn't open, to show in place of the timesheet.
+  private static func openStore() -> (store: ShiftStore?, error: String?) {
     do {
-      return try ShiftStore()
+      return (try ShiftStore(), nil)
     } catch {
       log("open store:", error)
-      return nil
+      return (nil, (error as? ShiftStore.Error)?.explanation ?? "\(error)")
     }
   }
 
@@ -299,15 +301,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   }
 }
 
-extension AppDelegate: NSMenuItemValidation {
-  func validateMenuItem(_ item: NSMenuItem) -> Bool {
-    switch item.action {
-    // Without the store there's no timesheet.
-    case #selector(showTimesheet), #selector(showProjects): store != nil
-    default: true
-    }
-  }
-}
 
 func setupMenu() {
   let mainMenu = NSMenu()

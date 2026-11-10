@@ -42,12 +42,12 @@ enum MainScreen: Hashable, Identifiable {
   var screen = MainScreen.timesheet
 }
 
-/// Shifty's window: the timesheet and projects (with the store), and
-/// settings.
+/// Shifty's window: the timesheet, projects, and settings.
 struct MainView: View {
-  /// Nil without the store; then there are only settings.
+  /// Nil without the store; then they show `storeError`.
   let timesheet: TimesheetModel?
   let projects: ProjectsModel?
+  var storeError: String? = nil
   @Bindable var navigation: MainNavigation
   let preferences: Preferences
   let loginItem: LoginItem
@@ -61,10 +61,8 @@ struct MainView: View {
           get: { navigation.screen },
           set: { if let screen = $0 { navigation.screen = screen } })
       ) {
-        if timesheet != nil {
-          Section {
-            ForEach(MainScreen.tracking) { row($0) }
-          }
+        Section {
+          ForEach(MainScreen.tracking) { row($0) }
         }
         Section("Settings") {
           ForEach(MainScreen.settings) { row($0) }
@@ -90,6 +88,18 @@ struct MainView: View {
     }
   }
 
+  /// In place of the timesheet and projects when the database won't open.
+  private var noStore: some View {
+    ContentUnavailableView {
+      Label("Can't Open Your Timesheet", systemImage: "exclamationmark.triangle")
+    } description: {
+      Text(
+        "\(storeError ?? "Shifty couldn't open its database.") It's at ~/Library/Application Support/\(CommandLineTool.isDev ? "Shifty Dev" : "Shifty")/shifty.db, shared with the TUI and CLI. Settings still work; the clock-out calculator in the menu bar does too."
+      )
+    }
+    .navigationTitle(navigation.screen.title)
+  }
+
   private func row(_ screen: MainScreen) -> some View {
     Label(screen.title, systemImage: screen.symbol).tag(screen)
   }
@@ -97,9 +107,9 @@ struct MainView: View {
   @ViewBuilder private var detail: some View {
     switch navigation.screen {
     case .timesheet:
-      if let timesheet { TimesheetView(model: timesheet) }
+      if let timesheet { TimesheetView(model: timesheet) } else { noStore }
     case .projects:
-      if let projects { ProjectsView(model: projects) }
+      if let projects { ProjectsView(model: projects) } else { noStore }
     case .settings(let tab):
       SettingsPane(tab: tab, preferences: preferences, loginItem: loginItem, shift: shift)
         .navigationTitle(tab.title)

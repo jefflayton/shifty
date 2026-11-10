@@ -4,7 +4,7 @@ import SwiftUI
 /// The main window: the timesheet, projects, and settings, picked in a
 /// sidebar. Shifty lives in the menu bar; while this is open it's also a
 /// regular app with a Dock icon and menus (see `AppWindows`). Without the
-/// store it has only settings.
+/// store, the timesheet and projects say why.
 @MainActor
 final class MainWindow: NSObject, NSWindowDelegate {
   private let timesheet: TimesheetModel?
@@ -12,12 +12,18 @@ final class MainWindow: NSObject, NSWindowDelegate {
   private let preferences: Preferences
   private let loginItem: LoginItem
   private let shift: ShiftModel?
+  /// Why the store didn't open, if it didn't.
+  private let storeError: String?
   private let navigation = MainNavigation()
   private var window: NSWindow?
   /// The window's undo: timesheet changes, and typing in its fields.
   private let undoManager = UndoManager()
 
-  init(store: ShiftStore?, preferences: Preferences, loginItem: LoginItem, shift: ShiftModel?) {
+  init(
+    store: ShiftStore?, storeError: String? = nil, preferences: Preferences,
+    loginItem: LoginItem, shift: ShiftModel?
+  ) {
+    self.storeError = storeError
     timesheet = store.map { TimesheetModel(store: $0, preferences: preferences) }
     projects = store.map { ProjectsModel(store: $0) }
     self.preferences = preferences
@@ -25,7 +31,6 @@ final class MainWindow: NSObject, NSWindowDelegate {
     self.shift = shift
     super.init()
     timesheet?.undoManager = undoManager
-    if store == nil { navigation.screen = .settings(.general) }
   }
 
   /// Called after the timesheet writes, e.g. moving a clock in.
@@ -38,12 +43,9 @@ final class MainWindow: NSObject, NSWindowDelegate {
   /// Whether it's showing a page of settings.
   var showsSettings: Bool { navigation.screen.isSettings }
 
-  /// Shows the window, on `screen` if given. Without the store, the
-  /// timesheet and projects fall back to settings.
+  /// Shows the window, on `screen` if given.
   func show(_ screen: MainScreen? = nil) {
-    if let screen {
-      navigation.screen = timesheet == nil && !screen.isSettings ? .settings(.general) : screen
-    }
+    if let screen { navigation.screen = screen }
     let window = self.window ?? makeWindow()
     self.window = window
     reload()
@@ -59,7 +61,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     let host = NSHostingController(
       rootView: MainView(
-        timesheet: timesheet, projects: projects, navigation: navigation,
+        timesheet: timesheet, projects: projects, storeError: storeError, navigation: navigation,
         preferences: preferences, loginItem: loginItem, shift: shift))
     // Let the views' .toolbar and titles fill the window's.
     host.sceneBridgingOptions = [.toolbars, .title]
