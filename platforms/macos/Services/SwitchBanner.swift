@@ -50,11 +50,21 @@ final class SwitchBanner {
     panel.backgroundColor = .clear
     panel.hasShadow = true
     panel.isMovableByWindowBackground = false
-    let host = NSHostingView(rootView: SwitchBannerView(model: model))
-    host.sizingOptions = [.intrinsicContentSize]
+    // The panel follows the banner's size as it's laid out: measuring when
+    // the model changes reads the old text, and clips the new.
+    let host = NSHostingView(
+      rootView: SwitchBannerView(model: model) { [weak self] size in
+        guard let self, let panel = self.panel, size != self.size else { return }
+        self.size = size
+        self.place(panel)
+      })
+    host.sizingOptions = []
     panel.contentView = host
     return panel
   }
+
+  /// The banner's size, as last laid out.
+  private var size: CGSize?
 
   /// Top center of the screen you're on, just under the menu bar.
   private func place(_ panel: NSPanel) {
@@ -62,7 +72,7 @@ final class SwitchBanner {
     guard
       let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
     else { return }
-    let size = panel.contentView?.fittingSize ?? panel.frame.size
+    let size = self.size ?? panel.contentView?.fittingSize ?? panel.frame.size
     let visible = screen.visibleFrame
     panel.setFrame(
       NSRect(
@@ -73,6 +83,8 @@ final class SwitchBanner {
 
 struct SwitchBannerView: View {
   let model: AutoSwitchModel
+  /// Its size whenever it changes, for the panel to fit.
+  var resized: (CGSize) -> Void = { _ in }
 
   var body: some View {
     Group {
@@ -85,10 +97,13 @@ struct SwitchBannerView: View {
             Text("You're in \(offer.place)" + (offer.from.map { " · from \($0)" } ?? ""))
               .font(.caption)
               .foregroundStyle(.secondary)
+              .truncationMode(.middle)
           }
           .lineLimit(1)
+          .frame(maxWidth: 320, alignment: .leading)
           Spacer(minLength: 8)
           Button(offer.from.map { "Keep \($0)" } ?? "Not Now") { model.keep() }
+            .lineLimit(1)
           Button(offer.starts ? "Start Now" : "Switch Now") { model.switchNow() }
             .buttonStyle(.borderedProminent)
         }
@@ -103,8 +118,10 @@ struct SwitchBannerView: View {
             Text("You're in \(switched.place)")
               .font(.caption)
               .foregroundStyle(.secondary)
+              .truncationMode(.middle)
           }
           .lineLimit(1)
+          .frame(maxWidth: 320, alignment: .leading)
           Spacer(minLength: 8)
           Button("Undo") { model.undoSwitch() }
           Button {
@@ -125,6 +142,7 @@ struct SwitchBannerView: View {
     .overlay(Capsule().strokeBorder(.separator))
     .padding(8)
     .fixedSize()
+    .onGeometryChange(for: CGSize.self) { $0.size } action: { resized($0) }
   }
 }
 
