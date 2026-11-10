@@ -1151,5 +1151,120 @@ do {
   check(!t.isCollapsed(at(0, day: -1), now: tomorrow), "a day you opened stays open")
 }
 
+// MARK: Timesheet undo
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  let undo = UndoManager()
+  undo.groupsByEvent = false
+  t.undoManager = undo
+  func step(_ body: () -> Void) {
+    undo.beginUndoGrouping()
+    body()
+    undo.endUndoGrouping()
+  }
+
+  let shift = try! store.addShift(start: at(8), end: at(17))
+  let lunch = UUID()
+  try! store.putBreak(.init(id: lunch, start: at(12), end: at(12, 30)), shift: shift)
+  let entry = try! store.addEntry(project: nil, workspace: nil, start: at(9), end: at(10))
+  t.reload()
+  func theEntry() -> ShiftStore.Entry? { t.sheet.entries.first { $0.id == entry } }
+  func theShift() -> ShiftStore.SheetShift? { t.sheet.shifts.first { $0.id == shift } }
+
+  // Deleting an entry undoes and redoes, keeping its id.
+  step { t.delete(theEntry()!) }
+  check(theEntry() == nil, "entry deleted")
+  expectEqual(undo.undoActionName, "Delete Time")
+  undo.undo()
+  expectEqual(theEntry()?.end, at(10), "undo brings the entry back as it was")
+  check(undo.canRedo, "redo is offered")
+  undo.redo()
+  check(theEntry() == nil, "redo deletes it again")
+  undo.undo()
+
+  // A time typed in steps undoes at once.
+  step { t.setEnd(theEntry()!, to: at(10, 3)) }
+  // Joins the step above, so registers nothing; outside a test, groups by
+  // event open only when something registers.
+  t.setEnd(theEntry()!, to: at(10, 30))
+  expectEqual(theEntry()?.end, at(10, 30))
+  undo.undo()
+  expectEqual(theEntry()?.end, at(10), "one undo for a time typed in steps")
+
+  step { t.setNote(theEntry()!, to: "standup") }
+  expectEqual(undo.undoActionName, "Change Note")
+  undo.undo()
+  expectEqual(theEntry()?.note, nil, "undo clears the note again")
+
+  // A deleted shift comes back with its breaks.
+  step { t.delete(theShift()!) }
+  check(theShift() == nil, "shift deleted")
+  undo.undo()
+  expectEqual(theShift()?.breaks.map(\.id), [lunch], "undo restores the shift and its break")
+
+  step { t.setEnd(theShift()!, to: at(18)) }
+  undo.undo()
+  expectEqual(theShift()?.end, at(17), "undo moves clock out back")
+
+  // Breaks: a change, a delete, an add.
+  step { t.setEnd(theShift()!.breaks[0], of: theShift()!, to: at(13)) }
+  expectEqual(theShift()?.breaks.first?.end, at(13))
+  undo.undo()
+  expectEqual(theShift()?.breaks.first?.end, at(12, 30), "undo puts the break's end back")
+  step { t.delete(theShift()!.breaks[0]) }
+  check(theShift()?.breaks.isEmpty == true, "break deleted")
+  undo.undo()
+  expectEqual(theShift()?.breaks.count, 1, "undo restores the break")
+  var added: UUID?
+  step { added = t.addBreak(to: theShift()!, now: at(18)) }
+  expectEqual(theShift()?.breaks.count, 2)
+  expectEqual(undo.undoActionName, "Add Break")
+  undo.undo()
+  check(theShift()?.breaks.contains { $0.id == added } == false, "undo removes an added break")
+}
+
+// MARK: Timesheet rows and selection
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  let shift = try! store.addShift(start: at(8), end: at(17))
+  let lunch = UUID()
+  try! store.putBreak(.init(id: lunch, start: at(12), end: at(12, 30)), shift: shift)
+  let morning = try! store.addEntry(project: nil, workspace: nil, start: at(9), end: at(11))
+  let afternoon = try! store.addEntry(project: nil, workspace: nil, start: at(13), end: at(15))
+  t.reload()
+
+  // Breaks sit among the entries, in order.
+  expectEqual(
+    t.rows(on: at(0)).map(\.id), [.entry(morning), .brk(lunch), .entry(afternoon)],
+    "entries and breaks by start")
+  expectEqual(
+    t.items(now: at(12)), [.shift(shift), .entry(morning), .brk(lunch), .entry(afternoon)])
+  expectEqual(t.day(of: .brk(lunch)), at(0))
+
+  t.moveSelection(by: 1, now: at(12))
+  expectEqual(t.selection, .shift(shift), "down with nothing selected picks the first")
+  t.moveSelection(by: 2, now: at(12))
+  expectEqual(t.selection, .brk(lunch))
+  t.moveSelection(by: 5, now: at(12))
+  expectEqual(t.selection, .entry(afternoon), "stops at the last")
+  t.moveSelection(by: -1, now: at(12))
+  expectEqual(t.text(of: t.selection!, now: at(12))?.hasPrefix("Break\t"), true, "break as text")
+
+  // Deleting selects what took its place.
+  t.deleteSelection(now: at(12))
+  check(t.breakAndShift(lunch) == nil, "selected break deleted")
+  expectEqual(t.selection, .entry(afternoon), "the next row is selected")
+  t.deleteSelection(now: at(12))
+  expectEqual(t.selection, .entry(morning), "the last row's delete selects the one above")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

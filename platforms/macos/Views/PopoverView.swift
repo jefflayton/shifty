@@ -39,28 +39,13 @@ struct PopoverView: View {
     VStack(alignment: .leading, spacing: 16) {
       ShiftSummaryView(model: model, lunch: preferences.lunch)
 
-      FormSection(model.isClockedIn ? "Shift · clocked in" : "Shift") {
-        // Without the store there's nothing to clock in to.
-        if model.store != nil {
-          if model.isClockedIn {
-            Button("Clock Out") {
-              model.clockOutNow()
-              clocked(false)
-            }
-              .buttonStyle(.borderless)
-              .font(.subheadline)
-              .foregroundStyle(.tint)
-              .help("End the shift now; the TUI and CLI see it too")
-          } else {
-            Button("Clock In") {
-              model.clockInNow()
-              clocked(true)
-            }
-              .buttonStyle(.borderless)
-              .font(.subheadline)
-              .foregroundStyle(.tint)
-              .help("Start the shift now and track it, shared with the TUI and CLI")
-          }
+      ShiftActions(model: model, clocked: clocked)
+
+      FormSection("Shift") {
+        if model.isClockedIn {
+          Label("Clocked in", systemImage: "circle.fill")
+            .labelStyle(StatusLabelStyle())
+            .help("This shift is tracked, shared with the TUI and CLI")
         }
       } content: {
         FormRow("Clock in") {
@@ -93,19 +78,10 @@ struct PopoverView: View {
       }
 
       FormSection("Breaks") {
-        HStack(spacing: 4) {
-          if !model.isOnBreak {
-            Button("Start Break") { model.startBreak() }
-              .buttonStyle(.borderless)
-              .font(.subheadline)
-              .foregroundStyle(.tint)
-              .help("Start a break now; end it when you're back")
-          }
-          AddButton(help: "Add a break") { model.breaks.append(Interval()) }
-        }
+        AddButton(help: "Add a break") { model.breaks.append(Interval()) }
       } content: {
         if let start = model.breakStart {
-          OngoingBreakRow(start: start) { model.endBreak() }
+          OngoingBreakRow(start: start)
         } else if model.breaks.isEmpty {
           Text("No breaks").foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,11 +195,10 @@ struct ShiftSummaryView: View {
   }
 }
 
-/// The break you're on now: when it started, how long it's been, and a way
-/// to end it.
+/// The break you're on now: when it started and how long it's been. End
+/// Break above ends it.
 struct OngoingBreakRow: View {
   let start: Date
-  let onEnd: () -> Void
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -237,11 +212,74 @@ struct OngoingBreakRow: View {
           .foregroundStyle(.secondary)
           .monospacedDigit()
           .fixedSize()
-        Button("End", action: onEnd)
-          .buttonStyle(.borderedProminent)
-          .controlSize(.small)
-          .help("End the break now")
       }
+    }
+  }
+}
+
+/// The shift's two big actions, side by side under the clock-out time:
+/// Clock In or Out, and Start or End Break.
+struct ShiftActions: View {
+  let model: ShiftModel
+  /// After Clock In (true) or Clock Out, for the clock link.
+  let clocked: (Bool) -> Void
+
+  var body: some View {
+    HStack(spacing: 8) {
+      // Without the store there's nothing to clock in to.
+      if model.store != nil {
+        if model.isClockedIn {
+          Button {
+            model.clockOutNow()
+            clocked(false)
+          } label: {
+            Label("Clock Out", systemImage: "stop.fill").frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent)
+          .help("End the shift now; the TUI and CLI see it too")
+        } else {
+          Button {
+            model.clockInNow()
+            clocked(true)
+          } label: {
+            Label("Clock In", systemImage: "play.fill").frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent)
+          .help("Start the shift now and track it, shared with the TUI and CLI")
+        }
+      }
+      if model.isOnBreak {
+        Button {
+          model.endBreak()
+        } label: {
+          Label("End Break", systemImage: "cup.and.saucer.fill").frame(maxWidth: .infinity)
+        }
+        .help("End the break now")
+      } else {
+        Button {
+          model.startBreak()
+        } label: {
+          Label("Start Break", systemImage: "cup.and.saucer").frame(maxWidth: .infinity)
+        }
+        .help("Start a break now; end it when you're back")
+      }
+    }
+    .controlSize(.large)
+  }
+}
+
+/// A small colored dot before a section heading's status text.
+struct StatusLabelStyle: LabelStyle {
+  var color: Color = .green
+
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 5) {
+      configuration.icon
+        .font(.system(size: 6))
+        .foregroundStyle(color)
+      configuration.title
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
     }
   }
 }

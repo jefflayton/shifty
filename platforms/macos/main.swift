@@ -16,9 +16,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
-  lazy var mainWindow: MainWindow = {
-    let window = MainWindow(
-      store: store, preferences: preferences, loginItem: loginItem, shift: model)
+  /// The timesheet and projects; nil without the store.
+  lazy var mainWindow: MainWindow? = store.map { store in
+    let window = MainWindow(store: store, preferences: preferences)
     // A clock in or break moved on the timesheet: the popover reads it before
     // it saves its own copy over it.
     window.didChange = { [weak self] in
@@ -26,13 +26,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       self?.tracking?.reload()
     }
     return window
-  }()
+  }
+  lazy var settingsWindow = SettingsWindow(
+    preferences: preferences, loginItem: loginItem, shift: store == nil ? nil : model)
   lazy var tracking = store.map { store in
     let tracking = TrackingModel(store: store)
     // Starting a timer ends a break in progress.
     tracking.didChange = { [weak self] in
       self?.model.pull()
-      if self?.mainWindow.isVisible == true { self?.mainWindow.reload() }
+      if self?.mainWindow?.isVisible == true { self?.mainWindow?.reload() }
     }
     return tracking
   }
@@ -88,7 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
       // Active first, like a click on the popover, then the window.
       NSApp.activate()
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow.show() }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow?.show() }
     }
 
     // Development: open the popover without clicking the status item.
@@ -128,12 +130,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     model.pull()
     preferences.pull()
     tracking?.reload()
-    if mainWindow.isVisible { mainWindow.reload() }
+    if mainWindow?.isVisible == true { mainWindow?.reload() }
   }
 
   func showMainWindow() {
     popover.close()
-    mainWindow.show(.timesheet)
+    mainWindow?.show(.timesheet)
+  }
+
+  @objc func showTimesheet() { showMainWindow() }
+
+  @objc func showProjects() {
+    popover.close()
+    mainWindow?.show(.projects)
   }
 
   /// An alarm's Clock Out: ends the shift as the popover's would, without
@@ -142,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     guard model.isClockedIn else { return false }
     model.clockOutNow()
     tracking?.reload()
-    if mainWindow.isVisible { mainWindow.reload() }
+    if mainWindow?.isVisible == true { mainWindow?.reload() }
     return true
   }
 
@@ -158,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
   @objc func showSettings() {
     popover.close()
-    mainWindow.show(.settings)
+    settingsWindow.show()
   }
 
   /// Clicking the Dock icon with the window closed (or minimized) shows it.
@@ -167,7 +176,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   {
     if !flag {
       popover.close()
-      mainWindow.show()
+      // Without the store there's only settings.
+      if let mainWindow { mainWindow.show() } else { settingsWindow.show() }
     }
     return true
   }
@@ -249,6 +259,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   }
 }
 
+extension AppDelegate: NSMenuItemValidation {
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    switch item.action {
+    // Without the store there's no timesheet.
+    case #selector(showTimesheet), #selector(showProjects): store != nil
+    default: true
+    }
+  }
+}
+
 func setupMenu() {
   let mainMenu = NSMenu()
 
@@ -310,6 +330,21 @@ func setupMenu() {
     withTitle: "Select All", action: #selector(NSText.selectAll(_:)),
     keyEquivalent: "a")
 
+  let viewItem = NSMenuItem()
+  viewItem.title = "View"
+  mainMenu.addItem(viewItem)
+  let viewMenu = NSMenu(title: "View")
+  viewItem.submenu = viewMenu
+  let sidebar = viewMenu.addItem(
+    withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)),
+    keyEquivalent: "s")
+  sidebar.keyEquivalentModifierMask = [.command, .control]
+  viewMenu.addItem(.separator())
+  let fullScreen = viewMenu.addItem(
+    withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)),
+    keyEquivalent: "f")
+  fullScreen.keyEquivalentModifierMask = [.command, .control]
+
   let windowItem = NSMenuItem()
   windowItem.title = "Window"
   mainMenu.addItem(windowItem)
@@ -320,6 +355,11 @@ func setupMenu() {
     keyEquivalent: "m")
   windowMenu.addItem(
     withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+  windowMenu.addItem(.separator())
+  windowMenu.addItem(
+    withTitle: "Timesheet", action: #selector(AppDelegate.showTimesheet), keyEquivalent: "1")
+  windowMenu.addItem(
+    withTitle: "Projects", action: #selector(AppDelegate.showProjects), keyEquivalent: "2")
   windowMenu.addItem(.separator())
   windowMenu.addItem(
     withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)),

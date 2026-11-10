@@ -463,6 +463,41 @@ test "shifts - add after the fact, move, delete" {
     try testing.expectEqual(null, try s.currentShift(a));
 }
 
+test "shifts - restore brings back a deleted shift and its breaks" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const past = try s.addShift(at(8 * h), 17 * h);
+    const lunch: core.Uuid = .v7At(5, @splat(3));
+    const coffee: core.Uuid = .v7At(6, @splat(3));
+    try s.putBreak(lunch, past, 12 * h, 12 * h + 1800, 18 * h);
+    try s.putBreak(coffee, past, 15 * h, 15 * h + 600, 18 * h);
+    // Deleted on its own first, so it stays deleted.
+    try s.deleteBreak(coffee, 19 * h);
+    try s.deleteShift(past, 20 * h);
+
+    try s.restoreShift(past, 21 * h);
+    try testing.expectError(error.NotFound, s.restoreShift(past, 21 * h));
+    const shifts = try s.shiftsBetween(a, 0, 24 * h);
+    try testing.expectEqual(1, shifts.len);
+    try testing.expectEqual(17 * h, shifts[0].out_ts.?);
+    const breaks = try s.breaks(a, past);
+    try testing.expectEqual(1, breaks.len);
+    try testing.expect(breaks[0].id.eql(lunch));
+
+    // An open shift comes back open, unless another is open by then.
+    const open = try s.startShift(8 * h, at(30 * h));
+    try s.deleteShift(open, 31 * h);
+    const other = try s.startShift(8 * h, at(32 * h));
+    try testing.expectError(error.Conflict, s.restoreShift(open, 33 * h));
+    try s.deleteShift(other, 33 * h);
+    try s.restoreShift(open, 34 * h);
+    try testing.expect((try s.currentShift(a)).?.id.eql(open));
+}
+
 test "shifts - a forgotten shift closes at its clock out" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -844,6 +879,28 @@ test "entries - add after the fact, edit, delete" {
     try testing.expectError(error.NotFound, s.deleteEntry(meeting, 14));
     day = try s.entriesBetween(a, 0, 24 * h);
     try testing.expectEqual(1, day.len);
+
+    // Restoring brings it back as it was; only a deleted one can be.
+    try s.restoreEntry(meeting, 15);
+    try testing.expectError(error.NotFound, s.restoreEntry(meeting, 16));
+    day = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(2, day.len);
+}
+
+test "entries - a running entry comes back running unless another runs" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const first = try s.startEntry(.{ .source = .manual }, at(h));
+    try s.deleteEntry(first, 2 * h);
+    const second = try s.startEntry(.{ .source = .manual }, at(3 * h));
+    try testing.expectError(error.Conflict, s.restoreEntry(first, 4 * h));
+    try s.deleteEntry(second, 4 * h);
+    try s.restoreEntry(first, 5 * h);
+    try testing.expect((try s.runningEntry(a)).?.id.eql(first));
 }
 
 test "projects - rename, recolor, delete keeps the time" {

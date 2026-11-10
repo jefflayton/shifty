@@ -104,6 +104,9 @@ ShiftyResult shifty_set_shift_times(ShiftyStore *store, ShiftyId shift_id, int64
                                     int64_t out_ts, int64_t now);
 // Deletes a shift and its breaks; time tracked during it stays.
 ShiftyResult shifty_delete_shift(ShiftyStore *store, ShiftyId shift_id, int64_t now);
+// Brings back a deleted shift and the breaks deleted with it. SHIFTY_NOT_FOUND
+// unless it's deleted; SHIFTY_CONFLICT if it was open and another shift is.
+ShiftyResult shifty_restore_shift(ShiftyStore *store, ShiftyId shift_id, int64_t now);
 // Stops the running entry where a planned break on the open shift began after
 // it started. SHIFTY_OK if one was stopped, SHIFTY_NONE otherwise.
 ShiftyResult shifty_stop_for_breaks(ShiftyStore *store, int64_t now);
@@ -160,6 +163,9 @@ ShiftyResult shifty_edit_entry(ShiftyStore *store, ShiftyId entry_id, const Shif
                                const ShiftyId *workspace_id, int64_t in_ts, int64_t out_ts,
                                int32_t running, const char *note, int64_t now);
 ShiftyResult shifty_delete_entry(ShiftyStore *store, ShiftyId entry_id, int64_t now);
+// Brings back a deleted entry as it was. SHIFTY_NOT_FOUND unless it's deleted;
+// SHIFTY_CONFLICT if it was running and another entry runs now.
+ShiftyResult shifty_restore_entry(ShiftyStore *store, ShiftyId entry_id, int64_t now);
 ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
                                    const ShiftyId *client_id, const char *color, int64_t now,
                                    ShiftyId *out);

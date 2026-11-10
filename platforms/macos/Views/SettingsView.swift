@@ -1,8 +1,30 @@
 import SwiftUI
 
-/// The main window's Settings screen: the days you work, breaks (the lunch
-/// window and scheduled ones), and the menu bar.
-struct SettingsView: View {
+/// The Settings window's tabs.
+enum SettingsTab: CaseIterable {
+  case general, breaks, clockLinks
+
+  var title: String {
+    switch self {
+    case .general: "General"
+    case .breaks: "Breaks"
+    case .clockLinks: "Clock Links"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .general: "gearshape"
+    case .breaks: "cup.and.saucer"
+    case .clockLinks: "link"
+    }
+  }
+}
+
+/// One tab of the Settings window: the days you work and the menu bar;
+/// breaks (the lunch window and scheduled ones); or the clock links.
+struct SettingsPane: View {
+  let tab: SettingsTab
   @Bindable var preferences: Preferences
   let loginItem: LoginItem
   /// The menu bar's shift, for adding a scheduled break to it today.
@@ -10,98 +32,124 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
-      Section {
-        WeekdayPicker(days: $preferences.workDays)
-      } header: {
-        Text("Days You Work")
-      } footer: {
-        Text("The timesheet hides other days unless they have time on them.")
-          .foregroundStyle(.secondary)
+      switch tab {
+      case .general: general
+      case .breaks: breaks
+      case .clockLinks: clockLinks
       }
+    }
+    .formStyle(.grouped)
+    .scrollDisabled(tab != .breaks)
+    .frame(width: 520)
+    // Breaks grow with each scheduled one, so that tab scrolls; the others
+    // are as tall as what's in them.
+    .frame(height: tab == .breaks ? 560 : nil)
+    .fixedSize(horizontal: false, vertical: tab != .breaks)
+    // While the window resizes to another tab, stay at its top.
+    .frame(maxHeight: .infinity, alignment: .top)
+  }
 
+  @ViewBuilder private var general: some View {
+    Section {
+      WeekdayPicker(days: $preferences.workDays)
+    } header: {
+      Text("Days You Work")
+    } footer: {
+      Text("The timesheet hides other days unless they have time on them.")
+        .foregroundStyle(.secondary)
+    }
+
+    Section("Menu Bar") {
+      Picker("Menu bar shows", selection: $preferences.menuBarDisplay) {
+        ForEach(MenuBarDisplay.allCases) { Text($0.label).tag($0) }
+      }
+      Toggle(
+        "Open at login",
+        isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
+    }
+  }
+
+  @ViewBuilder private var breaks: some View {
+    Section {
+      Toggle("Lunch window", isOn: $preferences.lunch.isEnabled)
+      if preferences.lunch.isEnabled {
+        LunchSettings(rule: $preferences.lunch)
+      }
+    } header: {
+      Text("Lunch")
+    } footer: {
+      Text(
+        "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work. Add lunch alarms from the menu bar."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    if preferences.hasStore {
       Section {
-        Toggle("Lunch window", isOn: $preferences.lunch.isEnabled)
-        if preferences.lunch.isEnabled {
-          LunchSettings(rule: $preferences.lunch)
+        ForEach($preferences.scheduledBreaks) { $brk in
+          ScheduledBreakEditor(
+            brk: $brk,
+            // A break made today otherwise waits for tomorrow's shift.
+            addToday: shift.flatMap { shift in
+              shift.todayBreak(for: brk, now: Date()) == nil
+                ? nil : { shift.addToday(brk) }
+            }
+          ) {
+            let id = brk.id
+            preferences.scheduledBreaks.removeAll { $0.id == id }
+          }
+        }
+        Button("Add Scheduled Break") {
+          preferences.scheduledBreaks.append(ScheduledBreak(name: ""))
         }
       } header: {
-        Text("Lunch")
+        Text("Scheduled Breaks")
       } footer: {
         Text(
-          "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work. Add lunch alarms from the menu bar."
+          "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later; Add to Today puts a new one on today's. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
         )
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
       }
-
-      if preferences.hasStore {
-        Section {
-          ForEach($preferences.scheduledBreaks) { $brk in
-            ScheduledBreakEditor(
-              brk: $brk,
-              // A break made today otherwise waits for tomorrow's shift.
-              addToday: shift.flatMap { shift in
-                shift.todayBreak(for: brk, now: Date()) == nil
-                  ? nil : { shift.addToday(brk) }
-              }
-            ) {
-              let id = brk.id
-              preferences.scheduledBreaks.removeAll { $0.id == id }
-            }
-          }
-          Button("Add Scheduled Break") {
-            preferences.scheduledBreaks.append(ScheduledBreak(name: ""))
-          }
-        } header: {
-          Text("Scheduled Breaks")
-        } footer: {
-          Text(
-            "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later; Add to Today puts a new one on today's. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
-          )
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-
-      Section("Menu Bar") {
-        Picker("Menu bar shows", selection: $preferences.menuBarDisplay) {
-          ForEach(MenuBarDisplay.allCases) { Text($0.label).tag($0) }
-        }
-        Toggle(
-          "Open at login",
-          isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
-        LabeledContent(preferences.separateClockInLink == nil ? "Clock link" : "Clock-out link") {
-          LinkValue(link: preferences.clockOutLink) {
-            ClockLinkPrompt.run(.clockOut, preferences: preferences)
-          }
-        }
-        Toggle(
-          "Separate clock-in link",
-          isOn: Binding(
-            get: { preferences.separateClockInLink != nil },
-            set: { on in
-              if on {
-                ClockLinkPrompt.run(.clockIn, preferences: preferences)
-              } else {
-                preferences.separateClockInLink = nil
-              }
-            }))
-        if preferences.separateClockInLink != nil {
-          LabeledContent("Clock-in link") {
-            LinkValue(link: preferences.separateClockInLink) {
-              ClockLinkPrompt.run(.clockIn, preferences: preferences)
-            }
-          }
-        }
-        Picker("Open link when clocking in or out", selection: $preferences.clockLinkMode) {
-          ForEach(ClockLinkMode.allCases) { Text($0.label).tag($0) }
-        }
-        .disabled(preferences.clockOutLink == nil && preferences.separateClockInLink == nil)
-      }
     }
-    .formStyle(.grouped)
-    .frame(maxWidth: 560)
-    .onAppear { loginItem.refresh() }
+  }
+
+  @ViewBuilder private var clockLinks: some View {
+    Section {
+      LabeledContent(preferences.separateClockInLink == nil ? "Clock link" : "Clock-out link") {
+        LinkValue(link: preferences.clockOutLink) {
+          ClockLinkPrompt.run(.clockOut, preferences: preferences)
+        }
+      }
+      Toggle(
+        "Separate clock-in link",
+        isOn: Binding(
+          get: { preferences.separateClockInLink != nil },
+          set: { on in
+            if on {
+              ClockLinkPrompt.run(.clockIn, preferences: preferences)
+            } else {
+              preferences.separateClockInLink = nil
+            }
+          }))
+      if preferences.separateClockInLink != nil {
+        LabeledContent("Clock-in link") {
+          LinkValue(link: preferences.separateClockInLink) {
+            ClockLinkPrompt.run(.clockIn, preferences: preferences)
+          }
+        }
+      }
+      Picker("Open link when clocking in or out", selection: $preferences.clockLinkMode) {
+        ForEach(ClockLinkMode.allCases) { Text($0.label).tag($0) }
+      }
+      .disabled(preferences.clockOutLink == nil && preferences.separateClockInLink == nil)
+    } footer: {
+      Text(
+        "A page to open when you clock in or out from the menu bar, like your timeclock. An alarm's Clock Out button opens it too."
+      )
+      .foregroundStyle(.secondary)
+    }
   }
 }
 
