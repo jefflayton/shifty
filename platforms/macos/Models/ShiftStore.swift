@@ -382,6 +382,112 @@ final class ShiftStore {
     try check(shifty_delete_project(handle, ShiftyId(id), ts(now)))
   }
 
+  // MARK: Places and links
+
+  /// What linked a place to its project.
+  enum Via: String, Decodable {
+    case situ, git, folder, app
+  }
+
+  /// A project to track: a project, and maybe one of its workspaces.
+  struct Target: Hashable {
+    var project: UUID
+    var workspace: UUID?
+  }
+
+  /// Where you're working (a directory, an app) and what it's linked to.
+  struct Place: Decodable, Equatable {
+    var via: Via?
+    var projectId: UUID?
+    var workspaceId: UUID?
+    /// The Situ or git repo's top.
+    var root: String?
+    /// The git remote, normalized: `github.com/owner/repo`.
+    var remote: String?
+    /// The linked folder, when `via` is `.folder`.
+    var folder: String?
+    /// A Situ repo with ids to link by.
+    var situ: Bool = false
+
+    var target: Target? { projectId.map { Target(project: $0, workspace: workspaceId) } }
+  }
+
+  /// The place for `dir` (absolute) in the app `bundleID`.
+  func place(dir: String?, app bundleID: String?) throws -> Place {
+    try json(Place()) { out, len in
+      withOptionalCString(dir) { d in
+        withOptionalCString(bundleID) { b in shifty_place_json(handle, d, b, out, len) }
+      }
+    }
+  }
+
+  /// Links the repo or folder `dir` is in to `target`: by its Situ ids,
+  /// else its git remote, else its path. Returns which.
+  @discardableResult
+  func link(dir: String, to target: Target, now: Date = Date()) throws -> Via {
+    var via: Int32 = 0
+    try withIds(target.workspace, nil) { w, _ in
+      try check(shifty_link_dir(handle, dir, ShiftyId(target.project), w, ts(now), &via))
+    }
+    return [Via.situ, .git, .folder, .app][Int(via)]
+  }
+
+  func link(app bundleID: String, to target: Target, now: Date = Date()) throws {
+    try withIds(target.workspace, nil) { w, _ in
+      try check(shifty_link_app(handle, bundleID, ShiftyId(target.project), w, ts(now)))
+    }
+  }
+
+  /// Another tool's id pointed at a project.
+  struct Link: Decodable, Equatable, Hashable, Identifiable {
+    var provider: String
+    var kind: String
+    var externalId: String
+    var projectId: UUID
+    var workspaceId: UUID?
+
+    var id: String { "\(provider)/\(kind)/\(externalId)" }
+    var target: Target { Target(project: projectId, workspace: workspaceId) }
+  }
+
+  func links() throws -> [Link] {
+    try json([Link]()) { shifty_links_json(handle, $0, $1) }
+  }
+
+  func unlink(_ link: Link, now: Date = Date()) throws {
+    try check(shifty_unlink(handle, link.provider, link.kind, link.externalId, ts(now)))
+  }
+
+  /// A shell's directory, as the prompt hook (`shifty hook`) last recorded.
+  struct Spot: Decodable, Equatable {
+    var ts: Int64
+    /// The shell's, or Neovim's.
+    var pid: Int32
+    /// `$__CFBundleIdentifier` and `$TERM_PROGRAM`, either maybe empty.
+    var bundle: String
+    var term: String
+    var dir: String
+
+    var date: Date { Date(timeIntervalSince1970: TimeInterval(ts)) }
+  }
+
+  /// The hook's record, newest first.
+  func spots() throws -> [Spot] {
+    try json([Spot]()) { shifty_here_json(handle, $0, $1) }
+  }
+
+  /// Where the hook's record is, to watch it.
+  func spotsPath() throws -> String {
+    var buf = [CChar](repeating: 0, count: 4096)
+    try check(shifty_here_path(handle, &buf, buf.count))
+    return String(cString: buf)
+  }
+
+  private func withOptionalCString<R>(_ s: String?, _ body: (UnsafePointer<CChar>?) -> R) -> R {
+    guard let s else { return body(nil) }
+    return s.withCString(body)
+  }
+
   /// Passes optional ids to C as pointers, nil as NULL.
   private func withIds(
     _ a: UUID?, _ b: UUID?,

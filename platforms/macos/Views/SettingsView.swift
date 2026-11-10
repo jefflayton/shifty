@@ -2,12 +2,13 @@ import SwiftUI
 
 /// The Settings window's tabs.
 enum SettingsTab: CaseIterable {
-  case general, breaks, clockLinks
+  case general, breaks, autoSwitch, clockLinks
 
   var title: String {
     switch self {
     case .general: "General"
     case .breaks: "Breaks"
+    case .autoSwitch: "Auto-Switch"
     case .clockLinks: "Clock Links"
     }
   }
@@ -16,6 +17,7 @@ enum SettingsTab: CaseIterable {
     switch self {
     case .general: "gearshape"
     case .breaks: "cup.and.saucer"
+    case .autoSwitch: "arrow.triangle.swap"
     case .clockLinks: "link"
     }
   }
@@ -35,6 +37,7 @@ struct SettingsPane: View {
       switch tab {
       case .general: general
       case .breaks: breaks
+      case .autoSwitch: AutoSwitchSettings(preferences: preferences)
       case .clockLinks: clockLinks
       }
     }

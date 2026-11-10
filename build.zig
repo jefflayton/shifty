@@ -76,7 +76,7 @@ pub fn build(b: *Build) void {
     const integrations_tests = b.addTest(.{ .root_module = integrations });
     test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
 
-    const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store });
+    const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store, .integrations = integrations });
     b.getInstallStep().dependOn(macos_step);
 
     const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
@@ -180,7 +180,7 @@ fn buildMacOS(
     b: *Build,
     optimize: std.builtin.OptimizeMode,
     release: bool,
-    deps: struct { core: *Build.Module, store: *Build.Module },
+    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
 ) *Build.Step {
     const macos_step = b.step("macos", "Build the macOS app");
 
@@ -197,6 +197,7 @@ fn buildMacOS(
     });
     mod.addImport("core", deps.core);
     mod.addImport("store", deps.store);
+    mod.addImport("integrations", deps.integrations);
 
     const app = "zig-out/Shifty.app";
     const bundle_path = app ++ "/Contents";
@@ -341,6 +342,27 @@ fn buildMacOS(
     codesign_bin.addFileArg(bin);
     codesign_bin.step.dependOn(&link.step);
 
+    // The CLI rides along in Contents/Helpers, so the prompt hook the
+    // Auto-Switch settings show (`shifty hook`) works without installing
+    // anything. Same flavor as the app, so it records next to the app's
+    // database.
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cli_mod.addImport("core", deps.core);
+    cli_mod.addImport("store", deps.store);
+    cli_mod.addImport("integrations", deps.integrations);
+    const cli_exe = b.addExecutable(.{ .name = "shifty", .root_module = cli_mod });
+    const inst_cli = b.addInstallFile(cli_exe.getEmittedBin(), "Shifty.app/Contents/Helpers/shifty");
+    inst_cli.step.dependOn(&link.step);
+    const codesign_cli = b.addSystemCommand(&.{
+        "codesign", "--force", "--options=runtime",
+        "--sign",   "-",       bundle_path ++ "/Helpers/shifty",
+    });
+    codesign_cli.step.dependOn(&inst_cli.step);
+
     const codesign = b.addSystemCommand(&.{
         "codesign", "--force", "--options=runtime",
         "--sign",         "-", // "-" = ad-hoc identity
@@ -348,6 +370,7 @@ fn buildMacOS(
         app,
     });
     codesign.step.dependOn(&codesign_bin.step);
+    codesign.step.dependOn(&codesign_cli.step);
 
     const bundle_step = bundle(b, app, &codesign.step);
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
@@ -363,6 +386,7 @@ fn buildMacOS(
     });
     ffi_mod.addImport("core", deps.core);
     ffi_mod.addImport("store", deps.store);
+    ffi_mod.addImport("integrations", deps.integrations);
     const ffi_obj = b.addObject(.{ .name = "shifty-ffi", .root_module = ffi_mod });
     const swift_tests = b.addSystemCommand(&.{
         "swiftc",

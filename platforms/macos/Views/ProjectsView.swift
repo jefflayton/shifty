@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Every project, to rename, recolor, or delete, with how much each has
 /// been used.
@@ -95,13 +96,21 @@ struct ProjectRow: View {
           .focused($nameFocused)
           .onSubmit(commit)
         let client = project.clientId.flatMap { model.client($0)?.name }
-        if client != nil || !workspaces.isEmpty {
+        let links = model.links(of: project.id)
+        if client != nil || !workspaces.isEmpty || !links.isEmpty {
           HStack(spacing: 10) {
             if let client { Text(client) }
             if !workspaces.isEmpty {
               Label(workspaces.map(\.name).joined(separator: ", "), systemImage: "folder")
                 .labelStyle(.titleAndIcon)
                 .help("Workspaces")
+            }
+            if !links.isEmpty {
+              Label(links.map(LinkName.name).joined(separator: ", "), systemImage: "link")
+                .labelStyle(.titleAndIcon)
+                .help(
+                  "Auto-switch tracks this project in "
+                    + links.map(LinkName.detail).joined(separator: ", "))
             }
           }
           .font(.caption)
@@ -126,6 +135,10 @@ struct ProjectRow: View {
         }
       }
 
+      LinkMenu(model: model, project: project)
+        .opacity(hovered ? 1 : 0)
+        .accessibilityHidden(!hovered)
+
       Button(action: onDelete) {
         Image(systemName: "trash").foregroundStyle(.secondary)
       }
@@ -134,11 +147,17 @@ struct ProjectRow: View {
       .opacity(hovered ? 1 : 0)
       .accessibilityHidden(!hovered)
     }
+    // One height for every row, caption line or not. The list measures a
+    // row once, so a row that gains or loses its caption (a link added or
+    // moved) would keep its old height and clip or float.
+    .frame(height: 38)
     .padding(.vertical, 4)
     .contentShape(Rectangle())
     .onHover { hovered = $0 }
     .contextMenu {
       Button("Rename") { nameFocused = true }
+      LinkMenu.items(model: model, project: project)
+      Divider()
       Button("Delete…", role: .destructive, action: onDelete)
     }
     .onAppear { name = project.name }
@@ -272,4 +291,90 @@ final class CustomColor: NSObject {
   }
 
   @objc private func changed(_ panel: NSColorPanel) { apply?(panel.color) }
+}
+
+/// Linking a project to the repos, folders, and apps auto-switch tracks it
+/// in.
+struct LinkMenu: View {
+  let model: ProjectsModel
+  let project: ShiftStore.Project
+
+  var body: some View {
+    Menu {
+      Self.items(model: model, project: project)
+    } label: {
+      Image(systemName: "link")
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Link a repo, folder, or app")
+  }
+
+  @ViewBuilder static func items(model: ProjectsModel, project: ShiftStore.Project) -> some View {
+    Button("Link Repo or Folder…") {
+      if let dir = pick(directory: true) { model.link(dir: dir, to: project.id) }
+    }
+    Button("Link App…") {
+      if let app = pick(directory: false), let id = Bundle(path: app)?.bundleIdentifier {
+        model.link(app: id, to: project.id)
+      }
+    }
+    let links = model.links(of: project.id)
+    if !links.isEmpty {
+      Menu("Unlink") {
+        ForEach(links) { link in
+          Button(LinkName.detail(link)) { model.unlink(link) }
+        }
+      }
+    }
+  }
+
+  /// A folder, or an app in Applications.
+  private static func pick(directory: Bool) -> String? {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = directory
+    panel.canChooseFiles = !directory
+    panel.allowsMultipleSelection = false
+    if directory {
+      panel.message = "Choose a repo or folder. Auto-switch tracks this project in it."
+      panel.prompt = "Link"
+    } else {
+      panel.message = "Choose an app. Auto-switch tracks this project in it."
+      panel.prompt = "Link"
+      panel.allowedContentTypes = [.applicationBundle]
+      panel.directoryURL = URL(fileURLWithPath: "/Applications")
+    }
+    guard panel.runModal() == .OK else { return nil }
+    return panel.url?.path
+  }
+}
+
+/// How a link reads: a repo by name, a folder by name, an app by its name.
+enum LinkName {
+  static func name(_ link: ShiftStore.Link) -> String {
+    switch link.provider {
+    case "app": return appName(link.externalId)
+    case "situ": return "Situ \(link.kind)"
+    default: return (link.externalId as NSString).lastPathComponent
+    }
+  }
+
+  /// The whole of it: `github.com/o/r`, a folder's path, an app's name.
+  static func detail(_ link: ShiftStore.Link) -> String {
+    switch link.provider {
+    case "app": return appName(link.externalId)
+    case "situ": return "Situ \(link.kind) \(link.externalId)"
+    case "folder": return (link.externalId as NSString).abbreviatingWithTildeInPath
+    default: return link.externalId
+    }
+  }
+
+  static func appName(_ bundleID: String) -> String {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+      return bundleID
+    }
+    return FileManager.default.displayName(atPath: url.path)
+      .replacingOccurrences(of: ".app", with: "")
+  }
 }

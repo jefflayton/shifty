@@ -3,6 +3,8 @@ import SwiftUI
 /// What the running timer is for, and a menu to pick a project to track.
 struct TrackingSection: View {
   let tracking: TrackingModel
+  /// Offers to link where you are to the timer's project.
+  var autoSwitch: AutoSwitchModel? = nil
 
   var body: some View {
     let running = tracking.running
@@ -33,6 +35,23 @@ struct TrackingSection: View {
           .help("Stop the timer now; the TUI and CLI see it too")
           .accessibilityLabel("Stop tracking")
         }
+      }
+      if let autoSwitch, let here = autoSwitch.unlinked, let running,
+        let name = tracking.label(project: running.projectId, workspace: running.workspaceId)
+      {
+        HStack(spacing: 6) {
+          Image(systemName: "link")
+            .foregroundStyle(.secondary)
+          Text("\(here.name) isn't linked to a project")
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          Spacer(minLength: 8)
+          Button("Link to \(name)") { autoSwitch.linkSeen() }
+            .buttonStyle(.link)
+            .help("Auto-switch tracks \(name) whenever you're in \(here.name)")
+        }
+        .font(.caption)
       }
     }
   }

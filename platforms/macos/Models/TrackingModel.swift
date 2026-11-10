@@ -83,6 +83,62 @@ import Observation
     write { try store.startEntry(project: project, workspace: workspace, now: now) }
   }
 
+  /// The running entry's project, or nil if nothing runs or it has none.
+  var runningTarget: ShiftStore.Target? {
+    running?.projectId.map { ShiftStore.Target(project: $0, workspace: running?.workspaceId) }
+  }
+
+  /// Moves the running timer to `target` from `since` (clamped to after it
+  /// started, and not past `now`): the running entry ends there and a new
+  /// one starts. An unassigned timer gets the project instead, all of it.
+  /// Returns what puts it back, or nil if nothing changed.
+  func switchTo(_ target: ShiftStore.Target, since: Date, now: Date = Date()) -> (() -> Void)? {
+    reload(now: now)
+    guard let old = running, runningTarget != target else { return nil }
+    if old.projectId == nil {
+      let done: Void? = write {
+        try store.editEntry(
+          old.id, project: target.project, workspace: target.workspace, start: old.start,
+          end: nil, note: old.note)
+      }
+      guard done != nil else { return nil }
+      return { [weak self] in
+        self?.write {
+          try self?.store.editEntry(
+            old.id, project: nil, workspace: nil, start: old.start, end: nil, note: old.note)
+        }
+      }
+    }
+    let at = min(now, max(since, old.start.addingTimeInterval(1)))
+    guard
+      let new = write({
+        try store.startEntry(project: target.project, workspace: target.workspace, now: at)
+      })
+    else { return nil }
+    return { [weak self] in
+      self?.write {
+        guard let self else { return }
+        try self.store.deleteEntry(new)
+        try self.store.editEntry(
+          old.id, project: old.projectId, workspace: old.workspaceId, start: old.start, end: nil,
+          note: old.note)
+      }
+    }
+  }
+
+  /// Starts a timer for `target` from `since` (not past `now`) when none
+  /// runs. Returns what takes it back, or nil if one was running.
+  func start(_ target: ShiftStore.Target, since: Date, now: Date = Date()) -> (() -> Void)? {
+    reload(now: now)
+    guard running == nil,
+      let new = write({
+        try store.startEntry(
+          project: target.project, workspace: target.workspace, now: min(since, now))
+      })
+    else { return nil }
+    return { [weak self] in self?.write { try self?.store.deleteEntry(new) } }
+  }
+
   func stop(now: Date = Date()) {
     write { try store.stopEntry(now: now) }
   }
