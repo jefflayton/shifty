@@ -23,8 +23,8 @@ enum SettingsTab: CaseIterable {
   }
 }
 
-/// One tab of the Settings window: the days you work and the menu bar;
-/// breaks (the lunch window and scheduled ones); or the clock links.
+/// One tab of the Settings window: the days you work, the menu bar and
+/// alarms; breaks (the lunch window and scheduled ones); or the clock links.
 struct SettingsPane: View {
   let tab: SettingsTab
   @Bindable var preferences: Preferences
@@ -82,6 +82,17 @@ struct SettingsPane: View {
       Toggle(
         "Open at login",
         isOn: Binding(get: { loginItem.isEnabled }, set: { loginItem.setEnabled($0) }))
+    }
+
+    Section {
+      DurationStepper(
+        "Snooze for", value: $preferences.snoozeLength, in: Preferences.snoozeRange,
+        step: 60)
+    } header: {
+      Text("Alarms")
+    } footer: {
+      Text("How long an alarm's Snooze button waits before it rings again. Add alarms from the menu bar.")
+        .foregroundStyle(.secondary)
     }
   }
 

@@ -22,6 +22,7 @@ struct AlarmStackView: View {
           HStack(spacing: 10) {
             Button("Snooze") { controller.snooze(id: alarm.id) }
               .keyboardShortcut("s", modifiers: [])
+              .help("Ring again in \(ShiftSummary.duration(controller.snoozeLength()))")
 
             // When it can clock out, that's the main action.
             if clockOut {

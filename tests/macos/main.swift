@@ -771,6 +771,33 @@ do {
   expectEqual(again.workDays, [1, 2, 3, 4], "picked up from the TUI or CLI")
 }
 
+do {
+  // Snooze length: five minutes until changed, kept in the store, picked up
+  // from elsewhere, and held to one minute to an hour.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  let prefs = Preferences(defaults: defaults, store: store)
+  expectEqual(prefs.snoozeLength, 5 * 60, "five minutes by default")
+  check(try! store.setting(Preferences.snoozeSetting) == nil, "default isn't stored")
+  prefs.snoozeLength = 10 * 60
+  expectEqual(try! store.setting(Preferences.snoozeSetting), "600", "shared through the store")
+  expectEqual(Preferences(defaults: defaults, store: store).snoozeLength, 10 * 60, "kept")
+  try! store.setSetting(Preferences.snoozeSetting, "120")
+  prefs.pull()
+  expectEqual(prefs.snoozeLength, 2 * 60, "picked up from the TUI or CLI")
+  prefs.snoozeLength = Preferences.defaultSnooze
+  check(try! store.setting(Preferences.snoozeSetting) == nil, "back to the default clears it")
+  expectEqual(Preferences.snooze(from: "5"), 60, "under a minute rounds up to one")
+  expectEqual(Preferences.snooze(from: "99999"), 3600, "over an hour comes down to one")
+  check(Preferences.snooze(from: "soon") == nil, "not a number")
+
+  let local = UserDefaults(suiteName: "shifty-tests-\(UUID().uuidString)")!
+  Preferences(defaults: local).snoozeLength = 15 * 60
+  expectEqual(Preferences(defaults: local).snoozeLength, 15 * 60, "kept without a store")
+}
+
 // MARK: Timesheet shifts
 
 do {

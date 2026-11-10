@@ -129,6 +129,12 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
   }
 
+  /// How long Snooze puts off a ringing alarm. Shared through the store, so
+  /// it follows the database rather than this Mac.
+  var snoozeLength: TimeInterval {
+    didSet { save(Self.snoozeSetting, Self.format(snooze: snoozeLength)) }
+  }
+
   /// Whether there's a store to keep scheduled breaks in.
   var hasStore: Bool { store != nil }
 
@@ -169,6 +175,10 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let autoSwitchCountdownKey = "autoSwitch.countdown"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
+  static let snoozeSetting = "snooze_secs"
+  static let defaultSnooze: TimeInterval = 5 * 60
+  /// One minute to an hour.
+  static let snoozeRange: ClosedRange<TimeInterval> = 60...(60 * 60)
   static let everyDay = Set(1...7)
 
   init(defaults: UserDefaults = .standard, store: ShiftStore? = nil) {
@@ -177,6 +187,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     workDays = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
       .flatMap(Self.workDays(from:)) ?? Self.everyDay
     lunch = LunchRule()
+    snoozeLength = Self.load(Self.snoozeSetting, store: store, defaults: defaults)
+      .flatMap(Self.snooze(from:)) ?? Self.defaultSnooze
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
     clockLinkMode =
@@ -216,6 +228,9 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     let days = Self.load(Self.workDaysSetting, store: store, defaults: defaults)
       .flatMap(Self.workDays(from:)) ?? Self.everyDay
     if days != workDays { workDays = days }
+    let snooze = Self.load(Self.snoozeSetting, store: store, defaults: defaults)
+      .flatMap(Self.snooze(from:)) ?? Self.defaultSnooze
+    if snooze != snoozeLength { snoozeLength = snooze }
     let inLink = Self.load(Self.clockInLinkSetting, store: store, defaults: defaults)
       .flatMap(Self.link(from:))
     if inLink != separateClockInLink {
@@ -310,6 +325,19 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
     let valid = Set(days.filter { (1...7).contains($0) })
     return valid.isEmpty && !text.isEmpty ? nil : valid
+  }
+
+  /// Whole seconds, or nil for the default, so the setting is only stored
+  /// once it's changed.
+  static func format(snooze: TimeInterval) -> String? {
+    snooze == defaultSnooze ? nil : String(Int(snooze.rounded()))
+  }
+
+  /// A snooze length in seconds, kept within `snoozeRange`; nil if it isn't
+  /// a number.
+  static func snooze(from text: String) -> TimeInterval? {
+    guard let secs = Int(text.trimmingCharacters(in: .whitespaces)) else { return nil }
+    return min(max(TimeInterval(secs), snoozeRange.lowerBound), snoozeRange.upperBound)
   }
 
   static func format(_ rule: LunchRule) -> String? {
