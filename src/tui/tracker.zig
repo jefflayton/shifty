@@ -12,7 +12,7 @@ const fmt = core.fmt;
 const store = @import("store");
 const Store = store.Store;
 const report = store.report;
-const situ = @import("integrations").situ;
+const place = @import("integrations").place;
 const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
 
@@ -38,7 +38,7 @@ const Snap = struct {
     from: i64,
     today: []const store.Entry = &.{},
     totals: report.Totals = .{ .by_project = &.{}, .by_client = &.{}, .any_client = false, .total = 0 },
-    /// What the Situ repo the TUI started in is linked to.
+    /// What the repo or folder the TUI started in is linked to.
     here: ?store.Target = null,
 };
 
@@ -54,7 +54,8 @@ pub const Tracker = struct {
     io: Io,
     env: *const std.process.Environ.Map,
     db: *Store,
-    marker: ?situ.Marker,
+    /// The directory the TUI started in.
+    dir: ?[]const u8,
     calc: *Calculator,
 
     /// Snapshots alternate between these, so a failed reload keeps the
@@ -71,13 +72,13 @@ pub const Tracker = struct {
     msg_buf: [200]u8 = undefined,
     msg: ?struct { len: usize, err: bool } = null,
 
-    pub fn init(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, db: *Store, marker: ?situ.Marker, calc: *Calculator) Tracker {
+    pub fn init(gpa: Allocator, io: Io, env: *const std.process.Environ.Map, db: *Store, dir: ?[]const u8, calc: *Calculator) Tracker {
         return .{
             .gpa = gpa,
             .io = io,
             .env = env,
             .db = db,
-            .marker = marker,
+            .dir = dir,
             .calc = calc,
             .arenas = .{ .init(gpa), .init(gpa) },
             .filter = .init(gpa),
@@ -135,7 +136,7 @@ pub const Tracker = struct {
         snap.running = try self.db.runningEntry(a);
         snap.today = try self.db.entriesBetween(a, snap.from, now.ts + 1);
         snap.totals = try report.totals(a, snap.names, snap.today, snap.from, now.ts);
-        if (self.marker) |m| snap.here = try situ.linked(self.db, m);
+        if (self.dir) |d| snap.here = (try place.resolve(self.db, self.io, a, d, null)).target;
 
         self.snap = snap;
         self.live = next;

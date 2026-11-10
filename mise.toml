@@ -13,7 +13,7 @@ pkill -x shifty
 zig build macos
 '''
 sources = ["src/**/*", "build.zig", "platforms/macos/**/*"]
-outputs = ["zig-out/Shifty.app/Contents/MacOS/shifty"]
+outputs = ["zig-out/Shifty.app/Contents/MacOS/shifty", "zig-out/Shifty.app/Contents/Helpers/shifty"]
 
 [tasks."run:macos"]
 alias = "rm"

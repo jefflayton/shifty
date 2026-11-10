@@ -26,7 +26,7 @@ pub const Result = enum(c_int) {
     io = -8,
 };
 
-fn result(err: anyerror) Result {
+pub fn result(err: anyerror) Result {
     return switch (err) {
         error.Busy => .busy,
         error.Conflict => .conflict,
@@ -97,20 +97,22 @@ pub const Interval = extern struct { in_ts: i64, out_ts: i64 };
 
 const no_id: Id = .{ .bytes = @splat(0) };
 
-const gpa = std.heap.c_allocator;
+pub const gpa = std.heap.c_allocator;
 
-const Handle = struct {
+pub const Handle = struct {
     threaded: Io.Threaded,
     store: Store,
+    /// Where `store` is, for the files kept beside it.
+    path: [:0]u8,
 };
 
-fn id(i: Id) Uuid {
+pub fn id(i: Id) Uuid {
     return .{ .bytes = i.bytes };
 }
 
 /// Opens the store at `path`, or the shared default (`$SHIFTY_DB`, else
 /// `~/Library/Application Support/Shifty/shifty.db`) when `path` is null.
-export fn shifty_store_open(path: ?[*:0]const u8, out: *?*Handle) Result {
+pub export fn shifty_store_open(path: ?[*:0]const u8, out: *?*Handle) Result {
     out.* = null;
     const h = gpa.create(Handle) catch return .no_memory;
     h.threaded = .init_single_threaded;
@@ -122,7 +124,12 @@ export fn shifty_store_open(path: ?[*:0]const u8, out: *?*Handle) Result {
         gpa.destroy(h);
         return result(e);
     };
+    h.path = gpa.dupeZ(u8, p) catch {
+        gpa.destroy(h);
+        return .no_memory;
+    };
     h.store = Store.open(io, p) catch |e| {
+        gpa.free(h.path);
         gpa.destroy(h);
         return result(e);
     };
@@ -138,9 +145,10 @@ fn defaultPath(arena: Allocator) ![:0]u8 {
     return store.defaultPath(arena, &env);
 }
 
-export fn shifty_store_close(h: ?*Handle) void {
+pub export fn shifty_store_close(h: ?*Handle) void {
     const handle = h orelse return;
     handle.store.deinit();
+    gpa.free(handle.path);
     gpa.destroy(handle);
 }
 
@@ -469,15 +477,15 @@ export fn shifty_timesheet_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, le
     return .ok;
 }
 
-export fn shifty_free(ptr: ?[*]u8, len: usize) void {
+pub export fn shifty_free(ptr: ?[*]u8, len: usize) void {
     if (ptr) |p| gpa.free(p[0..len]);
 }
 
-fn optId(i: ?*const Id) ?Uuid {
+pub fn optId(i: ?*const Id) ?Uuid {
     return if (i) |p| id(p.*) else null;
 }
 
-fn optStr(s: ?[*:0]const u8) ?[]const u8 {
+pub fn optStr(s: ?[*:0]const u8) ?[]const u8 {
     return if (s) |p| std.mem.span(p) else null;
 }
 

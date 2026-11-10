@@ -190,6 +190,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0001_init.sql"),
     @embedFile("migrations/0002_lunch_alarms.sql"),
     @embedFile("migrations/0003_break_presets.sql"),
+    @embedFile("migrations/0004_link_deletes.sql"),
 };
 
 pub const Store = struct {
@@ -1133,8 +1134,8 @@ pub const Store = struct {
             \\    latest_secs = excluded.latest_secs, minimum_secs = excluded.minimum_secs,
             \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
         , .{
-            blob(&p.id),   p.name,   @tagName(p.rule), @as(i64, p.weekdays), p.enabled,
-            start,         end,      earliest,         latest,               minimum,
+            blob(&p.id), p.name, @tagName(p.rule), @as(i64, p.weekdays), p.enabled,
+            start,       end,    earliest,         latest,               minimum,
             now,
         });
     }
@@ -1188,7 +1189,7 @@ pub const Store = struct {
             \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
             \\ON CONFLICT (provider, kind, external_id) DO UPDATE SET
             \\    project_id = excluded.project_id, workspace_id = excluded.workspace_id,
-            \\    updated_ts = excluded.updated_ts
+            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
         , .{ blob(&new), provider, kind, external_id, blob(&target.project_id), optBlob(&target.workspace_id), now });
         try self.commit();
     }
@@ -1200,13 +1201,50 @@ pub const Store = struct {
             \\JOIN projects p ON p.id = l.project_id
             \\LEFT JOIN workspaces w ON w.id = l.workspace_id
             \\WHERE l.provider = ? AND l.kind = ? AND l.external_id = ?
-            \\  AND p.deleted_ts IS NULL AND w.deleted_ts IS NULL
+            \\  AND l.deleted_ts IS NULL AND p.deleted_ts IS NULL AND w.deleted_ts IS NULL
         );
         defer stmt.deinit();
         try stmt.bindAll(.{ provider, kind, external_id });
         if (!try stmt.step()) return null;
         return .{ .project_id = try id(stmt, 0), .workspace_id = try optId(stmt, 1) };
     }
+
+    /// Removes a link. NotFound if there's none.
+    pub fn unlink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE links SET deleted_ts = ?1, updated_ts = ?1
+            \\WHERE provider = ? AND kind = ? AND external_id = ? AND deleted_ts IS NULL
+        , .{ now, provider, kind, external_id });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Every link to an active project (and workspace), oldest first.
+    pub fn links(self: *Store, gpa: Allocator) Error![]Link {
+        var stmt = try self.db.prepare(
+            \\SELECT l.provider, l.kind, l.external_id, l.project_id, l.workspace_id FROM links l
+            \\JOIN projects p ON p.id = l.project_id
+            \\LEFT JOIN workspaces w ON w.id = l.workspace_id
+            \\WHERE l.deleted_ts IS NULL AND p.deleted_ts IS NULL AND w.deleted_ts IS NULL
+            \\ORDER BY l.created_ts, l.rowid
+        );
+        defer stmt.deinit();
+        var out: std.ArrayList(Link) = .empty;
+        while (try stmt.step()) try out.append(gpa, .{
+            .provider = try gpa.dupe(u8, stmt.bytes(0)),
+            .kind = try gpa.dupe(u8, stmt.bytes(1)),
+            .external_id = try gpa.dupe(u8, stmt.bytes(2)),
+            .target = .{ .project_id = try id(stmt, 3), .workspace_id = try optId(stmt, 4) },
+        });
+        return out.toOwnedSlice(gpa);
+    }
+};
+
+/// Another tool's id pointed at a project (see `Store.link`).
+pub const Link = struct {
+    provider: []const u8,
+    kind: []const u8,
+    external_id: []const u8,
+    target: Target,
 };
 
 /// Which database a build uses by default. Only release builds

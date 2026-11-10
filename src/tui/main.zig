@@ -3,7 +3,6 @@ const Io = std.Io;
 
 const core = @import("core");
 const store = @import("store");
-const situ = @import("integrations").situ;
 const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
 
@@ -40,7 +39,6 @@ pub fn main(init: std.process.Init) !void {
     defer db.deinit();
 
     const cwd = std.process.currentPathAlloc(io, arena) catch null;
-    const marker = if (cwd) |d| try situ.find(io, arena, d) else null;
 
     const calc = try gpa.create(Calculator);
     defer gpa.destroy(calc);
@@ -50,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
 
     const tracker = try gpa.create(Tracker);
     defer gpa.destroy(tracker);
-    tracker.* = .init(gpa, io, init.environ_map, &db, marker, calc);
+    tracker.* = .init(gpa, io, init.environ_map, &db, cwd, calc);
     defer tracker.deinit();
     tracker.bind();
 

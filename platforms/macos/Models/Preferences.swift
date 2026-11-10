@@ -132,6 +132,26 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   /// Whether there's a store to keep scheduled breaks in.
   var hasStore: Bool { store != nil }
 
+  /// Whether the running timer follows the project linked to the repo,
+  /// folder, or app you're working in. Kept on this Mac.
+  var autoSwitch: Bool {
+    didSet { defaults.set(autoSwitch, forKey: Self.autoSwitchKey) }
+  }
+
+  /// How long you stay somewhere linked to another project before Shifty
+  /// offers to switch, so a quick look elsewhere doesn't.
+  var autoSwitchDelay: TimeInterval {
+    didSet { defaults.set(autoSwitchDelay, forKey: Self.autoSwitchDelayKey) }
+  }
+
+  /// How long the offer counts down before it switches.
+  var autoSwitchCountdown: TimeInterval {
+    didSet { defaults.set(autoSwitchCountdown, forKey: Self.autoSwitchCountdownKey) }
+  }
+
+  static let autoSwitchDelays: [TimeInterval] = [10, 30, 60, 120, 300]
+  static let autoSwitchCountdowns: [TimeInterval] = [5, 10, 15, 30]
+
   @ObservationIgnored private let defaults: UserDefaults
   @ObservationIgnored private let store: ShiftStore?
   /// The lunch window's preset in the store.
@@ -144,6 +164,9 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let clockInLinkSetting = "clock_in_link"
   static let clockLinkModeKey = "clockLinkMode"
   static let migratedKey = "clockOutLink.migratedToStore"
+  static let autoSwitchKey = "autoSwitch"
+  static let autoSwitchDelayKey = "autoSwitch.delay"
+  static let autoSwitchCountdownKey = "autoSwitch.countdown"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
   static let everyDay = Set(1...7)
@@ -160,6 +183,10 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
       defaults.string(forKey: Self.clockLinkModeKey).flatMap(ClockLinkMode.init) ?? .ask
     separateClockInLink = Self.load(Self.clockInLinkSetting, store: store, defaults: defaults)
       .flatMap(Self.link(from:))
+    autoSwitch = defaults.bool(forKey: Self.autoSwitchKey)
+    autoSwitchDelay = defaults.object(forKey: Self.autoSwitchDelayKey) as? TimeInterval ?? 30
+    autoSwitchCountdown =
+      defaults.object(forKey: Self.autoSwitchCountdownKey) as? TimeInterval ?? 10
 
     let saved = defaults.string(forKey: Self.clockOutLinkKey)
     guard let store else {

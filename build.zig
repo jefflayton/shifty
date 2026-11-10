@@ -76,7 +76,7 @@ pub fn build(b: *Build) void {
     const integrations_tests = b.addTest(.{ .root_module = integrations });
     test_step.dependOn(&b.addRunArtifact(integrations_tests).step);
 
-    const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store });
+    const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store, .integrations = integrations });
     b.getInstallStep().dependOn(macos_step);
 
     const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
@@ -97,14 +97,11 @@ pub fn build(b: *Build) void {
     check.dependOn(macos_step);
 }
 
-fn buildCli(
-    b: *Build,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
-) struct { step: *Build.Step, tests: *Build.Step } {
-    const cli_step = b.step("cli", "Build the CLI");
+const Deps = struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module };
 
+/// The `shifty` command line tool. `zig build cli` builds it for this
+/// machine, and the macOS app bundles one (see `buildMacOS`).
+fn addCli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, deps: Deps) *Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
@@ -113,11 +110,19 @@ fn buildCli(
     mod.addImport("core", deps.core);
     mod.addImport("store", deps.store);
     mod.addImport("integrations", deps.integrations);
+    return b.addExecutable(.{ .name = "shifty", .root_module = mod });
+}
 
-    const exe = b.addExecutable(.{
-        .name = "shifty",
-        .root_module = mod,
-    });
+fn buildCli(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: Deps,
+) struct { step: *Build.Step, tests: *Build.Step } {
+    const cli_step = b.step("cli", "Build the CLI");
+
+    const exe = addCli(b, target, optimize, deps);
+    const mod = exe.root_module;
     const install_exe = b.addInstallArtifact(exe, .{});
     cli_step.dependOn(&install_exe.step);
 
@@ -137,7 +142,7 @@ fn buildTui(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    deps: struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module },
+    deps: Deps,
 ) struct { step: *Build.Step, tests: *Build.Step } {
     const tui_step = b.step("tui", "Build the TUI");
 
@@ -180,7 +185,7 @@ fn buildMacOS(
     b: *Build,
     optimize: std.builtin.OptimizeMode,
     release: bool,
-    deps: struct { core: *Build.Module, store: *Build.Module },
+    deps: Deps,
 ) *Build.Step {
     const macos_step = b.step("macos", "Build the macOS app");
 
@@ -197,6 +202,7 @@ fn buildMacOS(
     });
     mod.addImport("core", deps.core);
     mod.addImport("store", deps.store);
+    mod.addImport("integrations", deps.integrations);
 
     const app = "zig-out/Shifty.app";
     const bundle_path = app ++ "/Contents";
@@ -229,6 +235,8 @@ fn buildMacOS(
     const inst_info_plist = b.addInstallFile(info_plist, "Shifty.app/Contents/Info.plist");
 
     const inst_alarm = b.addInstallFile(b.path(macos ++ "/Resources/alarm.caf"), "Shifty.app/Contents/Resources/alarm.caf");
+    // Played when auto-switch's banner offers a switch.
+    const inst_notification = b.addInstallFile(b.path(macos ++ "/Resources/notification.caf"), "Shifty.app/Contents/Resources/notification.caf");
 
     // Install Sparkle
     const sparkle_dep = b.dependency("sparkle", .{
@@ -329,6 +337,7 @@ fn buildMacOS(
     link.step.dependOn(&inst_app.step);
     link.step.dependOn(&inst_info_plist.step);
     link.step.dependOn(&inst_alarm.step);
+    link.step.dependOn(&inst_notification.step);
 
     // Sign inside-out, WITHOUT --deep. --deep would re-sign (and clobber)
     // Sparkle.framework's own valid signature; Sparkle then refuses updates.
@@ -341,6 +350,22 @@ fn buildMacOS(
     codesign_bin.addFileArg(bin);
     codesign_bin.step.dependOn(&link.step);
 
+    // The CLI rides along in Contents/Helpers: the prompt hook auto-switch
+    // uses runs it, and Install Command Line Tool links it into PATH. Same
+    // flavor as the app, so it uses the app's database.
+    const cli = addCli(b, target, optimize, deps);
+    const inst_cli = b.addInstallArtifact(cli, .{
+        .dest_dir = .{ .override = .{ .custom = "Shifty.app/Contents/Helpers" } },
+    });
+    inst_cli.step.dependOn(&link.step);
+    // Inside-out: the helper before the app that seals it.
+    const codesign_cli = b.addSystemCommand(&.{
+        "codesign", "--force", "--options=runtime",
+        "--sign",   "-",
+    });
+    codesign_cli.addArg(bundle_path ++ "/Helpers/shifty");
+    codesign_cli.step.dependOn(&inst_cli.step);
+
     const codesign = b.addSystemCommand(&.{
         "codesign", "--force", "--options=runtime",
         "--sign",         "-", // "-" = ad-hoc identity
@@ -348,6 +373,7 @@ fn buildMacOS(
         app,
     });
     codesign.step.dependOn(&codesign_bin.step);
+    codesign.step.dependOn(&codesign_cli.step);
 
     const bundle_step = bundle(b, app, &codesign.step);
     const bundle_opt = b.option(bool, "bundle", "bundle after build") orelse false;
@@ -363,6 +389,7 @@ fn buildMacOS(
     });
     ffi_mod.addImport("core", deps.core);
     ffi_mod.addImport("store", deps.store);
+    ffi_mod.addImport("integrations", deps.integrations);
     const ffi_obj = b.addObject(.{ .name = "shifty-ffi", .root_module = ffi_mod });
     const swift_tests = b.addSystemCommand(&.{
         "swiftc",
@@ -389,7 +416,8 @@ fn buildMacOS(
 
     const run_cmd = b.addSystemCommand(&.{bin_str});
     const run_step = b.step("run-macos", "Run macOS executable");
-    run_cmd.step.dependOn(&link.step);
+    // The whole app, signed and with its bundled CLI, not just the binary.
+    run_cmd.step.dependOn(&codesign.step);
     run_step.dependOn(&run_cmd.step);
 
     return macos_step;

@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(3, stmt.int(0));
+    try testing.expectEqual(4, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -763,6 +763,36 @@ test "links - resolve, re-point, validate" {
 
     try testing.expectError(error.Mismatch, s.link("situ", "workspace", "x", .{ .project_id = api, .workspace_id = main }, 2));
     try testing.expectEqual(null, try s.resolveLink("situ", "workspace", "x"));
+}
+
+test "links - list, unlink, link again" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const web = try s.createProject(.{ .name = "web" }, 0);
+    const gone = try s.createProject(.{ .name = "gone" }, 0);
+    try s.link("git", "remote", "github.com/o/web", .{ .project_id = web }, 0);
+    try s.link("app", "bundle", "com.tinyspeck.slackmacgap", .{ .project_id = web }, 1);
+    try s.link("folder", "path", "/old", .{ .project_id = gone }, 2);
+    try s.deleteProject(gone, 3);
+
+    var all = try s.links(a);
+    try testing.expectEqual(2, all.len);
+    try testing.expectEqualStrings("github.com/o/web", all[0].external_id);
+    try testing.expectEqualStrings("app", all[1].provider);
+    try testing.expect(all[1].target.project_id.eql(web));
+
+    try s.unlink("git", "remote", "github.com/o/web", 4);
+    try testing.expectEqual(null, try s.resolveLink("git", "remote", "github.com/o/web"));
+    try testing.expectError(error.NotFound, s.unlink("git", "remote", "github.com/o/web", 5));
+    all = try s.links(a);
+    try testing.expectEqual(1, all.len);
+
+    try s.link("git", "remote", "github.com/o/web", .{ .project_id = web }, 6);
+    try testing.expect((try s.resolveLink("git", "remote", "github.com/o/web")).?.project_id.eql(web));
 }
 
 test "entries - set and clear a note" {

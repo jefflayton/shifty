@@ -38,6 +38,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
     return tracking
   }
+  /// Moves the timer to the project linked to where you work.
+  lazy var autoSwitch = tracking.map { AutoSwitchModel(tracking: $0, preferences: preferences) }
+  private var focusWatcher: FocusWatcher?
+  private var switchBanner: SwitchBanner?
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
   private var storeVersion: Int64?
@@ -62,6 +66,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     AlarmController.shared.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
     AlarmController.shared.endShift = { [weak self] in self?.clockOutFromAlarm() ?? false }
     watchStore()
+    if let store, let autoSwitch {
+      let banner = SwitchBanner(model: autoSwitch)
+      autoSwitch.didChange = { [weak banner] in banner?.update() }
+      autoSwitch.onShiftSince = { [weak self] in
+        guard let model = self?.model, model.isClockedIn, !model.isOnBreak else { return nil }
+        return model.clockInTime
+      }
+      switchBanner = banner
+      focusWatcher = FocusWatcher(store: store, model: autoSwitch)
+      focusWatcher?.start()
+    }
 
     setupMenu()
 
@@ -74,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let host = NSHostingController(
       rootView: PopoverView(
         updater: updateController.updater, model: model, preferences: preferences,
-        loginItem: loginItem, tracking: tracking,
+        loginItem: loginItem, tracking: tracking, autoSwitch: autoSwitch,
         openTimesheet: store == nil ? nil : { [weak self] in self?.showMainWindow() },
         openSettings: { [weak self] in self?.showSettings() },
         clocked: { [weak self] clockingIn in self?.offerClockLink(clockingIn: clockingIn) }))
@@ -139,6 +154,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   }
 
   @objc func showTimesheet() { showMainWindow() }
+
+  /// Puts the bundled `shifty` command in PATH, and says how it went.
+  @objc func installCommandLineTool() {
+    let name = CommandLineTool.name
+    let alert = NSAlert()
+    switch CommandLineTool.status {
+    case .missing:
+      alert.messageText = "This build of Shifty has no command line tool."
+      alert.informativeText = "Rebuild it with zig build macos."
+    case .installed:
+      alert.messageText = "The \(name) command is installed."
+      alert.informativeText = "It's at \(CommandLineTool.link). Run \(name) --help to get started."
+    case .notInstalled, .taken:
+      guard CommandLineTool.install() else { return }
+      alert.messageText = "Installed the \(name) command."
+      alert.informativeText =
+        "Open a new terminal and run \(name) --help. To have auto-switch follow your terminal, add the hook from Settings → Auto-Switch."
+    }
+    NSApp.activate()
+    alert.runModal()
+  }
 
   @objc func showProjects() {
     popover.close()
@@ -282,6 +318,9 @@ func setupMenu() {
   appMenu.addItem(.separator())
   appMenu.addItem(
     withTitle: "Settings…", action: #selector(AppDelegate.showSettings), keyEquivalent: ",")
+  appMenu.addItem(
+    withTitle: "Install Command Line Tool…",
+    action: #selector(AppDelegate.installCommandLineTool), keyEquivalent: "")
   appMenu.addItem(.separator())
   appMenu.addItem(
     withTitle: "Hide Shifty", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")

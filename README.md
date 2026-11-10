@@ -181,9 +181,37 @@ Timesheet or Projects in its sidebar (⌘1, ⌘2).
   hidden unless they have time on them.
 - **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
   its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
-  project.
+  project. The link button (or right-click) links a repo, folder, or app to it for auto-switch.
+
+### Auto-switch
+
+Turn on **Settings… → Auto-Switch** and the running timer follows what you're working on. Link
+repos, folders, and apps to projects from the Projects window, the popover's **Link to …** (shown
+while you're somewhere nothing links), or `shifty link`. While a timer runs, stay a while (30
+seconds by default) in a place linked to another project and a banner at the top of the screen
+chimes and counts down to switching. When it runs out, the timer switches from when you got there; **Switch
+Now** and **Keep …** decide sooner, and **Undo** puts it back. Clocked in with no timer running
+(and not on a break), it offers to start one the same way. Places nothing links, like a browser,
+change nothing.
+
+Shifty knows where you are by:
+
+- **Terminals**: a prompt hook records each shell's folder. Settings shows the line to add for
+  zsh, fish, bash, or Neovim (Neovim reports the folder of the file you're in). It runs the CLI
+  bundled in the app, so it works whether or not you've installed the `shifty` command.
+- **Editors** like VS Code and Zed: the folder the front window has open, which needs the
+  Accessibility permission.
+- **Apps**: the app in front, for apps linked as a whole.
+
+A repo links by its Situ ids if it has a `situ.toml`, else its git remote (so every clone
+matches), else its path.
 
 ## CLI
+
+The app comes with the CLI. To run it from any terminal, choose **Shifty → Install Command Line
+Tool…** (or **Install…** in Settings → General). That links `/usr/local/bin/shifty` to the copy
+inside `Shifty.app`, asking for your password if needed, so updates keep it current. Dev builds
+install it as `shifty-dev`. To build it on its own, `zig build cli` puts it in `zig-out/bin/shifty`.
 
 ```
 Usage: shifty [options]
@@ -215,7 +243,8 @@ out                        Clock out
 break                      Start or end a break
 start [<project>[/<workspace>]] [-n <note>]
                            Track time. With no project, use the
-                           linked Situ repo you're in, if any
+                           project linked to the repo or folder
+                           you're in, if any
 stop                       Stop tracking
 log [--week]               Time by project, today or the last 7 days
 projects                   List projects and their workspaces
@@ -227,7 +256,17 @@ workspace add <project> <name>
 clients                    List clients
 client add <name>
 link <project>[/<workspace>]
-                           Link the Situ repo you're in to a project
+                           Link the repo or folder you're in to a
+                           project: by its Situ ids, else its git
+                           remote, else its path
+link --app <bundle id> <project>[/<workspace>]
+                           Link a macOS app, for the menu bar's
+                           auto-switch
+unlink [--app <bundle id>]  Remove the link for here, or an app's
+hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
+                           bar which folder your terminal is in
+here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
+                           (default: this one) for the shell <pid>
 ```
 
 ```sh
@@ -254,8 +293,9 @@ By client
    5h 00m  total
 ```
 
-Starting with no project inside a Situ repo (one with a
-`situ.toml`) tracks whatever `shifty link` pointed that repo at.
+Starting with no project inside a linked repo or folder tracks whatever `shifty link` pointed it
+at. A git repo links by its origin remote, so every clone matches; a Situ repo (one with a
+`situ.toml`) by its Situ ids.
 
 ## TUI
 
@@ -265,7 +305,7 @@ every second, so a `shifty start` in another terminal shows up right away.
 
 | Key | Action |
 | --- | --- |
-| `s` | Start tracking: type to filter projects and workspaces, `↑`/`↓` to choose, `enter` to start. Inside a linked Situ repo, that repo's project comes first |
+| `s` | Start tracking: type to filter projects and workspaces, `↑`/`↓` to choose, `enter` to start. Inside a linked repo or folder, its project comes first |
 | `x` | Stop tracking |
 | `n` | Add or edit the running entry's note |
 | `b` | Start or end a break |

@@ -15,7 +15,10 @@ const dur = fmt.dur;
 const store = @import("store");
 const Names = store.report.Names;
 const Store = store.Store;
-const situ = @import("integrations").situ;
+const integrations = @import("integrations");
+const situ = integrations.situ;
+const place = integrations.place;
+const here_ = integrations.here;
 
 pub const usage =
     \\Commands:
@@ -26,7 +29,8 @@ pub const usage =
     \\  break                      Start or end a break
     \\  start [<project>[/<workspace>]] [-n <note>]
     \\                             Track time. With no project, use the
-    \\                             linked Situ repo you're in, if any
+    \\                             project linked to the repo or folder
+    \\                             you're in, if any
     \\  stop                       Stop tracking
     \\  log [--week]               Time by project, today or the last 7 days
     \\  projects                   List projects and their workspaces
@@ -38,11 +42,21 @@ pub const usage =
     \\  clients                    List clients
     \\  client add <name>
     \\  link <project>[/<workspace>]
-    \\                             Link the Situ repo you're in to a project
+    \\                             Link the repo or folder you're in to a
+    \\                             project: by its Situ ids, else its git
+    \\                             remote, else its path
+    \\  link --app <bundle id> <project>[/<workspace>]
+    \\                             Link a macOS app, for the menu bar's
+    \\                             auto-switch
+    \\  unlink [--app <bundle id>]  Remove the link for here, or an app's
+    \\  hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
+    \\                             bar which folder your terminal is in
+    \\  here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
+    \\                             (default: this one) for the shell <pid>
     \\
 ;
 
-const Command = enum { status, in, out, @"break", start, stop, log, projects, project, workspace, clients, client, link };
+const Command = enum { status, in, out, @"break", start, stop, log, projects, project, workspace, clients, client, link, unlink, hook, here };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -84,6 +98,15 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
     };
     c.now = .now(c.io, c.env.get("TZ"), &c.tz_buf);
 
+    const command = std.meta.stringToEnum(Command, args[0]).?;
+    const rest = args[1..];
+    // Hot paths that run at every prompt: no database.
+    switch (command) {
+        .hook => return hook(&c, rest),
+        .here => return here(&c, rest),
+        else => {},
+    }
+
     const path = store.defaultPath(arena, c.env) catch |e| switch (e) {
         error.NoHome => return c.fail("$HOME isn't set; set $SHIFTY_DB to choose where the database goes", .{}),
         error.OutOfMemory => return error.OutOfMemory,
@@ -95,8 +118,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
     defer c.db.deinit();
     _ = try c.db.closeStaleShift(arena, c.now.ts);
 
-    const rest = args[1..];
-    switch (std.meta.stringToEnum(Command, args[0]).?) {
+    switch (command) {
         .status => try status(&c, rest),
         .in => try clockIn(&c, rest),
         .out => try clockOut(&c, rest),
@@ -110,6 +132,8 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .clients => try listClients(&c, rest),
         .client => try client(&c, rest),
         .link => try link(&c, rest),
+        .unlink => try unlink(&c, rest),
+        .hook, .here => unreachable,
     }
 }
 
@@ -227,12 +251,13 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
     }
 
     var target: ?store.Target = null;
-    var unlinked: ?situ.Marker = null;
+    var unlinked: ?[]const u8 = null;
     if (spec) |s| {
         target = try resolve(c, s);
-    } else if (try findMarker(c)) |m| {
-        target = try situ.linked(&c.db, m);
-        if (target == null) unlinked = m;
+    } else if (try cwd(c)) |d| {
+        const p = try place.resolve(&c.db, c.io, c.arena, d, null);
+        target = p.target;
+        if (target == null) unlinked = p.root;
     }
 
     const prev = try c.db.runningEntry(c.arena);
@@ -254,7 +279,7 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
     }
     const name = if (target) |t| try label(c, t.project_id, t.workspace_id) else try label(c, null, null);
     try c.out.print("Tracking {s} since {f}.\n", .{ name, clock(c.now.ts, c.now.utc_offset_secs) });
-    if (unlinked) |m| try c.out.print("This Situ repo ({s}) isn't linked to a project; `shifty link <project>` to track it.\n", .{m.root});
+    if (unlinked) |root| try c.out.print("This repo ({s}) isn't linked to a project; `shifty link <project>` to track it.\n", .{root});
 }
 
 fn stop(c: *Ctx, args: []const [:0]const u8) !void {
@@ -436,20 +461,94 @@ fn client(c: *Ctx, args: []const [:0]const u8) !void {
 // ── Situ ────────────────────────────────────────────────────────────────────
 
 fn link(c: *Ctx, args: []const [:0]const u8) !void {
-    if (args.len != 1) return c.fail("usage: shifty link <project>[/<workspace>]", .{});
-    const m = try findMarker(c) orelse return c.fail("not in a Situ repo (no {s} here or above)", .{situ.file_name});
+    if (args.len == 3 and std.mem.eql(u8, args[0], "--app")) {
+        const target = try resolve(c, args[2]);
+        try place.linkApp(&c.db, args[1], target, c.now.ts);
+        return c.out.print("Linked {s} to {s}.\n", .{ args[1], try label(c, target.project_id, target.workspace_id) });
+    }
+    if (args.len != 1 or args[0][0] == '-') return c.fail("usage: shifty link <project>[/<workspace>], or link --app <bundle id> <project>", .{});
+    const dir = try cwd(c) orelse return c.fail("can't tell which directory this is", .{});
     const target = try resolve(c, args[0]);
-    situ.link(&c.db, m, target, c.now.ts) catch |e| switch (e) {
-        error.NoProjectId => return c.fail("{s}/{s} has no project_id", .{ m.root, situ.file_name }),
-        error.NoWorkspaceId => return c.fail("{s}/{s} has no workspace_id", .{ m.root, situ.file_name }),
+    const via = place.linkDir(&c.db, c.io, c.arena, dir, target, c.now.ts) catch |e| switch (e) {
+        error.NoWorkspaceId => return c.fail("this Situ repo's {s} has no workspace_id to link to a workspace", .{situ.file_name}),
         else => return e,
     };
-    try c.out.print("Linked {s} to {s}.\n", .{ m.root, try label(c, target.project_id, target.workspace_id) });
+    const p = try place.resolve(&c.db, c.io, c.arena, dir, null);
+    const what = p.root orelse p.folder orelse dir;
+    const by: []const u8 = switch (via) {
+        .situ => "its Situ ids",
+        .git => p.repo.?.remote.?,
+        .folder => "its path",
+        .app => unreachable,
+    };
+    try c.out.print("Linked {s} ({s}) to {s}.\n", .{ what, by, try label(c, target.project_id, target.workspace_id) });
 }
 
-fn findMarker(c: *Ctx) !?situ.Marker {
-    const cwd = std.process.currentPathAlloc(c.io, c.arena) catch return null;
-    return situ.find(c.io, c.arena, cwd);
+fn unlink(c: *Ctx, args: []const [:0]const u8) !void {
+    if (args.len == 2 and std.mem.eql(u8, args[0], "--app")) {
+        c.db.unlink(place.app_provider, place.app_kind, args[1], c.now.ts) catch |e| switch (e) {
+            error.NotFound => return c.fail("{s} isn't linked", .{args[1]}),
+            else => return e,
+        };
+        return c.out.print("Unlinked {s}.\n", .{args[1]});
+    }
+    try noArgs(c, "unlink", args);
+    const dir = try cwd(c) orelse return c.fail("can't tell which directory this is", .{});
+    const p = try place.resolve(&c.db, c.io, c.arena, dir, null);
+    const via = p.via orelse return c.fail("nothing links {s} to a project", .{p.root orelse dir});
+    switch (via) {
+        .situ => {
+            const m = p.marker.?;
+            if (m.workspace_id) |w| c.db.unlink(situ.provider, "workspace", w, c.now.ts) catch {};
+            if (m.project_id) |pid| c.db.unlink(situ.provider, "project", pid, c.now.ts) catch {};
+        },
+        .git => try c.db.unlink(integrations.git.provider, integrations.git.kind_remote, p.repo.?.remote.?, c.now.ts),
+        .folder => try c.db.unlink(place.folder_provider, place.folder_kind, p.folder.?, c.now.ts),
+        .app => unreachable,
+    }
+    const after = try place.resolve(&c.db, c.io, c.arena, dir, null);
+    try c.out.print("Unlinked {s}.", .{p.folder orelse p.root orelse dir});
+    if (after.target) |t| try c.out.print(" It's still {s}, through {s}.", .{ try label(c, t.project_id, t.workspace_id), @tagName(after.via.?) });
+    try c.out.writeAll("\n");
+}
+
+fn cwd(c: *Ctx) !?[]const u8 {
+    return std.process.currentPathAlloc(c.io, c.arena) catch null;
+}
+
+// ── Shell hook ──────────────────────────────────────────────────────────────
+
+fn hook(c: *Ctx, args: []const [:0]const u8) !void {
+    if (args.len != 1) return c.fail("usage: shifty hook <fish|zsh|bash|nvim>", .{});
+    const shell = std.meta.stringToEnum(here_.Shell, args[0]) orelse
+        return c.fail("unknown shell '{s}'; use fish, zsh, bash, or nvim", .{args[0]});
+    // This binary by its full path, so a dev build's hook feeds a dev app.
+    const exe = std.process.executablePathAlloc(c.io, c.arena) catch "shifty";
+    try c.out.writeAll(try here_.hook(c.arena, shell, exe));
+}
+
+fn here(c: *Ctx, args: []const [:0]const u8) !void {
+    var dir: ?[]const u8 = null;
+    var pid: ?i32 = null;
+    var it: Args = .{ .c = c, .cmd = "here", .list = args };
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--pid")) {
+            const v = try it.value(arg);
+            pid = std.fmt.parseInt(i32, v, 10) catch return c.fail("invalid pid '{s}'", .{v});
+        } else if (dir == null and arg[0] != '-') {
+            dir = arg;
+        } else return it.unexpected(arg);
+    }
+    const d = dir orelse try cwd(c) orelse return;
+    if (!std.fs.path.isAbsolute(d)) return c.fail("here needs an absolute directory", .{});
+    const db_path = store.defaultPath(c.arena, c.env) catch return;
+    here_.record(c.io, c.arena, try here_.pathFor(c.arena, db_path), .{
+        .ts = c.now.ts,
+        .pid = pid orelse std.c.getppid(),
+        .bundle = c.env.get("__CFBundleIdentifier") orelse "",
+        .term = c.env.get("TERM_PROGRAM") orelse "",
+        .dir = d,
+    }) catch |e| return c.fail("can't record where you are: {t}", .{e});
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ extension Array where Element == ShiftStore.Project {
 /// same ones.
 @Observable final class ProjectsModel: ProjectNames {
   private(set) var list = ShiftStore.Projects()
+  /// What's linked to each project: repos, folders, and apps.
+  private(set) var links: [ShiftStore.Link] = []
   /// The last problem, shown until the next successful change.
   private(set) var error: String?
 
@@ -35,6 +37,8 @@ extension Array where Element == ShiftStore.Project {
     do {
       let fresh = try store.projects(now: now)
       if fresh != list { list = fresh }
+      let freshLinks = try store.links()
+      if freshLinks != links { links = freshLinks }
     } catch {
       self.error = "Couldn't read your projects (\(error))."
     }
@@ -91,6 +95,25 @@ extension Array where Element == ShiftStore.Project {
   }
 
   func clearError() { error = nil }
+
+  func links(of project: UUID) -> [ShiftStore.Link] {
+    links.filter { $0.projectId == project }
+  }
+
+  /// Links the repo or folder at `dir` to `project`. Returns what it linked
+  /// by: its Situ ids, its git remote, or its path.
+  @discardableResult
+  func link(dir: String, to project: UUID) -> ShiftStore.Via? {
+    write { try store.link(dir: dir, to: .init(project: project)) }
+  }
+
+  func link(app bundleID: String, to project: UUID) {
+    write { try store.link(app: bundleID, to: .init(project: project)) }
+  }
+
+  func unlink(_ link: ShiftStore.Link) {
+    write { try store.unlink(link) }
+  }
 
   private func existing(named name: String) -> ShiftStore.Project? {
     list.projects.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }

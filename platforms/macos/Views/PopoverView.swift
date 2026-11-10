@@ -11,6 +11,8 @@ struct PopoverView: View {
   let loginItem: LoginItem
   /// The running timer; nil without the store.
   let tracking: TrackingModel?
+  /// Following where you work; nil without the store.
+  let autoSwitch: AutoSwitchModel?
   /// Opens the main window; nil without the store.
   let openTimesheet: (() -> Void)?
   let openSettings: () -> Void
@@ -19,7 +21,8 @@ struct PopoverView: View {
 
   init(
     updater: SPUUpdater, model: ShiftModel, preferences: Preferences, loginItem: LoginItem,
-    tracking: TrackingModel? = nil, openTimesheet: (() -> Void)? = nil,
+    tracking: TrackingModel? = nil, autoSwitch: AutoSwitchModel? = nil,
+    openTimesheet: (() -> Void)? = nil,
     openSettings: @escaping () -> Void, clocked: @escaping (Bool) -> Void = { _ in }
   ) {
     self.updater = updater
@@ -27,6 +30,7 @@ struct PopoverView: View {
     self.preferences = preferences
     self.loginItem = loginItem
     self.tracking = tracking
+    self.autoSwitch = autoSwitch
     self.openTimesheet = openTimesheet
     self.openSettings = openSettings
     self.clocked = clocked
@@ -74,7 +78,7 @@ struct PopoverView: View {
       }
 
       if let tracking {
-        TrackingSection(tracking: tracking)
+        TrackingSection(tracking: tracking, autoSwitch: autoSwitch)
       }
 
       FormSection("Breaks") {

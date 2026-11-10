@@ -3,4 +3,5 @@
 comptime {
     _ = @import("core").ffi;
     _ = @import("store").ffi;
+    _ = @import("integrations").ffi;
 }

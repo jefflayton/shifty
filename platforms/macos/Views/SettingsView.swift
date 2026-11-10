@@ -2,12 +2,13 @@ import SwiftUI
 
 /// The Settings window's tabs.
 enum SettingsTab: CaseIterable {
-  case general, breaks, clockLinks
+  case general, breaks, autoSwitch, clockLinks
 
   var title: String {
     switch self {
     case .general: "General"
     case .breaks: "Breaks"
+    case .autoSwitch: "Auto-Switch"
     case .clockLinks: "Clock Links"
     }
   }
@@ -16,6 +17,7 @@ enum SettingsTab: CaseIterable {
     switch self {
     case .general: "gearshape"
     case .breaks: "cup.and.saucer"
+    case .autoSwitch: "arrow.triangle.swap"
     case .clockLinks: "link"
     }
   }
@@ -29,12 +31,14 @@ struct SettingsPane: View {
   let loginItem: LoginItem
   /// The menu bar's shift, for adding a scheduled break to it today.
   var shift: ShiftModel? = nil
+  @State private var tool = CommandLineTool.status
 
   var body: some View {
     Form {
       switch tab {
       case .general: general
       case .breaks: breaks
+      case .autoSwitch: AutoSwitchSettings(preferences: preferences)
       case .clockLinks: clockLinks
       }
     }
@@ -57,6 +61,18 @@ struct SettingsPane: View {
     } footer: {
       Text("The timesheet hides other days unless they have time on them.")
         .foregroundStyle(.secondary)
+    }
+
+    Section {
+      CommandLineToolRow(status: $tool)
+    } header: {
+      Text("Command Line")
+    } footer: {
+      Text(
+        "Track time, link repos, and see your day from a terminal, with the same data as the menu bar. Installing links the command in \(CommandLineTool.directory) to the one inside Shifty, so updates keep it current."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
     }
 
     Section("Menu Bar") {
