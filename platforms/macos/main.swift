@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import Sparkle
 import SwiftUI
 import UserNotifications
@@ -61,6 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     NSApp.setActivationPolicy(.accessory)
 
+    followLunch()
     alarmScheduler = AlarmScheduler(
       model: model, preferences: preferences, controller: .shared)
     AlarmController.shared.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
@@ -95,7 +97,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         loginItem: loginItem, tracking: tracking, autoSwitch: autoSwitch,
         openTimesheet: store == nil ? nil : { [weak self] in self?.showMainWindow() },
         openSettings: { [weak self] in self?.showSettings() },
-        clocked: { [weak self] clockingIn in self?.offerClockLink(clockingIn: clockingIn) }))
+        clocked: { [weak self] event in self?.offerClockLink(event) }))
     // Let the SwiftUI content size the popover. Otherwise NSPopover keeps its
     // default 320x320, positions itself for that, and taller content grows
     // the window upward from its bottom edge, over the menu bar.
@@ -115,6 +117,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_ON_LAUNCH"] != nil {
       // Wait for the status item to be placed in the menu bar.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
+    }
+  }
+
+  /// Keeps the shift's lunch window, which clock out counts, up with the
+  /// settings.
+  private func followLunch() {
+    withObservationTracking {
+      model.lunchRule = preferences.lunch
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.followLunch() }
     }
   }
 
@@ -194,13 +206,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     return true
   }
 
-  /// Clocked in or out from the popover: close it so the browser comes to
-  /// the front, then open the clock link or ask to.
-  func offerClockLink(clockingIn: Bool) {
-    guard preferences.clockLinkAction(clockingIn: clockingIn) != .none else { return }
+  /// Clocked in or out, or started or ended lunch, from the popover: close
+  /// it so the browser comes to the front, then open the clock link or ask
+  /// to.
+  func offerClockLink(_ event: ClockEvent) {
+    guard preferences.clockLinkAction(for: event) != .none else { return }
     popover.close()
     DispatchQueue.main.async { [preferences] in
-      ClockLinkPrompt.offer(clockingIn: clockingIn, preferences: preferences)
+      ClockLinkPrompt.offer(event, preferences: preferences)
     }
   }
 

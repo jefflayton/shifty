@@ -165,6 +165,11 @@ final class ShiftStore {
     var earliestSecs: Int64?
     var latestSecs: Int64?
     var minimumSecs: Int64?
+    /// An SF Symbol name; nil for the default.
+    var icon: String? = nil
+    /// Whether starting and ending it offers the clock links. nil from a
+    /// store older than icons.
+    var clockLink: Bool? = nil
   }
 
   /// Break presets, windows (lunch) first.
@@ -172,8 +177,14 @@ final class ShiftStore {
     try json([Preset]()) { shifty_break_presets_json(handle, $0, $1) }
   }
 
-  func putBreakPreset(_ preset: ShiftyBreakPreset, name: String, now: Date = Date()) throws {
-    try check(shifty_put_break_preset(handle, preset, name, ts(now)))
+  /// `icon` nil (or empty) is the default.
+  func putBreakPreset(
+    _ preset: ShiftyBreakPreset, name: String, icon: String? = nil, now: Date = Date()
+  ) throws {
+    guard let icon, !icon.isEmpty else {
+      return try check(shifty_put_break_preset(handle, preset, name, nil, ts(now)))
+    }
+    try icon.withCString { try check(shifty_put_break_preset(handle, preset, name, $0, ts(now))) }
   }
 
   /// Deletes a break preset and its alarms.

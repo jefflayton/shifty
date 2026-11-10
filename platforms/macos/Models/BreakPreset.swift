@@ -14,6 +14,24 @@ struct ScheduledBreak: Identifiable, Equatable {
   var start: TimeInterval = 12 * 3600
   var end: TimeInterval = 12.5 * 3600
   var isEnabled = true
+  /// An SF Symbol for it; nil for the menu bar break's.
+  var icon: String? = nil
+
+  /// The symbol it shows, with `rest` the icon of breaks you start yourself.
+  func symbol(rest: String = BreakIcon.rest) -> String { BreakIcon.symbol(icon, or: rest) }
+
+  /// Whether a break from `start` to `end` on the clock is this one on its
+  /// day: on one of its days, ending when it ends, and starting when it
+  /// starts or later (clock in cuts one that started before it).
+  func matches(start: Date, end: Date?, calendar: Calendar = .current) -> Bool {
+    guard isEnabled, isValid, let end,
+      weekdays.contains(Preferences.isoWeekday(start, calendar: calendar))
+    else { return false }
+    let day = calendar.startOfDay(for: start)
+    let s = start.timeIntervalSince(day)
+    let e = end.timeIntervalSince(day)
+    return abs(e - self.end) < 60 && s >= self.start - 59 && s < self.end
+  }
 
   /// Whether the store will take it: it ends after it starts, the same day.
   var isValid: Bool { start >= 0 && start < 86400 && end > start && end <= 86400 }
@@ -41,7 +59,7 @@ enum BreakPresets {
     guard p.kind == "scheduled", let start = p.startSecs, let end = p.endSecs else { return nil }
     return ScheduledBreak(
       id: p.id, name: p.name, weekdays: days(p.weekdays), start: TimeInterval(start),
-      end: TimeInterval(end), isEnabled: p.enabled)
+      end: TimeInterval(end), isEnabled: p.enabled, icon: p.icon)
   }
 
   static func lunch(_ p: ShiftStore.Preset) -> LunchRule? {
@@ -53,6 +71,8 @@ enum BreakPresets {
     rule.earliest = TimeInterval(earliest)
     rule.latest = TimeInterval(latest)
     rule.minimum = TimeInterval(minimum)
+    rule.icon = p.icon
+    rule.clockLink = p.clockLink ?? true
     return rule
   }
 
@@ -62,6 +82,7 @@ enum BreakPresets {
     row.kind = Int32(SHIFTY_PRESET_SCHEDULED.rawValue)
     row.enabled = b.isEnabled ? 1 : 0
     row.weekdays = mask(b.weekdays)
+    row.clock_link = 0
     row.start_secs = Int64(b.start.rounded())
     row.end_secs = Int64(b.end.rounded())
     return row
@@ -73,6 +94,7 @@ enum BreakPresets {
     row.kind = Int32(SHIFTY_PRESET_WINDOW.rawValue)
     row.enabled = rule.isEnabled ? 1 : 0
     row.weekdays = 0b111_1111
+    row.clock_link = rule.clockLink ? 1 : 0
     row.earliest_secs = Int64(rule.earliest.rounded())
     row.latest_secs = Int64(rule.latest.rounded())
     row.minimum_secs = Int64(rule.minimum.rounded())

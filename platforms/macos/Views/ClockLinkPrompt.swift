@@ -67,16 +67,17 @@ enum ClockLinkPrompt {
     }
   }
 
-  /// After clocking in or out from the menu bar: opens the link, or asks
-  /// first, remembering "Don't ask again" as the answer from now on.
-  static func offer(clockingIn: Bool, preferences: Preferences) {
+  /// After clocking in or out, or starting or ending lunch, from the menu
+  /// bar: opens the link, or asks first, remembering "Don't ask again" as the
+  /// answer from now on.
+  static func offer(_ event: ClockEvent, preferences: Preferences) {
     let link: URL
-    switch preferences.clockLinkAction(clockingIn: clockingIn) {
+    switch preferences.clockLinkAction(for: event) {
     case .none: return
     case .open(let url): link = url
     case .ask(let url):
       let alert = NSAlert()
-      alert.messageText = clockingIn ? "Clock in on your timeclock too?" : "Clock out on your timeclock too?"
+      alert.messageText = event.question
       alert.informativeText = "Opens \(url.host() ?? url.absoluteString)."
       alert.addButton(withTitle: "Open")
       alert.addButton(withTitle: "Not Now")

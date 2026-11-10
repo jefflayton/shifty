@@ -12,8 +12,16 @@ struct LunchRule: Codable, Equatable {
   var latest: TimeInterval = 5 * 3600
   /// Shorter breaks are rests, not lunch. Reminders are alarms.
   var minimum: TimeInterval = 30 * 60
+  /// An SF Symbol for lunch; nil for the fork and knife.
+  var icon: String?
+  /// Whether starting and ending lunch from the menu bar offers the clock
+  /// links, as Clock Out and Clock In do. Lunch is usually clocked out for.
+  var clockLink = true
 
   init() {}
+
+  /// The symbol lunch shows.
+  var symbol: String { BreakIcon.symbol(icon, or: BreakIcon.lunch) }
 
   /// The rule, if it's on and makes sense.
   var active: LunchRule? {
@@ -55,6 +63,8 @@ struct LunchRule: Codable, Equatable {
     case earliest = "earliest_mins"
     case latest = "latest_mins"
     case minimum = "minimum_mins"
+    case icon
+    case clockLink = "clock_link"
   }
 
   init(from decoder: Decoder) throws {
@@ -67,6 +77,8 @@ struct LunchRule: Codable, Equatable {
     earliest = try minutes(.earliest) ?? defaults.earliest
     latest = try minutes(.latest) ?? defaults.latest
     minimum = try minutes(.minimum) ?? defaults.minimum
+    icon = try c.decodeIfPresent(String.self, forKey: .icon)
+    clockLink = try c.decodeIfPresent(Bool.self, forKey: .clockLink) ?? defaults.clockLink
   }
 
   func encode(to encoder: Encoder) throws {
@@ -76,6 +88,8 @@ struct LunchRule: Codable, Equatable {
     try c.encode(minutes(earliest), forKey: .earliest)
     try c.encode(minutes(latest), forKey: .latest)
     try c.encode(minutes(minimum), forKey: .minimum)
+    try c.encodeIfPresent(icon, forKey: .icon)
+    try c.encode(clockLink, forKey: .clockLink)
   }
 }
 

@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(4, stmt.int(0));
+    try testing.expectEqual(5, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -113,6 +113,9 @@ test "open - break presets migration moves lunch into a window preset" {
     try testing.expectEqual(4 * h, lunch.rule.window.latest_secs);
     try testing.expectEqual(45 * 60, lunch.rule.window.minimum_secs);
     try testing.expectEqual(null, try s.setting(a, "lunch"));
+    // Lunch is clocked out for, with the default icon.
+    try testing.expectEqual(true, lunch.clock_link);
+    try testing.expectEqual(null, lunch.icon);
 
     const rules = try s.alarmRules(a);
     try testing.expectEqual(3, rules.len);
@@ -585,6 +588,53 @@ test "break presets - put, list, edit, delete" {
     try testing.expectError(error.NotFound, s.setAlarmEnabled(alarm, false, 3));
     try s.deleteBreakPreset(id, 3);
     try testing.expectEqual(0, (try s.breakPresets(a)).len);
+}
+
+test "break presets - icons and clock links" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    // A new store's lunch offers the clock links, with the default icon.
+    var lunch = (try s.breakPresets(a))[0];
+    try testing.expectEqual(true, lunch.clock_link);
+    try testing.expect(lunch.clockLink());
+    try testing.expectEqual(null, lunch.icon);
+
+    // Unset, a scheduled break doesn't; a window does.
+    var c = class(.v7(io), tue_thu, 11 * h, 14 * h);
+    try testing.expect(!c.clockLink());
+    try testing.expect((store.BreakPreset{
+        .id = .v7(io),
+        .name = "Lunch",
+        .rule = .{ .window = .{ .earliest_secs = 0, .latest_secs = h, .minimum_secs = 60 } },
+    }).clockLink());
+
+    c.icon = "graduationcap";
+    c.clock_link = true;
+    try s.putBreakPreset(c, 1);
+    lunch.icon = "takeoutbag.and.cup.and.straw";
+    lunch.clock_link = false;
+    try s.putBreakPreset(lunch, 1);
+
+    var presets = try s.breakPresets(a);
+    try testing.expectEqualStrings("takeoutbag.and.cup.and.straw", presets[0].icon.?);
+    try testing.expectEqual(false, presets[0].clock_link);
+    try testing.expectEqualStrings("graduationcap", presets[1].icon.?);
+    try testing.expectEqual(true, presets[1].clock_link);
+
+    // Back to the default: none, or empty.
+    lunch.icon = null;
+    try s.putBreakPreset(lunch, 2);
+    c.icon = "";
+    try s.putBreakPreset(c, 2);
+    presets = try s.breakPresets(a);
+    try testing.expectEqual(null, presets[0].icon);
+    try testing.expectEqual(null, presets[1].icon);
+    // Editing other fields keeps the clock link as set.
+    try testing.expectEqual(true, presets[1].clock_link);
 }
 
 test "break presets - clocking in adds the day's scheduled breaks" {

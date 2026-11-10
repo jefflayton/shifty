@@ -99,6 +99,21 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(clockLinkMode.rawValue, forKey: Self.clockLinkModeKey) }
   }
 
+  /// What to do with the link after `event` in the menu bar.
+  func clockLinkAction(for event: ClockEvent) -> ClockLinkAction {
+    event.isLunch
+      ? lunchLinkAction(clockingIn: event.clockingIn)
+      : clockLinkAction(clockingIn: event.clockingIn)
+  }
+
+  /// What to do with the link after starting (clocking out for) or ending
+  /// (clocking back in from) lunch in the menu bar: as for clocking in or
+  /// out, if lunch is on and offers the clock links.
+  func lunchLinkAction(clockingIn: Bool) -> ClockLinkAction {
+    guard lunch.active?.clockLink == true else { return .none }
+    return clockLinkAction(clockingIn: clockingIn)
+  }
+
   /// What to do with the link after clocking in or out from the menu bar.
   func clockLinkAction(clockingIn: Bool) -> ClockLinkAction {
     guard let link = clockingIn ? clockInLink : clockOutLink else { return .none }
@@ -119,6 +134,20 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   /// window break preset; without, a setting.
   var lunch: LunchRule {
     didSet { if lunch != oldValue && !loading { saveLunch() } }
+  }
+
+  /// An SF Symbol for breaks you start from the menu bar, and scheduled ones
+  /// with none of their own; nil for the cup. Shared through the store.
+  var breakIcon: String? {
+    didSet { if breakIcon != oldValue && !loading { save(Self.breakIconSetting, breakIcon) } }
+  }
+
+  /// The symbol a break you start yourself shows.
+  var breakSymbol: String { BreakIcon.symbol(breakIcon, or: BreakIcon.rest) }
+
+  /// The scheduled break a break on the clock is on its day, if any.
+  func scheduledBreak(start: Date, end: Date?, calendar: Calendar = .current) -> ScheduledBreak? {
+    scheduledBreaks.first { $0.matches(start: start, end: end, calendar: calendar) }
   }
 
   /// Breaks at set times on set days, put on each new day's shift. They
@@ -169,6 +198,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let clockOutLinkSetting = "clock_out_link"
   static let clockInLinkSetting = "clock_in_link"
   static let clockLinkModeKey = "clockLinkMode"
+  static let breakIconSetting = "break_icon"
   static let migratedKey = "clockOutLink.migratedToStore"
   static let autoSwitchKey = "autoSwitch"
   static let autoSwitchDelayKey = "autoSwitch.delay"
@@ -199,6 +229,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     autoSwitchDelay = defaults.object(forKey: Self.autoSwitchDelayKey) as? TimeInterval ?? 30
     autoSwitchCountdown =
       defaults.object(forKey: Self.autoSwitchCountdownKey) as? TimeInterval ?? 10
+    breakIcon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)
+      .flatMap { $0.isEmpty ? nil : $0 }
 
     let saved = defaults.string(forKey: Self.clockOutLinkKey)
     guard let store else {
@@ -238,6 +270,13 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
       separateClockInLink = inLink
       loading = false
     }
+    let icon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)
+      .flatMap { $0.isEmpty ? nil : $0 }
+    if icon != breakIcon {
+      loading = true
+      breakIcon = icon
+      loading = false
+    }
     loadPresets()
     do {
       let link = try store.setting(Self.clockOutLinkSetting).flatMap(Self.link(from:))
@@ -274,7 +313,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     }
     let id = lunchID ?? UUID()
     do {
-      try store.putBreakPreset(BreakPresets.row(lunch, id: id), name: "Lunch")
+      try store.putBreakPreset(BreakPresets.row(lunch, id: id), name: "Lunch", icon: lunch.icon)
       lunchID = id
     } catch {
       log("save lunch:", error)
@@ -286,7 +325,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     do {
       for brk in scheduledBreaks where brk.isValid && before[brk.id] != brk {
-        try store.putBreakPreset(BreakPresets.row(brk), name: brk.name)
+        try store.putBreakPreset(BreakPresets.row(brk), name: brk.name, icon: brk.icon)
       }
       let ids = Set(scheduledBreaks.filter(\.isValid).map(\.id))
       for brk in old where brk.isValid && !ids.contains(brk.id) {

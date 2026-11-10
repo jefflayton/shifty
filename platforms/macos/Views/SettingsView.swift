@@ -117,6 +117,7 @@ struct SettingsPane: View {
         ForEach($preferences.scheduledBreaks) { $brk in
           ScheduledBreakEditor(
             brk: $brk,
+            restSymbol: preferences.breakSymbol,
             // A break made today otherwise waits for tomorrow's shift.
             addToday: shift.flatMap { shift in
               shift.todayBreak(for: brk, now: Date()) == nil
@@ -139,6 +140,18 @@ struct SettingsPane: View {
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
       }
+    }
+
+    Section {
+      SymbolPicker("Break icon", symbol: $preferences.breakIcon, fallback: BreakIcon.rest)
+    } header: {
+      Text("Other Breaks")
+    } footer: {
+      Text(
+        "Shown for breaks you start from the menu bar, and scheduled breaks without an icon of their own."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
     }
   }
 
@@ -180,8 +193,8 @@ struct SettingsPane: View {
   }
 }
 
-/// The lunch window's bounds and what counts as lunch. Reminders are alarms,
-/// set in the menu bar.
+/// The lunch window's bounds, what counts as lunch, its icon, and whether
+/// it's clocked out for. Reminders are alarms, set in the menu bar.
 struct LunchSettings: View {
   @Binding var rule: LunchRule
 
@@ -197,12 +210,19 @@ struct LunchSettings: View {
     DurationStepper(
       "Lunch is a break of at least", value: $rule.minimum, in: (5 * 60)...(2 * 3600),
       step: 5 * 60)
+    SymbolPicker("Icon", symbol: $rule.icon, fallback: BreakIcon.lunch)
+    Toggle(isOn: $rule.clockLink) {
+      Text("Clock out for lunch")
+      Text("Start Break and End Lunch in the menu bar offer your clock links, like Clock Out and Clock In.")
+    }
   }
 }
 
 /// One scheduled break: its name, days, and times.
 struct ScheduledBreakEditor: View {
   @Binding var brk: ScheduledBreak
+  /// The icon it shows without one of its own.
+  var restSymbol = BreakIcon.rest
   /// Puts it on today's shift; nil when it doesn't fit there.
   var addToday: (() -> Void)? = nil
   let onRemove: () -> Void
@@ -212,6 +232,7 @@ struct ScheduledBreakEditor: View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
         RemoveButton(help: "Remove this break", action: onRemove)
+        SymbolPicker("Icon", symbol: $brk.icon, fallback: restSymbol, compact: true)
         TextField("Name", text: $brk.name, prompt: Text("Name, like Class"))
           .labelsHidden()
           .textFieldStyle(.plain)
