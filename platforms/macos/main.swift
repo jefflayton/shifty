@@ -61,6 +61,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       model: model, preferences: preferences, controller: .shared)
     AlarmController.shared.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
     AlarmController.shared.endShift = { [weak self] in self?.clockOutFromAlarm() ?? false }
+    AlarmController.shared.snoozeLength = { [weak self] in
+      self?.preferences.snoozeLength ?? Preferences.defaultSnooze
+    }
     watchStore()
 
     setupMenu()
