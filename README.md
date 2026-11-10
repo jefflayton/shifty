@@ -149,8 +149,10 @@ Add alarms from the **+** next to *Alarms*:
 During a break, alarms that follow clock out wait for it to end, since clock out isn't known
 until then. Set-time alarms still ring, so one can remind you when to come back.
 
-When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** (5 min) and
-**Stop**. A notification is scheduled as a backup in case Shifty isn't running.
+When an alarm rings, Shifty plays its alarm sound and shows a window with **Snooze** and
+**Stop**. Snooze waits 5 minutes unless you change it under **Alarms** in **Settings…** (1 to 60
+minutes, kept in the `snooze_secs` setting). A notification is scheduled as a backup in case
+Shifty isn't running.
 
 To clock out from the alarm, set the clock link in **Settings…** to your timeclock page. Alarms
 then show a **Clock Out** button that opens it and stops the alarm. If you clock in somewhere else,
