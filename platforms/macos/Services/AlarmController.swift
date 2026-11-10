@@ -32,12 +32,13 @@ final class AlarmController: ObservableObject {
   var endShift: () -> Bool = { false }
   /// Whether there's a shift in progress for Clock Out to end.
   var isClockedIn: () -> Bool = { false }
+  /// How long Snooze puts an alarm off, from Settings.
+  var snoozeLength: () -> TimeInterval = { Preferences.defaultSnooze }
 
   private var player: AVAudioPlayer?
   private var attentionRequestId = 0
   private var alarmWindow: NSWindow?
   private var activityToken: NSObjectProtocol?
-  private let snoozeInterval: TimeInterval = 5 * 60
   /// The notification backstop only matters if the app isn't running, so it
   /// trails the in-app alarm, which cancels it on firing.
   private let backstopDelay: TimeInterval = 5
@@ -170,7 +171,7 @@ final class AlarmController: ObservableObject {
     refreshRingingState()
     schedule(
       id: id, title: a.title, body: a.body, link: a.link, clocksOut: a.clocksOut,
-      at: Date().addingTimeInterval(snoozeInterval), snoozed: true)
+      at: Date().addingTimeInterval(snoozeLength()), snoozed: true)
   }
 
   private func refreshRingingState() {
