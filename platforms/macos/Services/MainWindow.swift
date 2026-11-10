@@ -41,8 +41,9 @@ final class MainWindow: NSObject, NSWindowDelegate {
   }
 
   private func makeWindow() -> NSWindow {
+    let size = Self.defaultSize()
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1200, height: 740),
+      contentRect: NSRect(origin: .zero, size: size),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered, defer: false)
     window.title = appName
@@ -51,13 +52,25 @@ final class MainWindow: NSObject, NSWindowDelegate {
       rootView: MainView(timesheet: timesheet, projects: projects, navigation: navigation))
     // Let the views' .toolbar and titles fill the window's.
     host.sceneBridgingOptions = [.toolbars, .title]
+    // Only hold the window to the content's minimum. By default SwiftUI
+    // also sizes it to the content's ideal size, shrinking it.
+    host.sizingOptions = [.minSize]
     window.contentViewController = host
     window.toolbarStyle = .unified
     window.delegate = self
+    window.setContentSize(size)
     window.center()
-    // A new name: frames saved before the sidebar are too narrow for it.
-    window.setFrameAutosaveName("MainWindow.v2")
+    // A new name for the bigger default; a size you set after it is kept.
+    window.setFrameAutosaveName("MainWindow.v3")
     return window
+  }
+
+  /// Roomy, but within the screen: up to 1440×900, at most 90% of it.
+  static func defaultSize(screen: NSScreen? = .main) -> NSSize {
+    let visible = screen?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
+    return NSSize(
+      width: min(1440, max(940, visible.width * 0.9)),
+      height: min(900, max(520, visible.height * 0.9)))
   }
 
   /// Every screen is cheap to read, so all stay current.
