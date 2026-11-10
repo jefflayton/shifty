@@ -235,6 +235,8 @@ fn buildMacOS(
     const inst_info_plist = b.addInstallFile(info_plist, "Shifty.app/Contents/Info.plist");
 
     const inst_alarm = b.addInstallFile(b.path(macos ++ "/Resources/alarm.caf"), "Shifty.app/Contents/Resources/alarm.caf");
+    // Played when auto-switch's banner offers a switch.
+    const inst_notification = b.addInstallFile(b.path(macos ++ "/Resources/notification.caf"), "Shifty.app/Contents/Resources/notification.caf");
 
     // Install Sparkle
     const sparkle_dep = b.dependency("sparkle", .{
@@ -335,6 +337,7 @@ fn buildMacOS(
     link.step.dependOn(&inst_app.step);
     link.step.dependOn(&inst_info_plist.step);
     link.step.dependOn(&inst_alarm.step);
+    link.step.dependOn(&inst_notification.step);
 
     // Sign inside-out, WITHOUT --deep. --deep would re-sign (and clobber)
     // Sparkle.framework's own valid signature; Sparkle then refuses updates.

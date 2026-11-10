@@ -189,7 +189,7 @@ Turn on **Settings… → Auto-Switch** and the running timer follows what you'r
 repos, folders, and apps to projects from the Projects window, the popover's **Link to …** (shown
 while you're somewhere nothing links), or `shifty link`. While a timer runs, stay a while (30
 seconds by default) in a place linked to another project and a banner at the top of the screen
-counts down to switching. When it runs out, the timer switches from when you got there; **Switch
+chimes and counts down to switching. When it runs out, the timer switches from when you got there; **Switch
 Now** and **Keep …** decide sooner, and **Undo** puts it back. Clocked in with no timer running
 (and not on a break), it offers to start one the same way. Places nothing links, like a browser,
 change nothing.

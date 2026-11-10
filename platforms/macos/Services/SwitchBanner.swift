@@ -10,6 +10,10 @@ final class SwitchBanner {
   private let model: AutoSwitchModel
   private var panel: NSPanel?
   private var timer: Timer?
+  /// The offer on screen, so its sound plays once, when it comes up.
+  private var shown: AutoSwitchModel.Offer?
+  /// Held while it plays.
+  private var sound: NSSound?
 
   init(model: AutoSwitchModel) {
     self.model = model
@@ -19,6 +23,8 @@ final class SwitchBanner {
   func update() {
     timer?.invalidate()
     timer = nil
+    if let offer = model.offer, offer.target != shown?.target { chime() }
+    shown = model.offer
     let due = model.offer?.deadline ?? model.switched?.until
     guard let due else {
       panel?.orderOut(nil)
@@ -61,6 +67,16 @@ final class SwitchBanner {
     host.sizingOptions = []
     panel.contentView = host
     return panel
+  }
+
+  /// The offer's sound, `notification.caf`.
+  private func chime() {
+    guard let url = Bundle.main.url(forResource: "notification", withExtension: "caf"),
+      let sound = NSSound(contentsOf: url, byReference: true)
+    else { return }
+    self.sound?.stop()
+    self.sound = sound
+    sound.play()
   }
 
   /// The banner's size, as last laid out.
