@@ -93,10 +93,12 @@ open then; a timer you start during the break keeps running.
 For a break you didn't plan, click **Start Break** when you leave and **End Break** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
-The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
-window. **General**: the days you work, what the menu bar shows (clock-out time, time left, time
-until your next break, or just the icon), and whether Shifty opens at login. **Breaks**: the lunch
-window and scheduled breaks. **Clock Links**: the links Clock In and Clock Out open.
+The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens settings in
+Shifty's window, under **Settings** in its sidebar. **General**: the days you work, the command
+line tool, what the menu bar shows (clock-out time, time left, time until your next break, or just
+the icon), whether Shifty opens at login, and alarm snooze. **Breaks**: the lunch window and
+scheduled breaks. **Auto-Switch**: see below. **Clock Links**: the links Clock In and Clock Out
+open.
 
 Stay past clock out while you're clocked in, and Shifty counts the time over: **Time Left** (and
 **Time Until Break**, with no break left) reads `+25m`, and the popover shows how far over you
@@ -162,7 +164,7 @@ without it clocking in uses the clock-out link (`clock_out_link`).
 ### Timesheet and projects
 
 **Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Pick
-Timesheet or Projects in its sidebar (⌘1, ⌘2).
+Timesheet or Projects in its sidebar (⌘1, ⌘2), or a page of settings below them.
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
   by project inside the time you were on shift; click a day to jump to it. A day's shift sits
@@ -187,7 +189,7 @@ Timesheet or Projects in its sidebar (⌘1, ⌘2).
 
 ### Auto-switch
 
-Turn on **Settings… → Auto-Switch** and the running timer follows what you're working on. Link
+Turn on **Settings → Auto-Switch** and the running timer follows what you're working on. Link
 repos, folders, and apps to projects from the Projects window, the popover's **Link to …** (shown
 while you're somewhere nothing links), or `shifty link`. While a timer runs, stay a while (30
 seconds by default) in a place linked to another project and a banner at the top of the screen

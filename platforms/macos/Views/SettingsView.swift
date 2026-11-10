@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The Settings window's tabs.
-enum SettingsTab: CaseIterable {
+/// The pages of settings, in the main window's sidebar.
+enum SettingsTab: CaseIterable, Hashable {
   case general, breaks, autoSwitch, clockLinks
 
   var title: String {
@@ -23,8 +23,9 @@ enum SettingsTab: CaseIterable {
   }
 }
 
-/// One tab of the Settings window: the days you work, the menu bar and
-/// alarms; breaks (the lunch window and scheduled ones); or the clock links.
+/// One page of settings: the days you work, the command line tool, and the
+/// menu bar; breaks (the lunch window and scheduled ones); auto-switch; or
+/// the clock links.
 struct SettingsPane: View {
   let tab: SettingsTab
   @Bindable var preferences: Preferences
@@ -43,15 +44,14 @@ struct SettingsPane: View {
       }
     }
     .formStyle(.grouped)
-    .scrollDisabled(tab != .breaks)
-    .frame(width: 520)
-    // Breaks grow with each scheduled one, so that tab scrolls; the others
-    // are as tall as what's in them.
-    .frame(height: tab == .breaks ? 560 : nil)
-    .fixedSize(horizontal: false, vertical: tab != .breaks)
-    // While the window resizes to another tab, stay at its top.
-    .frame(maxHeight: .infinity, alignment: .top)
+    // A readable column down the middle of a wide window, while the form
+    // (and its edge under the toolbar) still spans all of it.
+    .contentMargins(.horizontal, max(0, (width - Self.column) / 2), for: .scrollContent)
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
   }
+
+  @State private var width: CGFloat = 0
+  static let column: CGFloat = 680
 
   @ViewBuilder private var general: some View {
     Section {

@@ -1,39 +1,49 @@
 import AppKit
 import SwiftUI
 
-/// The main window: the timesheet and projects, picked in a sidebar.
-/// Shifty lives in the menu bar; while this is open it's also a regular app
-/// with a Dock icon and menus (see `AppWindows`). It needs the store;
-/// settings have their own window.
+/// The main window: the timesheet, projects, and settings, picked in a
+/// sidebar. Shifty lives in the menu bar; while this is open it's also a
+/// regular app with a Dock icon and menus (see `AppWindows`). Without the
+/// store it has only settings.
 @MainActor
 final class MainWindow: NSObject, NSWindowDelegate {
-  private let timesheet: TimesheetModel
-  private let projects: ProjectsModel
+  private let timesheet: TimesheetModel?
+  private let projects: ProjectsModel?
   private let preferences: Preferences
+  private let loginItem: LoginItem
+  private let shift: ShiftModel?
   private let navigation = MainNavigation()
   private var window: NSWindow?
   /// The window's undo: timesheet changes, and typing in its fields.
   private let undoManager = UndoManager()
 
-  init(store: ShiftStore, preferences: Preferences) {
-    timesheet = TimesheetModel(store: store, preferences: preferences)
-    projects = ProjectsModel(store: store)
+  init(store: ShiftStore?, preferences: Preferences, loginItem: LoginItem, shift: ShiftModel?) {
+    timesheet = store.map { TimesheetModel(store: $0, preferences: preferences) }
+    projects = store.map { ProjectsModel(store: $0) }
     self.preferences = preferences
+    self.loginItem = loginItem
+    self.shift = shift
     super.init()
-    timesheet.undoManager = undoManager
+    timesheet?.undoManager = undoManager
+    if store == nil { navigation.screen = .settings(.general) }
   }
 
   /// Called after the timesheet writes, e.g. moving a clock in.
   var didChange: (() -> Void)? {
-    get { timesheet.didChange }
-    set { timesheet.didChange = newValue }
+    get { timesheet?.didChange }
+    set { timesheet?.didChange = newValue }
   }
 
   var isVisible: Bool { window?.isVisible ?? false }
+  /// Whether it's showing a page of settings.
+  var showsSettings: Bool { navigation.screen.isSettings }
 
-  /// Shows the window, on `screen` if given.
+  /// Shows the window, on `screen` if given. Without the store, the
+  /// timesheet and projects fall back to settings.
   func show(_ screen: MainScreen? = nil) {
-    if let screen { navigation.screen = screen }
+    if let screen {
+      navigation.screen = timesheet == nil && !screen.isSettings ? .settings(.general) : screen
+    }
     let window = self.window ?? makeWindow()
     self.window = window
     reload()
@@ -42,29 +52,43 @@ final class MainWindow: NSObject, NSWindowDelegate {
 
   private func makeWindow() -> NSWindow {
     let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1200, height: 740),
+      contentRect: NSRect(origin: .zero, size: Self.defaultSize()),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       backing: .buffered, defer: false)
     window.title = appName
     window.isReleasedWhenClosed = false
     let host = NSHostingController(
-      rootView: MainView(timesheet: timesheet, projects: projects, navigation: navigation))
+      rootView: MainView(
+        timesheet: timesheet, projects: projects, navigation: navigation,
+        preferences: preferences, loginItem: loginItem, shift: shift))
     // Let the views' .toolbar and titles fill the window's.
     host.sceneBridgingOptions = [.toolbars, .title]
+    // The window keeps the size it's given; SwiftUI's would shrink it to fit.
+    host.sizingOptions = [.minSize]
     window.contentViewController = host
     window.toolbarStyle = .unified
     window.delegate = self
+    window.setContentSize(Self.defaultSize())
     window.center()
-    // A new name: frames saved before the sidebar are too narrow for it.
-    window.setFrameAutosaveName("MainWindow.v2")
+    // A new name for the bigger default; a frame you've saved since wins.
+    window.setFrameAutosaveName("MainWindow.v3")
     return window
+  }
+
+  /// Roomy, but never past the screen: up to 1440×900, leaving a margin.
+  static func defaultSize(screen: NSScreen? = .main) -> NSSize {
+    let visible = screen?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
+    return NSSize(
+      width: min(1440, max(940, visible.width * 0.9)),
+      height: min(900, max(560, visible.height * 0.9)))
   }
 
   /// Every screen is cheap to read, so all stay current.
   func reload() {
-    timesheet.reload()
-    projects.reload()
+    timesheet?.reload()
+    projects?.reload()
     preferences.pull()
+    if showsSettings { loginItem.refresh() }
   }
 
   func windowDidBecomeKey(_ notification: Notification) {

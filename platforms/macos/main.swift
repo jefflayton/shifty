@@ -16,9 +16,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   let store = AppDelegate.openStore()
   lazy var model = ShiftModel.load(store: store)
   lazy var preferences = Preferences(store: store)
-  /// The timesheet and projects; nil without the store.
-  lazy var mainWindow: MainWindow? = store.map { store in
-    let window = MainWindow(store: store, preferences: preferences)
+  /// The timesheet, projects, and settings; only settings without the
+  /// store.
+  lazy var mainWindow: MainWindow = {
+    let window = MainWindow(
+      store: store, preferences: preferences, loginItem: loginItem,
+      shift: store == nil ? nil : model)
     // A clock in or break moved on the timesheet: the popover reads it before
     // it saves its own copy over it.
     window.didChange = { [weak self] in
@@ -26,15 +29,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       self?.tracking?.reload()
     }
     return window
-  }
-  lazy var settingsWindow = SettingsWindow(
-    preferences: preferences, loginItem: loginItem, shift: store == nil ? nil : model)
+  }()
   lazy var tracking = store.map { store in
     let tracking = TrackingModel(store: store)
     // Starting a timer ends a break in progress.
     tracking.didChange = { [weak self] in
       self?.model.pull()
-      if self?.mainWindow?.isVisible == true { self?.mainWindow?.reload() }
+      if self?.mainWindow.isVisible == true { self?.mainWindow.reload() }
     }
     return tracking
   }
@@ -108,7 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     if ProcessInfo.processInfo.environment["SHIFTY_OPEN_TIMESHEET"] != nil {
       // Active first, like a click on the popover, then the window.
       NSApp.activate()
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow?.show() }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.mainWindow.show() }
     }
 
     // Development: open the popover without clicking the status item.
@@ -148,12 +149,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     model.pull()
     preferences.pull()
     tracking?.reload()
-    if mainWindow?.isVisible == true { mainWindow?.reload() }
+    if mainWindow.isVisible == true { mainWindow.reload() }
   }
 
   func showMainWindow() {
     popover.close()
-    mainWindow?.show(.timesheet)
+    mainWindow.show(.timesheet)
   }
 
   @objc func showTimesheet() { showMainWindow() }
@@ -181,7 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
   @objc func showProjects() {
     popover.close()
-    mainWindow?.show(.projects)
+    mainWindow.show(.projects)
   }
 
   /// An alarm's Clock Out: ends the shift as the popover's would, without
@@ -190,7 +191,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     guard model.isClockedIn else { return false }
     model.clockOutNow()
     tracking?.reload()
-    if mainWindow?.isVisible == true { mainWindow?.reload() }
+    if mainWindow.isVisible == true { mainWindow.reload() }
     return true
   }
 
@@ -204,9 +205,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
   }
 
+  /// Settings, in the main window: the page you were on, else General.
   @objc func showSettings() {
     popover.close()
-    settingsWindow.show()
+    mainWindow.show(mainWindow.showsSettings ? nil : .settings(.general))
   }
 
   /// Clicking the Dock icon with the window closed (or minimized) shows it.
@@ -215,8 +217,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   {
     if !flag {
       popover.close()
-      // Without the store there's only settings.
-      if let mainWindow { mainWindow.show() } else { settingsWindow.show() }
+      mainWindow.show()
     }
     return true
   }
