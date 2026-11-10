@@ -8,6 +8,7 @@ const vxfw = vaxis.vxfw;
 
 const Calculator = @import("calc.zig").Calculator;
 const Tracker = @import("tracker.zig").Tracker;
+const Timesheet = @import("timesheet.zig").Timesheet;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -46,9 +47,15 @@ pub fn main(init: std.process.Init) !void {
     defer calc.deinit();
     try prefillCalculator(io, calc, &db, arena);
 
+    const ts = try gpa.create(Timesheet);
+    defer gpa.destroy(ts);
+    ts.* = .init(gpa, io, init.environ_map, &db);
+    defer ts.deinit();
+    ts.bind();
+
     const tracker = try gpa.create(Tracker);
     defer gpa.destroy(tracker);
-    tracker.* = .init(gpa, io, init.environ_map, &db, cwd, calc);
+    tracker.* = .init(gpa, io, init.environ_map, &db, cwd, calc, ts);
     defer tracker.deinit();
     tracker.bind();
 
@@ -79,4 +86,6 @@ fn prefillCalculator(io: Io, calc: *Calculator, db: *store.Store, arena: std.mem
 test {
     _ = @import("calc.zig");
     _ = @import("tracker.zig");
+    _ = @import("timesheet.zig");
+    _ = @import("ui.zig");
 }

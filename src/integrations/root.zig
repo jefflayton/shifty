@@ -7,7 +7,10 @@ test {
     _ = @import("place.zig");
     _ = @import("here.zig");
     _ = @import("ffi.zig");
+    _ = @import("clock_link.zig");
 }
+
+pub const clock_link = @import("clock_link.zig");
 
 pub const situ = @import("situ.zig");
 pub const git = @import("git.zig");
