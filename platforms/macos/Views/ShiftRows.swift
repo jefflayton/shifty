@@ -8,28 +8,31 @@ struct ShiftBlock: View {
   let day: Date
   let shifts: [ShiftStore.SheetShift]
   let now: Date
+  let isFocused: Bool
+  let focus: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 4) {
       ForEach(shifts) { shift in
         ShiftLine(model: model, shift: shift, now: now)
+          .selectableRow(model, .shift(shift.id), isFocused: isFocused, focus: focus)
       }
       DayTimeline(model: model, day: day, now: now)
-        .padding(.leading, 26)
+        .padding(.leading, 32)
+        .padding(.trailing, 6)
     }
-    .padding(.vertical, 8)
+    .padding(.vertical, 6)
   }
 }
 
-/// One shift: clock in and out (editable), time worked, its breaks, and
-/// what's worth knowing about it.
+/// One shift: clock in and out (editable), time worked, and what's worth
+/// knowing about it. Its breaks are rows of their own below.
 struct ShiftLine: View {
   let model: TimesheetModel
   let shift: ShiftStore.SheetShift
   let now: Date
 
   @State private var hovered = false
-  @State private var confirmingDelete = false
 
   var body: some View {
     let times = model.times(of: shift)
@@ -45,7 +48,9 @@ struct ShiftLine: View {
           .help("Clock in and out")
 
         HStack(spacing: 4) {
-          TimeField("Clock in", times.start, set: { model.setStart(shift, to: $0) })
+          TimeField(
+            "Clock in", times.start, focusRequested: model.editRequest == .shift(shift.id),
+            onFocused: { model.editRequest = nil }, set: { model.setStart(shift, to: $0) })
           Text("–").foregroundStyle(.secondary)
           if let end = times.end {
             TimeField("Clock out", end, set: { model.setEnd(shift, to: $0) })
@@ -71,13 +76,6 @@ struct ShiftLine: View {
             .help("Past the shift's \(TimesheetFormat.duration(shift.length))")
         }
 
-        HStack(spacing: 6) {
-          ForEach(shift.breaks) { brk in
-            BreakChip(
-              model: model, shift: shift, brk: brk, lunch: lunch,
-              now: now)
-          }
-        }
 
         Spacer(minLength: 8)
 
@@ -88,7 +86,7 @@ struct ShiftLine: View {
             .controlSize(.small)
             .help("End the shift now")
         }
-        Button { confirmingDelete = true } label: {
+        Button { model.delete(shift) } label: {
           Image(systemName: "trash").foregroundStyle(.secondary)
         }
         .buttonStyle(.borderless)
@@ -107,20 +105,23 @@ struct ShiftLine: View {
     .onHover { hovered = $0 }
     .contextMenu {
       if open { Button("Clock Out") { model.clockOut() } }
-      Button("Add Break") { model.addBreak(to: shift) }
+      Button("Add Break") {
+        if let id = model.addBreak(to: shift) { model.selection = .brk(id) }
+      }
       Divider()
-      Button("Delete Shift…", role: .destructive) { confirmingDelete = true }
-    }
-    .alert("Delete this shift?", isPresented: $confirmingDelete) {
+      Button("Copy") { copy(model.text(of: .shift(shift.id), now: now)) }
+      Divider()
       Button("Delete Shift", role: .destructive) { model.delete(shift) }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        open
-          ? "You'll be clocked out, and the shift and its breaks are removed. Time tracked to projects stays."
-          : "The shift and its breaks are removed. Time tracked to projects stays.")
     }
   }
+}
+
+/// Puts a row's text on the clipboard.
+@MainActor
+func copy(_ text: String?) {
+  guard let text else { return }
+  NSPasteboard.general.clearContents()
+  NSPasteboard.general.setString(text, forType: .string)
 }
 
 /// The one thing to say about a shift, most pressing first: lunch, then
@@ -147,100 +148,93 @@ struct ShiftNote: View {
   }
 }
 
-/// A break on the shift line: its times, or "Lunch" for the one that was.
-/// Click to change or remove it.
-struct BreakChip: View {
+/// A break, as a row among the day's entries: its times (editable), how
+/// long, and whether it was lunch.
+struct BreakLine: View {
   let model: TimesheetModel
   let shift: ShiftStore.SheetShift
   let brk: ShiftStore.SheetBreak
   let lunch: LunchPlan?
   let now: Date
 
-  @State private var editing = false
+  @State private var hovered = false
 
   var body: some View {
-    let times = model.times(of: brk)
-    let isLunch = lunch?.lunch?.start == brk.start
-    let late = isLunch && lunch?.status(now: now) == .late
-    let span =
-      times.end.map { (times.start..<max($0, times.start)).formatted(.interval.hour().minute()) }
-      ?? "since \(times.start.formatted(date: .omitted, time: .shortened))"
-
-    Button { editing = true } label: {
-      Label(span, systemImage: isLunch ? "fork.knife" : "cup.and.saucer")
-        .font(.callout)
-        .lineLimit(1)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .foregroundStyle(late ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-        .background(.quinary, in: Capsule())
-        .contentShape(Capsule())
-    }
-    .buttonStyle(.plain)
-    .fixedSize()
-    .help(
-      late
-        ? "Lunch started after \(lunch!.closes.formatted(date: .omitted, time: .shortened))"
-        : isLunch ? "Lunch" : "Break")
-    .popover(isPresented: $editing, arrowEdge: .bottom) {
-      BreakEditor(model: model, shift: shift, brk: brk, now: now) { editing = false }
-    }
-  }
-}
-
-/// Changes or removes a break.
-struct BreakEditor: View {
-  let model: TimesheetModel
-  let shift: ShiftStore.SheetShift
-  let brk: ShiftStore.SheetBreak
-  let now: Date
-  let done: () -> Void
-
-  var body: some View {
-    // The latest copy: the chip that opened this may hold an older one.
-    let brk = model.sheet.shifts.first { $0.id == shift.id }?.breaks.first { $0.id == self.brk.id }
-      ?? self.brk
     let times = model.times(of: brk)
     let invalid =
       times.end.map { !TimesheetModel.isValidBreak(start: times.start, end: $0) } ?? false
+    let running = brk.end == nil
+    let isLunch = lunch?.lunch?.start == brk.start
+    let late = isLunch && lunch?.status(now: now) == .late
 
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 4) {
-        TimeField("Break start", times.start, set: { model.setStart(brk, of: shift, to: $0) })
-        Text("–").foregroundStyle(.secondary)
-        if let end = times.end {
-          TimeField("Break end", end, set: { model.setEnd(brk, of: shift, to: $0) })
-        } else {
-          RunningLabel()
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 10) {
+        Image(systemName: isLunch ? "fork.knife" : "cup.and.saucer")
+          .foregroundStyle(.secondary)
+          .frame(width: 16)
+
+        HStack(spacing: 4) {
+          TimeField(
+            "Break start", times.start, focusRequested: model.editRequest == .brk(brk.id),
+            onFocused: { model.editRequest = nil },
+            set: { model.setStart(brk, of: shift, to: $0) })
+          Text("–").foregroundStyle(.secondary)
+          if let end = times.end {
+            TimeField("Break end", end, set: { model.setEnd(brk, of: shift, to: $0) })
+          } else {
+            RunningLabel()
+          }
         }
+        .frame(minWidth: 146, alignment: .leading)
+
         Text(TimesheetFormat.duration((times.end ?? now).timeIntervalSince(times.start)))
+          .font(.system(.body, design: .rounded))
           .monospacedDigit()
           .foregroundStyle(invalid ? .red : .secondary)
-          .padding(.leading, 6)
+          .frame(width: 62, alignment: .trailing)
+
+        Text(isLunch ? "Lunch" : "Break")
+          .foregroundStyle(.secondary)
+          .frame(width: 140, alignment: .leading)
+
+        if late {
+          Label("Late", systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.red)
+            .help("Lunch started after \(lunch!.closes.formatted(date: .omitted, time: .shortened))")
+        }
+
+        Spacer(minLength: 8)
+
+        if running {
+          Button("End Break") { model.endBreak(brk, of: shift, now: now) }
+            .controlSize(.small)
+            .help("End this break now")
+        }
+
+        Button { model.delete(brk) } label: {
+          Image(systemName: "trash").foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Delete this break")
+        .opacity(hovered ? 1 : 0)
+        .accessibilityHidden(!hovered)
       }
       if invalid {
-        Text("A break must end after it starts, within 12 hours.")
+        Text("A break must end after it starts, within 12 hours. This isn't saved yet.")
           .font(.caption)
           .foregroundStyle(.red)
+          .padding(.leading, 26)
       }
-      HStack {
-        Button("Delete Break", role: .destructive) {
-          done()
-          model.delete(brk)
-        }
-        Spacer()
-        if brk.end == nil {
-          Button("End Break") {
-            done()
-            model.endBreak(brk, of: shift)
-          }
-          .keyboardShortcut(.defaultAction)
-        }
-      }
-      .controlSize(.small)
     }
-    .padding(12)
-    .fixedSize()
+    .padding(.vertical, invalid ? 6 : 0)
+    .contentShape(Rectangle())
+    .onHover { hovered = $0 }
+    .contextMenu {
+      if running { Button("End Break") { model.endBreak(brk, of: shift, now: now) } }
+      Button("Copy") { copy(model.text(of: .brk(brk.id), now: now)) }
+      Divider()
+      Button("Delete Break", role: .destructive) { model.delete(brk) }
+    }
   }
 }
 
@@ -399,25 +393,5 @@ struct LunchStatus: View {
     case .onLunch, .taken, .late:
       EmptyView()
     }
-  }
-}
-
-/// An hour-and-minute field for a time that's saved as it's changed.
-struct TimeField: View {
-  let label: String
-  let value: Date
-  let set: (Date) -> Void
-
-  init(_ label: String, _ value: Date, set: @escaping (Date) -> Void) {
-    self.label = label
-    self.value = value
-    self.set = set
-  }
-
-  var body: some View {
-    DatePicker(label, selection: Binding(get: { value }, set: set), displayedComponents: .hourAndMinute)
-      .datePickerStyle(.field)
-      .labelsHidden()
-      .fixedSize()
   }
 }

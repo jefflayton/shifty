@@ -37,6 +37,9 @@ struct FormSection<Accessory: View, Content: View>: View {
 /// Rows on a shared rounded fill, separated by hairlines.
 struct GroupedRows<Content: View>: View {
   var minRowHeight: CGFloat = 34
+  /// Space between a row and the fill's edges. Selectable rows take less
+  /// and pad themselves, so their highlight sits just inside the fill.
+  var rowInset: CGFloat = 10
   @ViewBuilder var content: Content
 
   var body: some View {
@@ -47,7 +50,7 @@ struct GroupedRows<Content: View>: View {
             Divider().padding(.leading, 10)
           }
           row
-            .padding(.horizontal, 10)
+            .padding(.horizontal, rowInset)
             .frame(minHeight: minRowHeight)
         }
       }

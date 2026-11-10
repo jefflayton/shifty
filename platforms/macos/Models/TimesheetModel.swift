@@ -22,6 +22,16 @@ import Observation
   /// Called after each write, so the popover picks up a clock in or break
   /// moved here before it saves over it.
   @ObservationIgnored var didChange: (() -> Void)?
+  /// The window's, so Edit > Undo takes back changes made here.
+  @ObservationIgnored var undoManager: UndoManager?
+  /// The last change registered with the undo manager, so a time typed a
+  /// digit at a time undoes in one step.
+  @ObservationIgnored private var lastUndo: (key: String, at: Date)?
+
+  /// The selected shift, entry, or break.
+  var selection: Item?
+  /// The row whose start time should take the keyboard, as Return asks.
+  var editRequest: Item?
 
   /// An entry's, shift's, or break's start and end as typed. Kept out of
   /// the store until the end comes after the start.
@@ -110,6 +120,117 @@ import Observation
     }
   }
 
+  // MARK: Rows and selection
+
+  /// Something on the timesheet you can select.
+  enum Item: Hashable {
+    case shift(UUID)
+    case entry(UUID)
+    case brk(UUID)
+  }
+
+  /// A line under a day's shift: time tracked to a project, or a break.
+  enum Row: Identifiable {
+    case entry(ShiftStore.Entry)
+    case brk(ShiftStore.SheetBreak, shift: ShiftStore.SheetShift)
+
+    var id: Item {
+      switch self {
+      case .entry(let e): .entry(e.id)
+      case .brk(let b, _): .brk(b.id)
+      }
+    }
+
+    var start: Date {
+      switch self {
+      case .entry(let e): e.start
+      case .brk(let b, _): b.start
+      }
+    }
+  }
+
+  /// A day's entries and its shifts' breaks, in the order they started.
+  func rows(on day: Date) -> [Row] {
+    let breaks = shifts(on: day).flatMap { shift in shift.breaks.map { Row.brk($0, shift: shift) } }
+    return (entries(on: day).map(Row.entry) + breaks).sorted { $0.start < $1.start }
+  }
+
+  /// Everything selectable, top to bottom, on the days that are open.
+  func items(now: Date = Date()) -> [Item] {
+    visibleDays.filter { !isCollapsed($0, now: now) }.flatMap { day in
+      shifts(on: day).map { Item.shift($0.id) } + rows(on: day).map(\.id)
+    }
+  }
+
+  /// Selects the item `offset` rows from the selection, or the first (or
+  /// last) with nothing selected.
+  func moveSelection(by offset: Int, now: Date = Date()) {
+    let all = items(now: now)
+    guard !all.isEmpty else { return }
+    if let selection, let i = all.firstIndex(of: selection) {
+      self.selection = all[min(max(i + offset, 0), all.count - 1)]
+    } else {
+      selection = offset < 0 ? all.last : all.first
+    }
+  }
+
+  /// Deletes what's selected and selects what's now in its place.
+  func deleteSelection(now: Date = Date()) {
+    guard let selection else { return }
+    let before = items(now: now)
+    switch selection {
+    case .shift(let id): if let shift = sheet.shifts.first(where: { $0.id == id }) { delete(shift) }
+    case .entry(let id): if let entry = sheet.entries.first(where: { $0.id == id }) { delete(entry) }
+    case .brk(let id): if let brk = breakAndShift(id)?.brk { delete(brk) }
+    }
+    let after = items(now: now)
+    guard let i = before.firstIndex(of: selection), !after.isEmpty else {
+      self.selection = nil
+      return
+    }
+    self.selection = after[min(i, after.count - 1)]
+  }
+
+  /// The day an item shows on.
+  func day(of item: Item) -> Date? {
+    days.first { day in
+      shifts(on: day).contains { .shift($0.id) == item } || rows(on: day).contains { $0.id == item }
+    }
+  }
+
+  /// A break and the shift it's on.
+  func breakAndShift(_ id: UUID) -> (brk: ShiftStore.SheetBreak, shift: ShiftStore.SheetShift)? {
+    for shift in sheet.shifts {
+      if let brk = shift.breaks.first(where: { $0.id == id }) { return (brk, shift) }
+    }
+    return nil
+  }
+
+  /// The selection as a line of text, for the clipboard.
+  func text(of item: Item, now: Date = Date()) -> String? {
+    func span(_ start: Date, _ end: Date?) -> String {
+      let s = start.formatted(date: .omitted, time: .shortened)
+      let e = end?.formatted(date: .omitted, time: .shortened) ?? "now"
+      return "\(s) – \(e)\t\(TimesheetFormat.duration((end ?? now).timeIntervalSince(start)))"
+    }
+    switch item {
+    case .shift(let id):
+      guard let shift = sheet.shifts.first(where: { $0.id == id }) else { return nil }
+      let t = times(of: shift)
+      return "Shift\t\(span(t.start, t.end))"
+    case .entry(let id):
+      guard let entry = sheet.entries.first(where: { $0.id == id }) else { return nil }
+      let t = times(of: entry)
+      let project = label(project: entry.projectId, workspace: entry.workspaceId) ?? "No project"
+      return ([project, span(t.start, t.end)] + (entry.note.map { [$0] } ?? []))
+        .joined(separator: "\t")
+    case .brk(let id):
+      guard let brk = breakAndShift(id)?.brk else { return nil }
+      let t = times(of: brk)
+      return "Break\t\(span(t.start, t.end))"
+    }
+  }
+
   // MARK: Navigation
 
   func showWeek(containing date: Date) {
@@ -117,6 +238,7 @@ import Observation
     guard start != weekStart else { return }
     weekStart = start
     drafts = [:]
+    selection = nil
     reload()
   }
 
@@ -297,9 +419,11 @@ import Observation
   @discardableResult
   func addEntry(on day: Date, now: Date = Date()) -> UUID? {
     let (start, end) = slot(on: day, now: now)
-    return write {
-      try store.addEntry(project: nil, workspace: nil, start: start, end: end)
-    }
+    guard
+      let id = write({ try store.addEntry(project: nil, workspace: nil, start: start, end: end) })
+    else { return nil }
+    registerUndo("Add Time") { $0.deleteEntry(id, action: "Add Time") }
+    return id
   }
 
   func slot(on day: Date, now: Date) -> (Date, Date) {
@@ -334,39 +458,29 @@ import Observation
   }
 
   func setProject(_ entry: ShiftStore.Entry, project: UUID?, workspace: UUID?) {
-    let entry = latest(entry)
-    write {
-      try store.editEntry(
-        entry.id, project: project, workspace: workspace, start: entry.start, end: entry.end,
-        note: entry.note)
-    }
+    var state = EntryState(latest(entry))
+    state.project = project
+    state.workspace = workspace
+    save(entry.id, state, action: "Change Project")
   }
 
   func setNote(_ entry: ShiftStore.Entry, to note: String) {
-    let entry = latest(entry)
     let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-    let value = trimmed.isEmpty ? nil : trimmed
-    guard value != entry.note else { return }
-    write {
-      try store.editEntry(
-        entry.id, project: entry.projectId, workspace: entry.workspaceId, start: entry.start,
-        end: entry.end, note: value)
-    }
+    var state = EntryState(latest(entry))
+    state.note = trimmed.isEmpty ? nil : trimmed
+    save(entry.id, state, action: "Change Note")
   }
 
   func stop(_ entry: ShiftStore.Entry, now: Date = Date()) {
     let entry = latest(entry)
     guard entry.end == nil else { return }
-    write {
-      try store.editEntry(
-        entry.id, project: entry.projectId, workspace: entry.workspaceId, start: entry.start,
-        end: max(now, entry.start.addingTimeInterval(1)), note: entry.note)
-    }
+    var state = EntryState(entry)
+    state.end = max(now, entry.start.addingTimeInterval(1))
+    save(entry.id, state, action: "Stop Timer")
   }
 
   func delete(_ entry: ShiftStore.Entry) {
-    drafts[entry.id] = nil
-    write { try store.deleteEntry(entry.id) }
+    deleteEntry(entry.id, action: "Delete Time")
   }
 
   /// Whether a draft's times can be saved.
@@ -375,14 +489,61 @@ import Observation
     return length > 0 && length <= maxEntry
   }
 
+  /// An entry's fields, to save and to put back on undo.
+  struct EntryState: Equatable {
+    var project: UUID?
+    var workspace: UUID?
+    var start: Date
+    var end: Date?
+    var note: String?
+
+    init(_ entry: ShiftStore.Entry) {
+      project = entry.projectId
+      workspace = entry.workspaceId
+      start = entry.start
+      end = entry.end
+      note = entry.note
+    }
+  }
+
+  /// Writes an entry's fields; undo puts back what they were. Edits of the
+  /// same entry's times in quick succession undo together.
+  private func save(_ id: UUID, _ state: EntryState, action: String, coalesce: Bool = false) {
+    guard let current = sheet.entries.first(where: { $0.id == id }) else { return }
+    let old = EntryState(current)
+    guard state != old else { return }
+    let saved = write {
+      try store.editEntry(
+        id, project: state.project, workspace: state.workspace, start: state.start,
+        end: state.end, note: state.note)
+    }
+    guard saved != nil else { return }
+    registerUndo(action, key: coalesce ? "entry \(id)" : nil) { $0.save(id, old, action: action) }
+  }
+
+  private func deleteEntry(_ id: UUID, action: String) {
+    drafts[id] = nil
+    guard write({ try store.deleteEntry(id) }) != nil else { return }
+    if case .entry(id)? = selection { selection = nil }
+    registerUndo(action) { $0.restoreEntry(id, action: action) }
+  }
+
+  private func restoreEntry(_ id: UUID, action: String) {
+    guard write({ try store.restoreEntry(id) }) != nil else { return }
+    registerUndo(action) { $0.deleteEntry(id, action: action) }
+  }
+
   // MARK: Shifts
 
   /// Records a shift on `day` that you forgot to clock in for: around the
   /// day's tracked time, or 9 to 5. Never in the future.
   @discardableResult
   func addShift(on day: Date, now: Date = Date()) -> UUID? {
-    guard let slot = shiftSlot(on: day, now: now) else { return nil }
-    return write { try store.addShift(start: slot.0, end: slot.1) }
+    guard let slot = shiftSlot(on: day, now: now),
+      let id = write({ try store.addShift(start: slot.0, end: slot.1) })
+    else { return nil }
+    registerUndo("Add Shift") { $0.deleteShift(id, action: "Add Shift") }
+    return id
   }
 
   func shiftSlot(on day: Date, now: Date) -> (Date, Date)? {
@@ -409,7 +570,7 @@ import Observation
     let current = times(of: shift)
     let start = ShiftTimes.on(current.start, timeOf: time, calendar: calendar)
     guard let end = current.end else {
-      write { try store.editShift(shift.id, clockIn: start, lengthSeconds: shift.targetSecs) }
+      setClockIn(shift.id, to: start, length: shift.targetSecs)
       return
     }
     saveShift(shift, start: start, end: Self.end(after: start, timeOf: end, calendar: calendar))
@@ -430,8 +591,7 @@ import Observation
   }
 
   func delete(_ shift: ShiftStore.SheetShift) {
-    drafts[shift.id] = nil
-    write { try store.deleteShift(shift.id) }
+    deleteShift(shift.id, action: "Delete Shift")
   }
 
   private func saveShift(_ shift: ShiftStore.SheetShift, start: Date, end: Date) {
@@ -440,7 +600,40 @@ import Observation
       return
     }
     drafts[shift.id] = nil
-    write { try store.setShiftTimes(shift.id, start: start, end: end) }
+    setTimes(shift.id, start: start, end: end)
+  }
+
+  /// Moves an ended shift; undo moves it back.
+  private func setTimes(_ id: UUID, start: Date, end: Date) {
+    guard let old = sheet.shifts.first(where: { $0.id == id }), let oldEnd = old.end,
+      old.start != start || oldEnd != end
+    else { return }
+    guard write({ try store.setShiftTimes(id, start: start, end: end) }) != nil else { return }
+    registerUndo("Change Shift", key: "shift \(id)") {
+      $0.setTimes(id, start: old.start, end: oldEnd)
+    }
+  }
+
+  /// Moves the open shift's clock in; undo moves it back.
+  private func setClockIn(_ id: UUID, to start: Date, length: Int64) {
+    guard let old = sheet.shifts.first(where: { $0.id == id }), old.start != start else { return }
+    guard write({ try store.editShift(id, clockIn: start, lengthSeconds: length) }) != nil
+    else { return }
+    registerUndo("Change Shift", key: "shift \(id)") {
+      $0.setClockIn(id, to: old.start, length: length)
+    }
+  }
+
+  private func deleteShift(_ id: UUID, action: String) {
+    drafts[id] = nil
+    guard write({ try store.deleteShift(id) }) != nil else { return }
+    if case .shift(id)? = selection { selection = nil }
+    registerUndo(action) { $0.restoreShift(id, action: action) }
+  }
+
+  private func restoreShift(_ id: UUID, action: String) {
+    guard write({ try store.restoreShift(id) }) != nil else { return }
+    registerUndo(action) { $0.deleteShift(id, action: action) }
   }
 
   // MARK: Breaks
@@ -458,11 +651,13 @@ import Observation
       start = Self.roundedToQuarter(
         shift.start.addingTimeInterval(end.timeIntervalSince(shift.start) / 2), calendar: calendar)
     }
-    let brk = ShiftStore.Break(id: UUID(), start: start, end: start.addingTimeInterval(30 * 60))
-    return write {
-      try store.putBreak(brk, shift: shift.id)
-      return brk.id
-    }
+    let id = UUID()
+    guard
+      putBreak(
+        id, shift: shift.id, start: start, end: start.addingTimeInterval(30 * 60),
+        action: "Add Break")
+    else { return nil }
+    return id
   }
 
   /// Moves a break's start to its first time after clock in; the end
@@ -482,12 +677,15 @@ import Observation
 
   /// Ends the break you're on.
   func endBreak(_ brk: ShiftStore.SheetBreak, of shift: ShiftStore.SheetShift, now: Date = Date()) {
-    saveBreak(brk, of: shift, start: brk.start, end: max(now, brk.start.addingTimeInterval(60)))
+    drafts[brk.id] = nil
+    putBreak(
+      brk.id, shift: shift.id, start: brk.start, end: max(now, brk.start.addingTimeInterval(60)),
+      action: "End Break")
   }
 
   func delete(_ brk: ShiftStore.SheetBreak) {
-    drafts[brk.id] = nil
-    write { try store.deleteBreak(brk.id) }
+    guard let shift = breakAndShift(brk.id)?.shift else { return }
+    deleteBreak(brk.id, shift: shift.id, action: "Delete Break")
   }
 
   /// Whether a break's times can be saved.
@@ -504,7 +702,59 @@ import Observation
       return
     }
     drafts[brk.id] = nil
-    write { try store.putBreak(.init(id: brk.id, start: start, end: end), shift: shift.id) }
+    putBreak(brk.id, shift: shift.id, start: start, end: end, action: "Change Break", coalesce: true)
+  }
+
+  /// Creates or replaces a break; undo puts back what was there, or
+  /// deletes it if nothing was.
+  @discardableResult
+  private func putBreak(
+    _ id: UUID, shift: UUID, start: Date, end: Date?, action: String, coalesce: Bool = false
+  ) -> Bool {
+    let old = breakAndShift(id)?.brk
+    if let old, old.start == start, old.end == end { return true }
+    guard write({ try store.putBreak(.init(id: id, start: start, end: end), shift: shift) }) != nil
+    else { return false }
+    registerUndo(action, key: coalesce ? "break \(id)" : nil) { model in
+      if let old {
+        model.putBreak(id, shift: shift, start: old.start, end: old.end, action: action)
+      } else {
+        model.deleteBreak(id, shift: shift, action: action)
+      }
+    }
+    return true
+  }
+
+  private func deleteBreak(_ id: UUID, shift: UUID, action: String) {
+    guard let old = breakAndShift(id)?.brk else { return }
+    drafts[id] = nil
+    guard write({ try store.deleteBreak(id) }) != nil else { return }
+    if case .brk(id)? = selection { selection = nil }
+    registerUndo(action) {
+      $0.putBreak(id, shift: shift, start: old.start, end: old.end, action: action)
+    }
+  }
+
+  // MARK: Undo
+
+  /// Registers `undo` under `action`, as one step. With a `key`, another
+  /// change with the same key within a few seconds joins this one, so a
+  /// time typed digit by digit undoes at once.
+  private func registerUndo(
+    _ action: String, key: String? = nil, _ undo: @escaping (TimesheetModel) -> Void
+  ) {
+    guard let undoManager else { return }
+    let replaying = undoManager.isUndoing || undoManager.isRedoing
+    let now = Date()
+    if !replaying, let key, let last = lastUndo, last.key == key,
+      now.timeIntervalSince(last.at) < 3, undoManager.canUndo
+    {
+      lastUndo = (key, now)
+      return
+    }
+    undoManager.registerUndo(withTarget: self) { undo($0) }
+    undoManager.setActionName(action)
+    lastUndo = replaying ? nil : key.map { ($0, now) }
   }
 
   func createProject(named name: String) -> UUID? {
@@ -520,26 +770,16 @@ import Observation
 
   private func edit(_ entry: ShiftStore.Entry, start: Date, end: Date?) {
     let entry = latest(entry)
+    var state = EntryState(entry)
+    state.start = start
+    state.end = end
     // A running entry only has a start.
-    guard let end else {
-      drafts[entry.id] = nil
-      write {
-        try store.editEntry(
-          entry.id, project: entry.projectId, workspace: entry.workspaceId, start: start,
-          end: nil, note: entry.note)
-      }
-      return
-    }
-    guard Self.isValid(start: start, end: end) else {
+    if let end, !Self.isValid(start: start, end: end) {
       drafts[entry.id] = Draft(start: start, end: end)
       return
     }
     drafts[entry.id] = nil
-    write {
-      try store.editEntry(
-        entry.id, project: entry.projectId, workspace: entry.workspaceId, start: start,
-        end: end, note: entry.note)
-    }
+    save(entry.id, state, action: "Change Time", coalesce: true)
   }
 
   /// The entry as last read: a view may hold an older copy, and writing
@@ -609,5 +849,18 @@ enum Spans {
   /// Seconds covered; `spans` shouldn't overlap.
   static func total(_ spans: [(Date, Date)]) -> TimeInterval {
     spans.reduce(0) { $0 + max(0, $1.1.timeIntervalSince($1.0)) }
+  }
+}
+
+enum TimesheetFormat {
+  /// "7h 30m", "45m", "8h": short enough for the strip and rows.
+  static func duration(_ seconds: TimeInterval) -> String {
+    let minutes = max(0, Int((seconds / 60).rounded()))
+    let (h, m) = (minutes / 60, minutes % 60)
+    switch (h, m) {
+    case (0, _): return "\(m)m"
+    case (_, 0): return "\(h)h"
+    default: return "\(h)h \(m)m"
+    }
   }
 }

@@ -90,13 +90,13 @@ same timer as `shifty start` and the TUI's, and a break or clock out stops it. A
 like a [scheduled one](#scheduled-breaks), stops it where the break begins, even if no Shifty was
 open then; a timer you start during the break keeps running.
 
-For a break you didn't plan, click **Start Break** when you leave and **End** when you're back.
+For a break you didn't plan, click **Start Break** when you leave and **End Break** when you're back.
 Until then, the menu bar icon turns into a cup and clock out moves later as the break goes on.
 
 The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
-screen of Shifty's window: what the menu bar shows (clock-out time, time left, time until your
-next break, or just the icon), whether Shifty opens at login, the clock links, the days you
-work, the lunch window, and scheduled breaks.
+window. **General**: the days you work, what the menu bar shows (clock-out time, time left, time
+until your next break, or just the icon), and whether Shifty opens at login. **Breaks**: the lunch
+window and scheduled breaks. **Clock Links**: the links Clock In and Clock Out open.
 
 Stay past clock out while you're clocked in, and Shifty counts the time over: **Time Left** (and
 **Time Until Break**, with no break left) reads `+25m`, and the popover shows how far over you
@@ -159,21 +159,28 @@ without it clocking in uses the clock-out link (`clock_out_link`).
 
 ### Timesheet and projects
 
-**Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Switch
-screens from its toolbar: Timesheet, Projects, and Settings.
+**Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Pick
+Timesheet or Projects in its sidebar (⌘1, ⌘2).
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
   by project inside the time you were on shift; click a day to jump to it. A day's shift sits
-  on top: clock in and out, time worked (and how far past the shift's length, like `+25m`), and
-  its breaks (click one to change it), over a timeline
-  where project time is laid on the shift, so time on shift that no project has shows as bare
-  shift. Edit times and entries in place; **Clock Out** ends the shift you're on. Add time, a forgotten shift, or a break with the day's **+**. Click
-  a day's header to open it or fold it down to its total (Option-click folds or opens every day);
-  every day but today starts folded, and clicking a day in the strip opens it.
-- **Days you work**: pick them from the menu by the week's dates, or in Settings. Other days are
+  on top: clock in and out and time worked (and how far past the shift's length, like `+25m`),
+  over a timeline where project time is laid on the shift, so time on shift that no project has
+  shows as bare shift. Below it, the day's entries and breaks are rows in the order they started.
+  Page weeks with the toolbar's arrows (⌘← ⌘→) and **Today** (⌘T); the week's totals by shift,
+  project, and client are in the inspector (⌥⌘I). **Clock Out** ends the shift you're on.
+  - **Edit in place**: click an hour or minute and type, or use the arrow keys. Every change,
+    deletes included, can be undone (⌘Z) and redone (⇧⌘Z).
+  - **Keyboard**: click a row to select it, then ↑/↓ moves between rows, Return edits its start
+    time, Delete deletes it, ⌘C copies it, and Esc clears the selection.
+  - **Add** time, a forgotten shift, or a break with the toolbar's **+** (on the selected row's
+    day, else today) or the **+** that shows on a day's header when you point at it.
+  - Click a day's header to open it or fold it down to its total (Option-click folds or opens
+    every day); every day but today starts folded, and clicking a day in the strip opens it.
+- **Days you work**: pick them from the toolbar's calendar menu, or in Settings. Other days are
   hidden unless they have time on them.
-- **Projects**: rename a project by editing its name, click its color to pick another, and delete
-  it from the trash button or its right-click menu. Deleting a project keeps its time, with no
+- **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
+  its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
   project.
 
 ## CLI

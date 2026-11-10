@@ -94,6 +94,12 @@ final class ShiftStore {
     try check(shifty_delete_shift(handle, ShiftyId(id), ts(now)))
   }
 
+  /// Brings back a deleted shift and the breaks deleted with it. Throws
+  /// `SHIFTY_CONFLICT` if it was open and another shift is open now.
+  func restoreShift(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_restore_shift(handle, ShiftyId(id), ts(now)))
+  }
+
   /// Stops the running entry where a planned break began after it started.
   /// Returns whether one was stopped.
   @discardableResult
@@ -314,6 +320,12 @@ final class ShiftStore {
     if result == SHIFTY_NONE { return false }
     try check(result)
     return true
+  }
+
+  /// Brings back a deleted entry as it was. Throws `SHIFTY_CONFLICT` if it
+  /// was running and another entry runs now.
+  func restoreEntry(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_restore_entry(handle, ShiftyId(id), ts(now)))
   }
 
   func deleteEntry(_ id: UUID, now: Date = Date()) throws {

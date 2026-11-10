@@ -5,65 +5,80 @@ import SwiftUI
 /// been used.
 struct ProjectsView: View {
   @Bindable var model: ProjectsModel
+  @State private var selection: UUID?
+  /// The project the delete confirmation is for.
+  @State private var deleting: ShiftStore.Project?
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
-        HStack(alignment: .firstTextBaseline) {
-          Text("Projects")
-            .font(.title2.weight(.semibold))
-          Spacer()
-          Button {
-            NewProjectPrompt.run(create: model.create(named:))
-          } label: {
-            Label("New Project", systemImage: "plus")
-          }
-        }
-
-        if let error = model.error {
-          Label(error, systemImage: "exclamationmark.triangle.fill")
-            .foregroundStyle(.red)
-            .font(.callout)
-        }
-
-        if model.projects.isEmpty {
-          VStack(alignment: .leading, spacing: 6) {
-            Text("No projects yet")
-              .font(.headline)
-            Text(
-              "Projects sort your time by what it's for. Create one here, then pick it on any entry in the timesheet."
-            )
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-          }
-          .padding(.top, 24)
-        } else {
-          GroupedRows(minRowHeight: 52) {
-            ForEach(model.projects) { project in
-              ProjectRow(model: model, project: project)
-            }
-          }
-          Text("Deleting a project keeps its time on the timesheet, under No project.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
+    List(selection: $selection) {
+      ForEach(model.projects) { project in
+        ProjectRow(model: model, project: project) { deleting = project }
+          .tag(project.id)
+      }
+    }
+    .listStyle(.inset)
+    .overlay {
+      if model.projects.isEmpty {
+        ContentUnavailableView {
+          Label("No Projects", systemImage: "folder")
+        } description: {
+          Text("Projects sort your time by what it's for. Pick one on any entry in the timesheet.")
+        } actions: {
+          Button("New Project") { NewProjectPrompt.run(create: model.create(named:)) }
         }
       }
-      .frame(maxWidth: 680)
-      .padding(24)
-      .frame(maxWidth: .infinity)
     }
-    .frame(minWidth: 820, minHeight: 520)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if let error = model.error {
+        Label(error, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.red)
+          .font(.callout)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 8)
+          .background(.bar)
+      }
+    }
+    .onDeleteCommand {
+      deleting = model.projects.first { $0.id == selection }
+    }
+    .navigationTitle("Projects")
+    .navigationSubtitle(
+      model.projects.count == 1 ? "1 project" : "\(model.projects.count) projects")
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          if let id = NewProjectPrompt.run(create: model.create(named:)) { selection = id }
+        } label: {
+          Label("New Project", systemImage: "plus")
+        }
+        .keyboardShortcut("n", modifiers: .command)
+        .help("New project (⌘N)")
+      }
+    }
+    .alert(
+      "Delete \u{201C}\(deleting?.name ?? "")\u{201D}?",
+      isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+      presenting: deleting
+    ) { project in
+      Button("Delete Project", role: .destructive) { model.delete(project) }
+      Button("Cancel", role: .cancel) {}
+    } message: { project in
+      Text(
+        ProjectRow.deleteMessage(
+          usage: model.usage(of: project.id), workspaces: model.workspaces(of: project.id)))
+    }
   }
 }
 
 struct ProjectRow: View {
   let model: ProjectsModel
   let project: ShiftStore.Project
+  /// Asks to delete it.
+  let onDelete: () -> Void
 
   @State private var name = ""
   @State private var hovered = false
-  @State private var confirmingDelete = false
   @FocusState private var nameFocused: Bool
 
   var body: some View {
@@ -111,7 +126,7 @@ struct ProjectRow: View {
         }
       }
 
-      Button { confirmingDelete = true } label: {
+      Button(action: onDelete) {
         Image(systemName: "trash").foregroundStyle(.secondary)
       }
       .buttonStyle(.borderless)
@@ -119,12 +134,12 @@ struct ProjectRow: View {
       .opacity(hovered ? 1 : 0)
       .accessibilityHidden(!hovered)
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 4)
     .contentShape(Rectangle())
     .onHover { hovered = $0 }
     .contextMenu {
       Button("Rename") { nameFocused = true }
-      Button("Delete…", role: .destructive) { confirmingDelete = true }
+      Button("Delete…", role: .destructive, action: onDelete)
     }
     .onAppear { name = project.name }
     .onChange(of: project.name) { _, new in
@@ -132,12 +147,6 @@ struct ProjectRow: View {
     }
     .onChange(of: nameFocused) { _, focused in
       if !focused { commit() }
-    }
-    .alert("Delete \u{201C}\(project.name)\u{201D}?", isPresented: $confirmingDelete) {
-      Button("Delete Project", role: .destructive) { model.delete(project) }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(Self.deleteMessage(usage: usage, workspaces: workspaces))
     }
   }
 

@@ -7,87 +7,139 @@ import SwiftUI
 /// stay out of the way unless there's time on them.
 struct TimesheetView: View {
   @Bindable var model: TimesheetModel
+  /// The week's totals, in the inspector.
+  @AppStorage("timesheet.showsTotals") private var showsTotals = true
+  /// The rows have the keyboard: arrows move the selection, Delete deletes.
+  @FocusState private var rowsFocused: Bool
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 30)) { context in
       let now = context.date
       ScrollViewReader { proxy in
-        VStack(spacing: 0) {
-          WeekHeader(model: model, now: now)
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
-          WeekStrip(model: model, now: now) { day in
-            withAnimation(.snappy) {
-              model.expand(day)
-              proxy.scrollTo(day, anchor: .top)
+        ScrollView {
+          VStack(alignment: .leading, spacing: 14) {
+            WeekStrip(model: model, now: now) { day in
+              withAnimation(.snappy) {
+                model.expand(day)
+                proxy.scrollTo(day, anchor: .top)
+              }
+            }
+            .padding(.bottom, 6)
+            if let error = model.error {
+              Label(error, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.callout)
+            }
+            ForEach(model.visibleDays, id: \.self) { day in
+              DaySection(
+                model: model, day: day, now: now, isFocused: rowsFocused,
+                focus: { rowsFocused = true }
+              )
+              .id(day)
             }
           }
-          .padding(.horizontal, 24)
-          .padding(.bottom, 16)
-          Divider()
-          HStack(alignment: .top, spacing: 0) {
-            ScrollView {
-              VStack(alignment: .leading, spacing: 14) {
-                if let error = model.error {
-                  Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .font(.callout)
-                }
-                ForEach(model.visibleDays, id: \.self) { day in
-                  DaySection(model: model, day: day, now: now)
-                    .id(day)
-                }
+          .padding(20)
+          // A click on nothing in particular clears the selection.
+          .background {
+            Color.clear
+              .contentShape(Rectangle())
+              .onTapGesture {
+                model.selection = nil
+                rowsFocused = true
               }
-              .padding(20)
-            }
-            Divider()
-            WeekTotals(model: model, now: now)
-              .frame(width: 240)
           }
         }
+        .focusable()
+        .focused($rowsFocused)
+        .focusEffectDisabled()
+        .onMoveCommand { direction in
+          switch direction {
+          case .up: model.moveSelection(by: -1, now: now)
+          case .down: model.moveSelection(by: 1, now: now)
+          default: return
+          }
+          if let selection = model.selection {
+            withAnimation(.snappy) { proxy.scrollTo(selection, anchor: nil) }
+          }
+        }
+        .onDeleteCommand { model.deleteSelection(now: now) }
+        .onCopyCommand {
+          guard let selection = model.selection, let text = model.text(of: selection, now: now)
+          else { return [] }
+          return [NSItemProvider(object: text as NSString)]
+        }
+        .onKeyPress(.return) {
+          guard let selection = model.selection else { return .ignored }
+          model.editRequest = selection
+          return .handled
+        }
+        .onKeyPress(.escape) {
+          guard model.selection != nil else { return .ignored }
+          model.selection = nil
+          return .handled
+        }
+      }
+      .navigationTitle(WeekTitle.range(model.week))
+      .navigationSubtitle("\(TimesheetFormat.duration(model.total(now: now))) tracked")
+      .toolbar { toolbar(now: now) }
+      .inspector(isPresented: $showsTotals) {
+        WeekTotals(model: model, now: now)
+          .inspectorColumnWidth(min: 220, ideal: 260, max: 360)
       }
     }
-    .frame(minWidth: 820, minHeight: 520)
+  }
+
+  /// Week paging like Calendar's, the days you work, and the totals.
+  @ToolbarContentBuilder private func toolbar(now: Date) -> some ToolbarContent {
+    ToolbarItem(placement: .primaryAction) {
+      ControlGroup {
+        Button(action: model.previousWeek) {
+          Label("Previous Week", systemImage: "chevron.left")
+        }
+        .keyboardShortcut(.leftArrow, modifiers: .command)
+        .help("Previous week (⌘←)")
+        Button("Today") { model.showWeek(containing: now) }
+        .keyboardShortcut("t", modifiers: .command)
+        .help("Go to this week (⌘T)")
+        Button(action: model.nextWeek) {
+          Label("Next Week", systemImage: "chevron.right")
+        }
+        .keyboardShortcut(.rightArrow, modifiers: .command)
+        .help("Next week (⌘→)")
+      }
+    }
+    ToolbarItem(placement: .primaryAction) {
+      AddMenu(model: model, day: addDay(now: now), now: now) { item in
+        model.selection = item
+        rowsFocused = true
+      }
+    }
+    ToolbarItem(placement: .primaryAction) {
+      WorkDaysMenu(model: model)
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        showsTotals.toggle()
+      } label: {
+        Label("Totals", systemImage: "sidebar.trailing")
+      }
+      .keyboardShortcut("i", modifiers: [.command, .option])
+      .help(showsTotals ? "Hide the week's totals (⌥⌘I)" : "Show the week's totals (⌥⌘I)")
+    }
   }
 }
 
-struct WeekHeader: View {
-  let model: TimesheetModel
-  let now: Date
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(Self.range(model.week))
-        .font(.title2.weight(.semibold))
-      HStack(spacing: 2) {
-        Button(action: model.previousWeek) {
-          Image(systemName: "chevron.left").frame(width: 22, height: 22)
-        }
-        .help("Previous week")
-        Button(action: model.nextWeek) {
-          Image(systemName: "chevron.right").frame(width: 22, height: 22)
-        }
-        .help("Next week")
-      }
-      .buttonStyle(.borderless)
-      .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-      if !model.week.contains(now) {
-        Button("This Week") { model.showWeek(containing: now) }
-          .controlSize(.small)
-          .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-      }
-      WorkDaysMenu(model: model)
-        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-      Spacer()
-      Text(TimesheetFormat.duration(model.total(now: now)))
-        .font(.system(size: 28, weight: .semibold, design: .rounded))
-        .monospacedDigit()
-        .contentTransition(.numericText())
-        .help("Time this week")
-    }
+extension TimesheetView {
+  /// Where the toolbar's + adds: the selected row's day, else today if
+  /// it's this week, else the first day shown.
+  fileprivate func addDay(now: Date) -> Date {
+    if let selection = model.selection, let day = model.day(of: selection) { return day }
+    if model.week.contains(now) { return model.calendar.startOfDay(for: now) }
+    return model.visibleDays.first ?? model.week.start
   }
+}
 
+enum WeekTitle {
   /// "Oct 26 – Nov 1".
   static func range(_ week: DateInterval) -> String {
     let last = week.end.addingTimeInterval(-1)
@@ -119,13 +171,10 @@ struct WorkDaysMenu: View {
       } label: {
         Label(
           hidden.isEmpty
-            ? "All days"
-            : "\(hidden.count) day\(hidden.count == 1 ? "" : "s") hidden",
-          systemImage: "calendar")
+            ? "All Days"
+            : "\(hidden.count) Day\(hidden.count == 1 ? "" : "s") Hidden",
+          systemImage: hidden.isEmpty ? "calendar" : "calendar.badge.minus")
       }
-      .menuStyle(.borderlessButton)
-      .fixedSize()
-      .foregroundStyle(.secondary)
       .help("Choose the days you work; the others are hidden when they have no time")
     }
   }
@@ -245,11 +294,16 @@ struct DaySection: View {
   let model: TimesheetModel
   let day: Date
   let now: Date
+  /// Whether the timesheet has the keyboard, for the selection's color.
+  let isFocused: Bool
+  let focus: () -> Void
+
+  @State private var headerHovered = false
 
   var body: some View {
-    let entries = model.entries(on: day)
+    let rows = model.rows(on: day)
     let shifts = model.shifts(on: day)
-    let empty = entries.isEmpty && shifts.isEmpty
+    let empty = rows.isEmpty && shifts.isEmpty
     let collapsed = model.isCollapsed(day)
     let (title, detail) = Self.title(day, now: now)
     VStack(alignment: .leading, spacing: 6) {
@@ -284,9 +338,16 @@ struct DaySection: View {
             .monospacedDigit()
             .help("Tracked to projects")
         }
-        AddMenu(model: model, day: day, now: now)
-          .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+        // The toolbar's + adds to the selected day; this one, on hover,
+        // to any day.
+        AddMenu(model: model, day: day, now: now) { item in
+          model.selection = item
+          focus()
+        }
+        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+        .opacity(headerHovered ? 1 : 0)
       }
+      .onHover { headerHovered = $0 }
       .padding(.horizontal, 6)
       .padding(.vertical, 2)
       // The header folds the day; Option-click folds or opens every day.
@@ -306,12 +367,24 @@ struct DaySection: View {
       .help(empty ? "" : collapsed ? "Show this day (Option-click: every day)" : "Hide this day (Option-click: every day)")
 
       if !empty && !collapsed {
-        GroupedRows(minRowHeight: 38) {
+        GroupedRows(minRowHeight: 38, rowInset: 4) {
           if !shifts.isEmpty {
-            ShiftBlock(model: model, day: day, shifts: shifts, now: now)
+            ShiftBlock(
+              model: model, day: day, shifts: shifts, now: now, isFocused: isFocused, focus: focus)
           }
-          ForEach(entries) { entry in
-            EntryRow(model: model, entry: entry, now: now)
+          ForEach(rows) { row in
+            Group {
+              switch row {
+              case .entry(let entry):
+                EntryRow(model: model, entry: entry, now: now)
+              case .brk(let brk, let shift):
+                BreakLine(
+                  model: model, shift: shift, brk: brk, lunch: model.lunch(of: shift, now: now),
+                  now: now)
+              }
+            }
+            .selectableRow(model, row.id, isFocused: isFocused, focus: focus)
+            .padding(.vertical, 2)
           }
         }
         .transition(.opacity)
@@ -338,23 +411,35 @@ struct AddMenu: View {
   let model: TimesheetModel
   let day: Date
   let now: Date
+  /// Selects what was added.
+  let added: (TimesheetModel.Item) -> Void
 
   var body: some View {
+    let name = day.formatted(.dateTime.weekday(.wide))
     Menu {
-      Button("Add Time") { model.addEntry(on: day, now: now) }
-      Button("Add Shift") { model.addShift(on: day, now: now) }
+      Section(name) {
+        Button("Add Time") {
+          model.expand(day)
+          if let id = model.addEntry(on: day, now: now) { added(.entry(id)) }
+        }
+        Button("Add Shift") {
+          model.expand(day)
+          if let id = model.addShift(on: day, now: now) { added(.shift(id)) }
+        }
         .disabled(model.shiftSlot(on: day, now: now) == nil)
-      if let shift = model.shifts(on: day).last {
-        Button("Add Break") { model.addBreak(to: shift, now: now) }
+        Button("Add Break") {
+          guard let shift = model.shifts(on: day).last else { return }
+          model.expand(day)
+          if let id = model.addBreak(to: shift, now: now) { added(.brk(id)) }
+        }
+        .disabled(model.shifts(on: day).isEmpty)
       }
     } label: {
-      Image(systemName: "plus")
-        .font(.subheadline.weight(.semibold))
+      Label("Add", systemImage: "plus")
     }
-    .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Add time, a shift, or a break on this day")
+    .help("Add time, a shift, or a break on \(name)")
   }
 }
 
@@ -380,22 +465,12 @@ struct EntryRow: View {
           .frame(width: 16)
 
         HStack(spacing: 4) {
-          DatePicker(
-            "Start", selection: Binding(get: { times.start }, set: { model.setStart(entry, to: $0) }),
-            displayedComponents: .hourAndMinute
-          )
-          .datePickerStyle(.field)
-          .labelsHidden()
-          .fixedSize()
+          TimeField(
+            "Start", times.start, focusRequested: model.editRequest == .entry(entry.id),
+            onFocused: { model.editRequest = nil }, set: { model.setStart(entry, to: $0) })
           Text("–").foregroundStyle(.secondary)
           if let end = times.end {
-            DatePicker(
-              "End", selection: Binding(get: { end }, set: { model.setEnd(entry, to: $0) }),
-              displayedComponents: .hourAndMinute
-            )
-            .datePickerStyle(.field)
-            .labelsHidden()
-            .fixedSize()
+            TimeField("End", end, set: { model.setEnd(entry, to: $0) })
           } else {
             RunningLabel()
           }
@@ -410,9 +485,11 @@ struct EntryRow: View {
           .frame(width: 62, alignment: .trailing)
 
         ProjectPicker(model: model, entry: entry)
-          .frame(width: 170, alignment: .leading)
+          .frame(width: 140, alignment: .leading)
 
-        TextField("Add a note", text: $note)
+        // The prompt shows where you're pointing, not on every row.
+        TextField(
+          "Note", text: $note, prompt: hovered || noteFocused ? Text("Add a note") : Text(""))
           .textFieldStyle(.plain)
           .focused($noteFocused)
           .onSubmit { model.setNote(entry, to: note) }
@@ -446,6 +523,8 @@ struct EntryRow: View {
     .onHover { hovered = $0 }
     .contextMenu {
       if running { Button("Stop") { model.stop(entry) } }
+      Button("Copy") { copy(model.text(of: .entry(entry.id), now: now)) }
+      Divider()
       Button("Delete", role: .destructive) { model.delete(entry) }
     }
     .onAppear { note = entry.note ?? "" }
@@ -530,6 +609,17 @@ struct WeekTotals: View {
     let total = model.total(now: now)
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Tracked")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+          Text(TimesheetFormat.duration(total))
+            .font(.system(size: 28, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .contentTransition(.numericText())
+        }
+        .accessibilityElement(children: .combine)
+
         let worked = model.worked(now: now)
         if worked > 0 {
           TotalsList(title: "Shifts") {
@@ -648,19 +738,6 @@ struct TotalRow: View {
       .frame(height: 4)
     }
     .accessibilityElement(children: .combine)
-  }
-}
-
-enum TimesheetFormat {
-  /// "7h 30m", "45m", "8h": short enough for the strip and rows.
-  static func duration(_ seconds: TimeInterval) -> String {
-    let minutes = max(0, Int((seconds / 60).rounded()))
-    let (h, m) = (minutes / 60, minutes % 60)
-    switch (h, m) {
-    case (0, _): return "\(m)m"
-    case (_, 0): return "\(h)h"
-    default: return "\(h)h \(m)m"
-    }
   }
 }
 

@@ -7,13 +7,7 @@ struct TrackingSection: View {
   var body: some View {
     let running = tracking.running
     FormSection("Tracking") {
-      if running != nil {
-        Button("Stop") { tracking.stop() }
-          .buttonStyle(.borderless)
-          .font(.subheadline)
-          .foregroundStyle(.tint)
-          .help("Stop the timer now; the TUI and CLI see it too")
-      }
+      EmptyView()
     } content: {
       HStack(spacing: 8) {
         Circle()
@@ -30,6 +24,14 @@ struct TrackingSection: View {
               .foregroundStyle(.secondary)
           }
           .help("Since \(running.start.formatted(date: .omitted, time: .shortened))")
+          Button { tracking.stop() } label: {
+            Image(systemName: "stop.circle.fill")
+              .symbolRenderingMode(.hierarchical)
+              .font(.title3)
+          }
+          .buttonStyle(.borderless)
+          .help("Stop the timer now; the TUI and CLI see it too")
+          .accessibilityLabel("Stop tracking")
         }
       }
     }
