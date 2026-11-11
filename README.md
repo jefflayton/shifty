@@ -37,7 +37,7 @@ Trust the mise config, then build and run whichever frontend you're working on:
 ```sh
 mise trust mise.toml
 mise run run:macos   # menu bar app (alias: rm)
-mise run run:tui     # terminal UI   (alias: rt)
+mise run run:tui     # terminal UI, shifty tui (alias: rt)
 mise run run:cli -- -s 9am -b 12pm 1pm   # CLI (alias: rc)
 mise run test        # unit tests   (alias: t)
 ```
@@ -47,8 +47,8 @@ mise run test        # unit tests   (alias: t)
 ```sh
 zig build macos             # zig-out/Shifty.app
 zig build macos -Dbundle    # also zig-out/Shifty.dmg
-zig build tui               # zig-out/bin/shifty-tui
-zig build cli               # zig-out/bin/shifty
+zig build cli               # zig-out/bin/shifty, the CLI with the TUI inside
+zig build tui               # the same; zig build run-tui runs shifty tui
 zig build all               # tests + every frontend for this platform
 zig build test-macos        # menu bar app model tests (macOS only)
 ```
@@ -255,6 +255,7 @@ The app comes with the CLI. To run it from any terminal, choose **Shifty → Ins
 Tool…** (or **Install…** in Settings → General). That links `/usr/local/bin/shifty` to the copy
 inside `Shifty.app`, asking for your password if needed, so updates keep it current. Dev builds
 install it as `shifty-dev`. To build it on its own, `zig build cli` puts it in `zig-out/bin/shifty`.
+The [TUI](#tui) is inside it: `shifty tui` opens it.
 
 ```
 Usage: shifty [options]
@@ -279,6 +280,7 @@ frontend shares: `~/Library/Application Support/Shifty/shifty.db` on macOS,
 `$XDG_DATA_HOME/shifty/shifty.db` elsewhere, or `$SHIFTY_DB` if set.
 
 ```
+tui                        Open the terminal UI
 status                     What's running: shift, break, lunch, timer
 in [-s <time>] [-l <len>] [--open]
                            Clock in (default: now, 8h), with the
@@ -373,7 +375,10 @@ at. A git repo links by its origin remote, so every clone matches; a Situ repo (
 
 ## TUI
 
-`shifty-tui` opens on your day: the shift and its clock out, a bar of the shift (work done in
+`shifty tui` opens the terminal UI. It's part of the CLI, so installing the command line tool from
+the app (or `zig build cli`) gets you both; a dev build's is `shifty-dev tui`.
+
+It opens on your day: the shift and its clock out, a bar of the shift (work done in
 green, breaks, the lunch window, time over in yellow), where lunch stands, what you're tracking,
 today's entries, and totals by project and client. It reads the same database as the CLI and
 reloads every second, so a `shifty start` in another terminal shows up right away. Clock out counts
