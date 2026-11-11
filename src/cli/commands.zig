@@ -20,6 +20,7 @@ const integrations = @import("integrations");
 const situ = integrations.situ;
 const place = integrations.place;
 const here_ = integrations.here;
+const rex_ = integrations.rex;
 const clock_link = integrations.clock_link;
 const tui = @import("tui");
 
@@ -77,12 +78,18 @@ pub const usage =
     \\  keywords                   List keywords and their projects
     \\  hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
     \\                             bar which folder your terminal is in
+    \\  hook rex                   Print a Lua script for `rex do` that
+    \\                             tells the menu bar which Rex tab and
+    \\                             session you're on, remote hosts too
     \\  here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
     \\                             (default: this one) for the shell <pid>
+    \\  rex --session <label> [--window <label>] [--server <host>]
+    \\                             What the Rex script runs: record the
+    \\                             Rex tab and session you're on
     \\
 ;
 
-const Command = enum { tui, status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here };
+const Command = enum { tui, status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -130,6 +137,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         // Hot paths that run at every prompt: no database.
         .hook => return hook(&c, rest),
         .here => return here(&c, rest),
+        .rex => return rex(&c, rest),
         // Opens the database itself, before it takes over the terminal.
         .tui => {
             try noArgs(&c, "tui", rest);
@@ -168,7 +176,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .unlink => try unlink(&c, rest),
         .keyword => try keyword(&c, rest),
         .keywords => try listKeywords(&c, rest),
-        .hook, .here, .tui => unreachable,
+        .hook, .here, .rex, .tui => unreachable,
     }
 }
 
@@ -904,12 +912,31 @@ fn cwd(c: *Ctx) !?[]const u8 {
 // ── Shell hook ──────────────────────────────────────────────────────────────
 
 fn hook(c: *Ctx, args: []const [:0]const u8) !void {
-    if (args.len != 1) return c.fail("usage: shifty hook <fish|zsh|bash|nvim>", .{});
-    const shell = std.meta.stringToEnum(here_.Shell, args[0]) orelse
-        return c.fail("unknown shell '{s}'; use fish, zsh, bash, or nvim", .{args[0]});
+    if (args.len != 1) return c.fail("usage: shifty hook <fish|zsh|bash|nvim|rex>", .{});
     // This binary by its full path, so a dev build's hook feeds a dev app.
     const exe = std.process.executablePathAlloc(c.io, c.arena) catch "shifty";
+    if (std.mem.eql(u8, args[0], "rex")) return c.out.writeAll(try rex_.script(c.arena, exe));
+    const shell = std.meta.stringToEnum(here_.Shell, args[0]) orelse
+        return c.fail("unknown shell '{s}'; use fish, zsh, bash, nvim, or rex", .{args[0]});
     try c.out.writeAll(try here_.hook(c.arena, shell, exe));
+}
+
+fn rex(c: *Ctx, args: []const [:0]const u8) !void {
+    var focus: rex_.Focus = .{ .ts = c.now.ts };
+    var it: Args = .{ .c = c, .cmd = "rex", .list = args };
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--session")) {
+            focus.session = try it.value(arg);
+        } else if (std.mem.eql(u8, arg, "--window")) {
+            focus.window = try it.value(arg);
+        } else if (std.mem.eql(u8, arg, "--server")) {
+            focus.server = try it.value(arg);
+        } else return it.unexpected(arg);
+    }
+    if (focus.session.len == 0 and focus.window.len == 0) return c.fail("rex needs --session or --window", .{});
+    const db_path = store.defaultPath(c.arena, c.env) catch return;
+    rex_.record(c.io, c.arena, try rex_.pathFor(c.arena, db_path), focus) catch |e|
+        return c.fail("can't record the Rex tab: {t}", .{e});
 }
 
 fn here(c: *Ctx, args: []const [:0]const u8) !void {
