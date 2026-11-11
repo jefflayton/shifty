@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(5, stmt.int(0));
+    try testing.expectEqual(6, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -71,6 +71,43 @@ test "open - lunch alarms migration keeps existing rules" {
     try testing.expectEqual(15, rules[0].trigger.before_clock_out);
     try testing.expect(!rules[0].enabled);
     _ = try s.addAlarmRule(.{ .before_break = 5 }, 2);
+}
+
+test "open - shared links migration keeps links, removed ones too" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    // A database as migration 0005 left it, with a link and a removed one.
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(tmp.path).?) catch {};
+    const db: store.sqlite.Db = try .open(tmp.path);
+    inline for (.{ "0001_init", "0002_lunch_alarms", "0003_break_presets", "0004_link_deletes", "0005_break_icons" }) |m|
+        try db.execScript(@embedFile("migrations/" ++ m ++ ".sql"));
+    try db.execScript("PRAGMA user_version = 5");
+    try db.execScript(
+        \\INSERT INTO projects (id, name, created_ts, updated_ts)
+        \\VALUES (x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', 'web', 1, 1),
+        \\       (x'0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', 'api', 1, 1);
+        \\INSERT INTO links (id, provider, kind, external_id, project_id, created_ts, updated_ts, deleted_ts)
+        \\VALUES (x'01010101010101010101010101010101', 'git', 'remote', 'github.com/o/web',
+        \\        x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', 2, 2, NULL),
+        \\       (x'02020202020202020202020202020202', 'app', 'bundle', 'com.example.old',
+        \\        x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', 3, 4, 4);
+    );
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const web: core.Uuid = .{ .bytes = @splat(0x0a) };
+    const api: core.Uuid = .{ .bytes = @splat(0x0b) };
+    try testing.expectEqual(1, (try s.links(a)).len);
+    try testing.expect((try s.resolveLink("git", "remote", "github.com/o/web")).?.project_id.eql(web));
+    try testing.expectEqual(null, try s.resolveLink("app", "bundle", "com.example.old"));
+    // And a second project can link to the repo now.
+    try s.link("git", "remote", "github.com/o/web", .{ .project_id = api }, 5);
+    try testing.expectEqual(2, (try s.resolveLinks(a, "git", "remote", "github.com/o/web")).len);
 }
 
 /// A database as migration 0002 left it.
@@ -806,10 +843,20 @@ test "links - resolve, re-point, validate" {
     try testing.expect(t.project_id.eql(web));
     try testing.expect(t.workspace_id.?.eql(main));
 
-    try s.link("situ", "project", situ_id, .{ .project_id = api }, 1);
+    // Linking it to the same project again moves the link to the new
+    // workspace (here, none); to another project, adds a link.
+    try s.link("situ", "project", situ_id, .{ .project_id = web }, 1);
     t = (try s.resolveLink("situ", "project", situ_id)).?;
-    try testing.expect(t.project_id.eql(api));
+    try testing.expect(t.project_id.eql(web));
     try testing.expectEqual(null, t.workspace_id);
+
+    try s.link("situ", "project", situ_id, .{ .project_id = api }, 1);
+    var buf: [1024]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&buf);
+    const both = try s.resolveLinks(fba.allocator(), "situ", "project", situ_id);
+    try testing.expectEqual(2, both.len);
+    try testing.expect(both[0].project_id.eql(web));
+    try testing.expect(both[1].project_id.eql(api));
 
     try testing.expectError(error.Mismatch, s.link("situ", "workspace", "x", .{ .project_id = api, .workspace_id = main }, 2));
     try testing.expectEqual(null, try s.resolveLink("situ", "workspace", "x"));
@@ -835,9 +882,9 @@ test "links - list, unlink, link again" {
     try testing.expectEqualStrings("app", all[1].provider);
     try testing.expect(all[1].target.project_id.eql(web));
 
-    try s.unlink("git", "remote", "github.com/o/web", 4);
+    try s.unlink("git", "remote", "github.com/o/web", null, 4);
     try testing.expectEqual(null, try s.resolveLink("git", "remote", "github.com/o/web"));
-    try testing.expectError(error.NotFound, s.unlink("git", "remote", "github.com/o/web", 5));
+    try testing.expectError(error.NotFound, s.unlink("git", "remote", "github.com/o/web", null, 5));
     all = try s.links(a);
     try testing.expectEqual(1, all.len);
 

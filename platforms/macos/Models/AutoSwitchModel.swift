@@ -38,6 +38,8 @@ import Observation
     var name: String
     var dir: String?
     var app: String?
+    /// Its window's title, which keywords are matched in.
+    var title: String? = nil
     var place: ShiftStore.Place
   }
 
@@ -65,7 +67,7 @@ import Observation
       } else if let app = seen.app {
         try tracking.store.link(app: app, to: target)
       }
-      self.seen?.place = try tracking.store.place(dir: seen.dir, app: seen.app)
+      self.seen?.place = try tracking.store.place(dir: seen.dir, app: seen.app, title: seen.title)
     } catch {
       log("link here:", error)
     }

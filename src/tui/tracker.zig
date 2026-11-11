@@ -159,7 +159,7 @@ pub const Tracker = struct {
         snap.running = try self.db.runningEntry(a);
         snap.today = try self.db.entriesBetween(a, snap.from, now.ts + 1);
         snap.totals = try report.totals(a, snap.names, snap.today, snap.from, now.ts);
-        if (self.dir) |d| snap.here = (try place.resolve(self.db, self.io, a, d, null)).target;
+        if (self.dir) |d| snap.here = (try place.resolve(self.db, self.io, a, d, null, null)).target;
 
         self.snap = snap;
         self.live = next;

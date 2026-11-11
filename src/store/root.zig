@@ -204,6 +204,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0003_break_presets.sql"),
     @embedFile("migrations/0004_link_deletes.sql"),
     @embedFile("migrations/0005_break_icons.sql"),
+    @embedFile("migrations/0006_shared_links.sql"),
 };
 
 pub const Store = struct {
@@ -1220,8 +1221,9 @@ pub const Store = struct {
 
     // ── Links to other tools ──────────────────────────────────────────────
 
-    /// Points another tool's id (e.g. Situ's `project_id`) at a project, or
-    /// re-points it if already linked.
+    /// Points another tool's id (e.g. Situ's `project_id`) at a project. An
+    /// id can point at several projects, but at each project once: linking
+    /// it again to the same project moves it to `target`'s workspace.
     pub fn link(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8, target: Target, now: i64) Error!void {
         try self.begin();
         errdefer self.rollback();
@@ -1232,35 +1234,62 @@ pub const Store = struct {
             \\INSERT INTO links (id, provider, kind, external_id, project_id, workspace_id,
             \\                   created_ts, updated_ts)
             \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
-            \\ON CONFLICT (provider, kind, external_id) DO UPDATE SET
-            \\    project_id = excluded.project_id, workspace_id = excluded.workspace_id,
+            \\ON CONFLICT (provider, kind, external_id, project_id) DO UPDATE SET
+            \\    workspace_id = excluded.workspace_id,
             \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
         , .{ blob(&new), provider, kind, external_id, blob(&target.project_id), optBlob(&target.workspace_id), now });
         try self.commit();
     }
 
-    /// What another tool's id is linked to, if anything.
-    pub fn resolveLink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8) Error!?Target {
+    /// Everything another tool's id is linked to, oldest link first.
+    /// Allocated in `arena`.
+    pub fn resolveLinks(self: *Store, arena: Allocator, provider: []const u8, kind: []const u8, external_id: []const u8) Error![]Target {
         var stmt = try self.db.prepare(
             \\SELECT l.project_id, l.workspace_id FROM links l
             \\JOIN projects p ON p.id = l.project_id
             \\LEFT JOIN workspaces w ON w.id = l.workspace_id
             \\WHERE l.provider = ? AND l.kind = ? AND l.external_id = ?
             \\  AND l.deleted_ts IS NULL AND p.deleted_ts IS NULL AND w.deleted_ts IS NULL
+            \\ORDER BY l.created_ts, l.rowid
         );
         defer stmt.deinit();
         try stmt.bindAll(.{ provider, kind, external_id });
-        if (!try stmt.step()) return null;
-        return .{ .project_id = try id(stmt, 0), .workspace_id = try optId(stmt, 1) };
+        var out: std.ArrayList(Target) = .empty;
+        while (try stmt.step()) try out.append(arena, .{ .project_id = try id(stmt, 0), .workspace_id = try optId(stmt, 1) });
+        return out.toOwnedSlice(arena);
     }
 
-    /// Removes a link. NotFound if there's none.
-    pub fn unlink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8, now: i64) Error!void {
-        try self.db.exec(
+    /// What another tool's id is linked to, if anything: its oldest link,
+    /// where it has several (see `resolveLinks`).
+    pub fn resolveLink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8) Error!?Target {
+        var buf: [4096]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&buf);
+        const all = try self.resolveLinks(fba.allocator(), provider, kind, external_id);
+        return if (all.len > 0) all[0] else null;
+    }
+
+    /// Removes an id's link to `project_id`, or every link it has (null).
+    /// NotFound if there's none.
+    pub fn unlink(self: *Store, provider: []const u8, kind: []const u8, external_id: []const u8, project_id: ?Uuid, now: i64) Error!void {
+        if (project_id) |p| try self.db.exec(
+            \\UPDATE links SET deleted_ts = ?1, updated_ts = ?1
+            \\WHERE provider = ? AND kind = ? AND external_id = ? AND project_id = ?
+            \\  AND deleted_ts IS NULL
+        , .{ now, provider, kind, external_id, blob(&p) }) else try self.db.exec(
             \\UPDATE links SET deleted_ts = ?1, updated_ts = ?1
             \\WHERE provider = ? AND kind = ? AND external_id = ? AND deleted_ts IS NULL
         , .{ now, provider, kind, external_id });
         if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// When time was last tracked to `target` (its project, and its
+    /// workspace if it names one): the latest entry's end. A running entry
+    /// is later than any. Null if never.
+    pub fn lastTracked(self: *Store, target: Target) Error!?i64 {
+        return self.oneInt(
+            \\SELECT max(coalesce(out_ts, 9223372036854775807)) FROM entries
+            \\WHERE project_id = ? AND (?2 IS NULL OR workspace_id = ?2) AND deleted_ts IS NULL
+        , .{ blob(&target.project_id), optBlob(&target.workspace_id) });
     }
 
     /// Every link to an active project (and workspace), oldest first.

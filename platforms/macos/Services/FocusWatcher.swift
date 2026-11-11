@@ -3,9 +3,11 @@ import ApplicationServices
 import Darwin
 
 /// Watches where you're working and tells `AutoSwitchModel`: the app in
-/// front, and the folder it has open. A terminal's folder comes from the
-/// shell hook's record (`shifty hook`); an editor's from its window, which
-/// needs the Accessibility permission. Shifty's own windows don't count.
+/// front, the folder it has open, and its window's title. A terminal's
+/// folder comes from the shell hook's record (`shifty hook`); an editor's
+/// from its window. The title is how a project's keywords find it, like a
+/// Rex session or tab named for it. Reading windows needs the
+/// Accessibility permission. Shifty's own windows don't count.
 @MainActor
 final class FocusWatcher {
   private let store: ShiftStore
@@ -54,10 +56,13 @@ final class FocusWatcher {
       app.processIdentifier != ProcessInfo.processInfo.processIdentifier
     else { return model.tick(now: now) }
     let bundle = app.bundleIdentifier
-    let dir = editorDirectory(app) ?? terminalDirectory(bundle)
+    let window = Self.focusedWindow(app)
+    let title = window.flatMap { Self.attribute($0, kAXTitleAttribute) as? String }
+    let dir = window.flatMap { editorDirectory($0, title: title) }
+      ?? terminalDirectory(bundle, title: title)
     let place: ShiftStore.Place
     do {
-      place = try store.place(dir: dir, app: bundle)
+      place = try store.place(dir: dir, app: bundle, title: title)
     } catch {
       log("auto-switch place:", error)
       return model.tick(now: now)
@@ -65,13 +70,21 @@ final class FocusWatcher {
     if let top = place.root ?? place.folder {
       roots[(top as NSString).lastPathComponent] = top
     }
-    let name = Self.name(of: place, dir: dir, appName: app.localizedName)
-    let seen = AutoSwitchModel.Seen(name: name, dir: dir, app: bundle, place: place)
+    let name = Self.name(of: place, dir: dir, title: title, appName: app.localizedName)
+    let seen = AutoSwitchModel.Seen(name: name, dir: dir, app: bundle, title: title, place: place)
     if seen != model.seen { model.seen = seen }
     model.observe(place.target, place: name, now: now)
   }
 
-  static func name(of place: ShiftStore.Place, dir: String?, appName: String?) -> String {
+  /// What to call where you are: the part of the title a keyword matched
+  /// (a Rex session's name, say), else the repo or folder, else the app.
+  static func name(
+    of place: ShiftStore.Place, dir: String?, title: String? = nil, appName: String?
+  ) -> String {
+    if place.via == .keyword, let keyword = place.keyword {
+      let parts = title.map(Self.titleParts) ?? []
+      return parts.first { part in part.localizedCaseInsensitiveContains(keyword) } ?? keyword
+    }
     if place.via == .app || (place.root == nil && place.folder == nil && dir == nil) {
       return appName ?? "this app"
     }
@@ -81,13 +94,27 @@ final class FocusWatcher {
 
   // MARK: Terminals
 
-  /// The folder of the shell that last showed a prompt in this app.
-  private func terminalDirectory(_ bundle: String?) -> String? {
+  /// The folder of this app's shell that its window's title names, else
+  /// of the one that last showed a prompt. A terminal with tabs, like Rex,
+  /// shows no prompt when you switch tabs, but its title often names the
+  /// folder or the session.
+  private func terminalDirectory(_ bundle: String?, title: String?) -> String? {
     guard let bundle, let spots = try? store.spots() else { return nil }
-    for spot in spots where kill(spot.pid, 0) == 0 {
-      if Self.owns(bundle, owner(of: spot)) { return spot.dir }
+    let live = spots.filter { kill($0.pid, 0) == 0 && Self.owns(bundle, owner(of: $0)) }
+    if let title, let named = Self.folder(inTitle: title, known: Self.byName(live.map(\.dir))) {
+      return named
     }
-    return nil
+    return live.first?.dir
+  }
+
+  /// Folders by their names; where two share a name, the first.
+  static func byName(_ dirs: [String]) -> [String: String] {
+    var out: [String: String] = [:]
+    for dir in dirs {
+      let name = (dir as NSString).lastPathComponent
+      if out[name] == nil { out[name] = dir }
+    }
+    return out
   }
 
   /// The app a shell belongs to: the nearest app above it, else what its
@@ -159,14 +186,20 @@ final class FocusWatcher {
     _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
   }
 
-  /// The folder the app's front window has open: its document's, else a
-  /// repo or folder named in its title, like VS Code's "file — folder".
-  private func editorDirectory(_ app: NSRunningApplication) -> String? {
-    guard Self.canReadWindows else { return nil }
+  /// The app's focused window, if Shifty may read it.
+  static func focusedWindow(_ app: NSRunningApplication) -> AXUIElement? {
+    guard canReadWindows else { return nil }
     let element = AXUIElementCreateApplication(app.processIdentifier)
-    guard let window = Self.attribute(element, kAXFocusedWindowAttribute) else { return nil }
-    let window_ = window as! AXUIElement
-    if let doc = Self.attribute(window_, kAXDocumentAttribute) as? String,
+    guard let window = attribute(element, kAXFocusedWindowAttribute),
+      CFGetTypeID(window) == AXUIElementGetTypeID()
+    else { return nil }
+    return (window as! AXUIElement)
+  }
+
+  /// The folder a window has open: its document's, else a repo or folder
+  /// named in its title, like VS Code's "file — folder".
+  private func editorDirectory(_ window: AXUIElement, title: String?) -> String? {
+    if let doc = Self.attribute(window, kAXDocumentAttribute) as? String,
       let url = URL(string: doc), url.isFileURL
     {
       var isDir: ObjCBool = false
@@ -175,7 +208,7 @@ final class FocusWatcher {
         return isDir.boolValue ? path : (path as NSString).deletingLastPathComponent
       }
     }
-    guard let title = Self.attribute(window_, kAXTitleAttribute) as? String else { return nil }
+    guard let title else { return nil }
     let known = roots.merging(Self.vsCodeFolders()) { a, _ in a }
     return Self.folder(inTitle: title, known: known)
   }
@@ -183,14 +216,22 @@ final class FocusWatcher {
   /// The folder whose name is a part of `title` ("a — b — c"), from
   /// `known` folders by name.
   static func folder(inTitle title: String, known: [String: String]) -> String? {
-    let parts = title.components(separatedBy: " — ").flatMap { $0.components(separatedBy: " - ") }
-    for part in parts {
-      let name = part.trimmingCharacters(in: .whitespaces)
-        .trimmingCharacters(in: CharacterSet(charactersIn: "●•*"))
-        .trimmingCharacters(in: .whitespaces)
+    for name in titleParts(title) {
       if let path = known[name] { return path }
     }
     return nil
+  }
+
+  /// A title's parts ("a — b - c"), without the marks editors add for
+  /// unsaved changes.
+  static func titleParts(_ title: String) -> [String] {
+    title.components(separatedBy: " — ").flatMap { $0.components(separatedBy: " - ") }
+      .map {
+        $0.trimmingCharacters(in: .whitespaces)
+          .trimmingCharacters(in: CharacterSet(charactersIn: "●•*"))
+          .trimmingCharacters(in: .whitespaces)
+      }
+      .filter { !$0.isEmpty }
   }
 
   private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

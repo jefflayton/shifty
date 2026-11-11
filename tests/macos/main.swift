@@ -1322,6 +1322,24 @@ do {
   expectEqual(links.map(\.externalId), ["github.com/o/web", "com.example.chat"])
   try! store.unlink(links[1])
   check(try! store.place(dir: nil, app: "com.example.chat").target == nil, "unlinked app")
+
+  // The repo, shared with Chat: the first linked until Chat is tracked,
+  // and a keyword in the window's title picks, whatever was tracked.
+  try! store.link(dir: repo, to: .init(project: chat))
+  p = try! store.place(dir: repo, app: nil)
+  expectEqual(p.choices, 2, "a repo two projects share")
+  expectEqual(p.target, .init(project: web))
+  try! store.link(keyword: "  Chat ", to: .init(project: chat))
+  p = try! store.place(dir: repo, app: "com.superlogical.rex", title: "chat — zsh")
+  expectEqual(p.via, .keyword, "a Rex session named for the project")
+  expectEqual(p.keyword, "chat")
+  expectEqual(p.target, .init(project: chat))
+  let shared = try! store.links().filter { $0.externalId == "github.com/o/web" }
+  expectEqual(shared.count, 2)
+  try! store.unlink(shared.first { $0.projectId == chat }!)
+  expectEqual(try! store.place(dir: repo, app: nil).choices, 1, "Web keeps its link")
+  try! store.unlink(try! store.links().first { $0.provider == "keyword" }!)
+
   check(try! store.spotsPath().hasSuffix("/here.tsv"), "the hook's record sits by the db")
   expectEqual(try! store.spots(), [], "no hook yet")
 

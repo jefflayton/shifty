@@ -23,8 +23,13 @@ const PlaceJson = struct {
     /// The Situ or git repo's top.
     root: ?[]const u8,
     remote: ?[]const u8,
-    /// The linked folder, when `via` is `folder`.
+    /// The linked folder that matched.
     folder: ?[]const u8,
+    /// The keyword in the title that picked the project, when `via` is
+    /// `keyword`.
+    keyword: ?[]const u8,
+    /// How many projects it could have been.
+    choices: usize,
     /// Whether there's a Situ repo here with ids to link by.
     situ: bool,
 };
@@ -36,14 +41,15 @@ fn writeJson(value: anytype, out: *?[*]u8, len: *usize) Result {
     return .ok;
 }
 
-/// Writes the place for `dir` (absolute) in the app `bundle_id`, either
-/// possibly null, as UTF-8 JSON; release it with `shifty_free`.
-export fn shifty_place_json(h: *Handle, dir: ?[*:0]const u8, bundle_id: ?[*:0]const u8, out: *?[*]u8, len: *usize) Result {
+/// Writes the place for `dir` (absolute) in the app `bundle_id`, whose
+/// window is titled `title`, any possibly null, as UTF-8 JSON; release it
+/// with `shifty_free`.
+export fn shifty_place_json(h: *Handle, dir: ?[*:0]const u8, bundle_id: ?[*:0]const u8, title: ?[*:0]const u8, out: *?[*]u8, len: *usize) Result {
     out.* = null;
     len.* = 0;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const p = place.resolve(&h.store, h.threaded.io(), arena.allocator(), sffi.optStr(dir), sffi.optStr(bundle_id)) catch |e| return sffi.result(e);
+    const p = place.resolve(&h.store, h.threaded.io(), arena.allocator(), sffi.optStr(dir), sffi.optStr(bundle_id), sffi.optStr(title)) catch |e| return sffi.result(e);
     return writeJson(PlaceJson{
         .via = p.via,
         .project_id = if (p.target) |t| t.project_id else null,
@@ -51,6 +57,8 @@ export fn shifty_place_json(h: *Handle, dir: ?[*:0]const u8, bundle_id: ?[*:0]co
         .root = p.root,
         .remote = if (p.repo) |r| r.remote else null,
         .folder = p.folder,
+        .keyword = p.keyword,
+        .choices = p.choices,
         .situ = if (p.marker) |m| m.project_id != null else false,
     }, out, len);
 }
@@ -76,9 +84,21 @@ export fn shifty_link_app(h: *Handle, bundle_id: [*:0]const u8, project_id: Id, 
     return .ok;
 }
 
-/// Removes a link, as `shifty_links_json` names it. NotFound if there's none.
-export fn shifty_unlink(h: *Handle, provider: [*:0]const u8, kind: [*:0]const u8, external_id: [*:0]const u8, now: i64) Result {
-    h.store.unlink(std.mem.span(provider), std.mem.span(kind), std.mem.span(external_id), now) catch |e| return sffi.result(e);
+/// Links a keyword to a project: a window titled with it is that project's.
+/// Mismatch if it can't be a keyword (empty, too long, a line break).
+export fn shifty_link_keyword(h: *Handle, word: [*:0]const u8, project_id: Id, workspace_id: ?*const Id, now: i64) Result {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const target: store.Target = .{ .project_id = sffi.id(project_id), .workspace_id = sffi.optId(workspace_id) };
+    const kept = place.linkKeyword(&h.store, arena.allocator(), std.mem.span(word), target, now) catch |e| return sffi.result(e);
+    return if (kept == null) .mismatch else .ok;
+}
+
+/// Removes a link, as `shifty_links_json` names it: to `project_id`, or
+/// to every project (null). NotFound if there's none.
+export fn shifty_unlink(h: *Handle, provider: [*:0]const u8, kind: [*:0]const u8, external_id: [*:0]const u8, project_id: ?*const Id, now: i64) Result {
+    const pid: ?Uuid = if (project_id) |p| sffi.id(p.*) else null;
+    h.store.unlink(std.mem.span(provider), std.mem.span(kind), std.mem.span(external_id), pid, now) catch |e| return sffi.result(e);
     return .ok;
 }
 
@@ -147,7 +167,7 @@ test "C API - place, link, unlink" {
 
     var out: ?[*]u8 = null;
     var len: usize = 0;
-    try testing.expectEqual(Result.ok, shifty_place_json(h, null, "com.example.chat", &out, &len));
+    try testing.expectEqual(Result.ok, shifty_place_json(h, null, "com.example.chat", null, &out, &len));
     const json = out.?[0..len];
     defer sffi.shifty_free(out, len);
     try testing.expect(std.mem.indexOf(u8, json, "\"via\":\"app\"") != null);
@@ -159,8 +179,20 @@ test "C API - place, link, unlink" {
     defer sffi.shifty_free(out2, len2);
     try testing.expect(std.mem.indexOf(u8, links, "\"external_id\":\"com.example.chat\"") != null);
 
-    try testing.expectEqual(Result.ok, shifty_unlink(h, "app", "bundle", "com.example.chat", 2));
-    try testing.expectEqual(Result.not_found, shifty_unlink(h, "app", "bundle", "com.example.chat", 3));
+    try testing.expectEqual(Result.ok, shifty_link_keyword(h, "Chat", pid, null, 2));
+    try testing.expectEqual(Result.mismatch, shifty_link_keyword(h, "  ", pid, null, 2));
+    var out3: ?[*]u8 = null;
+    var len3: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_place_json(h, null, null, "Team chat", &out3, &len3));
+    const kw = out3.?[0..len3];
+    defer sffi.shifty_free(out3, len3);
+    try testing.expect(std.mem.indexOf(u8, kw, "\"via\":\"keyword\"") != null);
+    try testing.expect(std.mem.indexOf(u8, kw, "\"keyword\":\"chat\"") != null);
+
+    const other: Id = .{ .bytes = (try h.store.createProject(.{ .name = "other" }, 0)).bytes };
+    try testing.expectEqual(Result.not_found, shifty_unlink(h, "app", "bundle", "com.example.chat", &other, 2));
+    try testing.expectEqual(Result.ok, shifty_unlink(h, "app", "bundle", "com.example.chat", &pid, 2));
+    try testing.expectEqual(Result.not_found, shifty_unlink(h, "app", "bundle", "com.example.chat", null, 3));
 
     var buf: [1024]u8 = undefined;
     try testing.expectEqual(Result.ok, shifty_here_path(h, &buf, buf.len));

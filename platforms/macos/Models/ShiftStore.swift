@@ -397,7 +397,7 @@ final class ShiftStore {
 
   /// What linked a place to its project.
   enum Via: String, Decodable {
-    case situ, git, folder, app
+    case situ, git, folder, app, keyword
   }
 
   /// A project to track: a project, and maybe one of its workspaces.
@@ -415,19 +415,28 @@ final class ShiftStore {
     var root: String?
     /// The git remote, normalized: `github.com/owner/repo`.
     var remote: String?
-    /// The linked folder, when `via` is `.folder`.
+    /// The linked folder that matched.
     var folder: String?
+    /// The keyword in the window's title that picked the project, when
+    /// `via` is `.keyword`.
+    var keyword: String?
+    /// How many projects it could have been: more than one where a repo
+    /// links to several.
+    var choices: Int = 0
     /// A Situ repo with ids to link by.
     var situ: Bool = false
 
     var target: Target? { projectId.map { Target(project: $0, workspace: workspaceId) } }
   }
 
-  /// The place for `dir` (absolute) in the app `bundleID`.
-  func place(dir: String?, app bundleID: String?) throws -> Place {
+  /// The place for `dir` (absolute) in the app `bundleID`, whose window is
+  /// titled `title`: a keyword in it picks the project.
+  func place(dir: String?, app bundleID: String?, title: String? = nil) throws -> Place {
     try json(Place()) { out, len in
       withOptionalCString(dir) { d in
-        withOptionalCString(bundleID) { b in shifty_place_json(handle, d, b, out, len) }
+        withOptionalCString(bundleID) { b in
+          withOptionalCString(title) { t in shifty_place_json(handle, d, b, t, out, len) }
+        }
       }
     }
   }
@@ -440,12 +449,20 @@ final class ShiftStore {
     try withIds(target.workspace, nil) { w, _ in
       try check(shifty_link_dir(handle, dir, ShiftyId(target.project), w, ts(now), &via))
     }
-    return [Via.situ, .git, .folder, .app][Int(via)]
+    return [Via.situ, .git, .folder, .app, .keyword][Int(via)]
   }
 
   func link(app bundleID: String, to target: Target, now: Date = Date()) throws {
     try withIds(target.workspace, nil) { w, _ in
       try check(shifty_link_app(handle, bundleID, ShiftyId(target.project), w, ts(now)))
+    }
+  }
+
+  /// Links a keyword: a window titled with it (a Rex session or tab, an
+  /// editor) is `target`'s. Kept trimmed and lowercase.
+  func link(keyword: String, to target: Target, now: Date = Date()) throws {
+    try withIds(target.workspace, nil) { w, _ in
+      try check(shifty_link_keyword(handle, keyword, ShiftyId(target.project), w, ts(now)))
     }
   }
 
@@ -457,7 +474,7 @@ final class ShiftStore {
     var projectId: UUID
     var workspaceId: UUID?
 
-    var id: String { "\(provider)/\(kind)/\(externalId)" }
+    var id: String { "\(provider)/\(kind)/\(externalId)/\(projectId)" }
     var target: Target { Target(project: projectId, workspace: workspaceId) }
   }
 
@@ -465,8 +482,11 @@ final class ShiftStore {
     try json([Link]()) { shifty_links_json(handle, $0, $1) }
   }
 
+  /// Removes `link`: its id's link to its project, not to others.
   func unlink(_ link: Link, now: Date = Date()) throws {
-    try check(shifty_unlink(handle, link.provider, link.kind, link.externalId, ts(now)))
+    try withIds(link.projectId, nil) { p, _ in
+      try check(shifty_unlink(handle, link.provider, link.kind, link.externalId, p, ts(now)))
+    }
   }
 
   /// A shell's directory, as the prompt hook (`shifty hook`) last recorded.
