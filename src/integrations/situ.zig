@@ -35,12 +35,15 @@ pub fn find(io: Io, arena: Allocator, dir: []const u8) Allocator.Error!?Marker {
     return null;
 }
 
-/// What the repo is linked to, if anything: its workspace's link, else its
-/// project's.
-pub fn linked(db: *store.Store, m: Marker) store.Error!?store.Target {
-    if (m.workspace_id) |w| if (try db.resolveLink(provider, "workspace", w)) |t| return t;
-    if (m.project_id) |p| if (try db.resolveLink(provider, "project", p)) |t| return t;
-    return null;
+/// What the repo is linked to, if anything: its workspace's links, else its
+/// project's. Allocated in `arena`.
+pub fn linked(db: *store.Store, arena: std.mem.Allocator, m: Marker) store.Error![]store.Target {
+    if (m.workspace_id) |w| {
+        const ts = try db.resolveLinks(arena, provider, "workspace", w);
+        if (ts.len > 0) return ts;
+    }
+    if (m.project_id) |p| return db.resolveLinks(arena, provider, "project", p);
+    return &.{};
 }
 
 /// Points the repo's ids at `target`: its project at the project, and its
@@ -144,15 +147,25 @@ test "link / linked - workspace link wins over project link" {
     const main = try db.createWorkspace(web, "main", 0);
     const other = try db.createProject(.{ .name = "other" }, 0);
 
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
     const m: Marker = .{ .root = "/r", .project_id = "p", .workspace_id = "w" };
-    try testing.expectEqual(null, try linked(&db, m));
+    try testing.expectEqual(0, (try linked(&db, a, m)).len);
 
     try link(&db, m, .{ .project_id = other }, 0);
-    try testing.expect((try linked(&db, m)).?.project_id.eql(other));
+    var ts = try linked(&db, a, m);
+    try testing.expectEqual(1, ts.len);
+    try testing.expect(ts[0].project_id.eql(other));
 
+    // The workspace's link is the more specific one; the project links
+    // to both projects now.
     try link(&db, m, .{ .project_id = web, .workspace_id = main }, 1);
-    const t = (try linked(&db, m)).?;
-    try testing.expect(t.workspace_id.?.eql(main));
+    ts = try linked(&db, a, m);
+    try testing.expectEqual(1, ts.len);
+    try testing.expect(ts[0].workspace_id.?.eql(main));
+    try testing.expectEqual(2, (try db.resolveLinks(a, provider, "project", "p")).len);
 
     const no_ws: Marker = .{ .root = "/r", .project_id = "p" };
     try testing.expectError(error.NoWorkspaceId, link(&db, no_ws, .{ .project_id = web, .workspace_id = main }, 2));

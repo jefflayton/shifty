@@ -111,6 +111,20 @@ extension Array where Element == ShiftStore.Project {
     write { try store.link(app: bundleID, to: .init(project: project)) }
   }
 
+  /// Links a keyword to `project`: a window titled with it, like a Rex
+  /// session or tab, is the project's. False if it can't be one.
+  @discardableResult
+  func link(keyword: String, to project: UUID) -> Bool {
+    let word = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !word.isEmpty, word.utf8.count <= 64, !word.contains(where: \.isNewline) else {
+      error = "A keyword is 1 to 64 characters on one line."
+      return false
+    }
+    return write { try store.link(keyword: word, to: .init(project: project)) } != nil
+  }
+
+  /// Removes `link` from its project; other projects linked to the same
+  /// repo, folder, or app keep theirs.
   func unlink(_ link: ShiftStore.Link) {
     write { try store.unlink(link) }
   }

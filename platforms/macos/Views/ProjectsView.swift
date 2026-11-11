@@ -293,8 +293,8 @@ final class CustomColor: NSObject {
   @objc private func changed(_ panel: NSColorPanel) { apply?(panel.color) }
 }
 
-/// Linking a project to the repos, folders, and apps auto-switch tracks it
-/// in.
+/// Linking a project to the repos, folders, apps, and keywords auto-switch
+/// tracks it by. A repo can link to several projects.
 struct LinkMenu: View {
   let model: ProjectsModel
   let project: ShiftStore.Project
@@ -308,7 +308,7 @@ struct LinkMenu: View {
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Link a repo, folder, or app")
+    .help("Link a repo, folder, app, or keyword")
   }
 
   @ViewBuilder static func items(model: ProjectsModel, project: ShiftStore.Project) -> some View {
@@ -320,6 +320,9 @@ struct LinkMenu: View {
         model.link(app: id, to: project.id)
       }
     }
+    Button("Add Keyword…") {
+      if let word = askKeyword(for: project.name) { model.link(keyword: word, to: project.id) }
+    }
     let links = model.links(of: project.id)
     if !links.isEmpty {
       Menu("Unlink") {
@@ -328,6 +331,23 @@ struct LinkMenu: View {
         }
       }
     }
+  }
+
+  /// A word or phrase that names the project in a window's title.
+  private static func askKeyword(for name: String) -> String? {
+    let alert = NSAlert()
+    alert.messageText = "Add a keyword for \(name)"
+    alert.informativeText =
+      "When a window's title has this word, like a Rex session or tab named for the project, auto-switch tracks \(name). It beats a repo's links."
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+    field.placeholderString = name.lowercased()
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Add")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = field
+    guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+    let word = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    return word.isEmpty ? nil : word
   }
 
   /// A folder, or an app in Applications.
@@ -350,11 +370,13 @@ struct LinkMenu: View {
   }
 }
 
-/// How a link reads: a repo by name, a folder by name, an app by its name.
+/// How a link reads: a repo by name, a folder by name, an app by its name,
+/// a keyword in quotes.
 enum LinkName {
   static func name(_ link: ShiftStore.Link) -> String {
     switch link.provider {
     case "app": return appName(link.externalId)
+    case "keyword": return "“\(link.externalId)”"
     case "situ": return "Situ \(link.kind)"
     default: return (link.externalId as NSString).lastPathComponent
     }
@@ -364,6 +386,7 @@ enum LinkName {
   static func detail(_ link: ShiftStore.Link) -> String {
     switch link.provider {
     case "app": return appName(link.externalId)
+    case "keyword": return "Keyword “\(link.externalId)”"
     case "situ": return "Situ \(link.kind) \(link.externalId)"
     case "folder": return (link.externalId as NSString).abbreviatingWithTildeInPath
     default: return link.externalId

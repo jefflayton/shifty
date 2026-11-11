@@ -196,7 +196,8 @@ ShiftyResult shifty_delete_project(ShiftyStore *store, ShiftyId project_id, int6
 // ── Places and links ────────────────────────────────────────────────────────
 // Where you're working, and the project it's linked to (src/integrations).
 // Links point another tool's id at a project: a Situ repo's ids, a git
-// remote, a folder's path, or an app's bundle id.
+// remote, a folder's path, an app's bundle id, or a keyword. One id can link
+// to several projects.
 
 // What linked a place, in shifty_link_dir's `via` and the JSON's "via".
 typedef enum {
@@ -204,14 +205,18 @@ typedef enum {
   SHIFTY_VIA_GIT = 1,
   SHIFTY_VIA_FOLDER = 2,
   SHIFTY_VIA_APP = 3,
+  SHIFTY_VIA_KEYWORD = 4,
 } ShiftyVia;
 
-// The place for absolute directory `dir` in the app `bundle_id` (either may be
-// NULL) as UTF-8 JSON: {"via": "situ"|"git"|"folder"|"app"|null, "project_id",
-// "workspace_id", "root" (the repo's top), "remote", "folder" (the linked
-// folder), "situ" (a Situ repo with ids)}. Release with shifty_free.
+// The place for absolute directory `dir` in the app `bundle_id`, whose front
+// window is titled `title` (any may be NULL), as UTF-8 JSON: {"via":
+// "situ"|"git"|"folder"|"app"|"keyword"|null, "project_id", "workspace_id",
+// "root" (the repo's top), "remote", "folder" (the linked folder),
+// "keyword" (the one in the title that picked the project), "choices" (how
+// many projects it could have been), "situ" (a Situ repo with ids)}.
+// Release with shifty_free.
 ShiftyResult shifty_place_json(ShiftyStore *store, const char *dir, const char *bundle_id,
-                               char **out, size_t *len);
+                               const char *title, char **out, size_t *len);
 // Links the repo or folder `dir` is in: by its Situ ids, else its git remote,
 // else its path. SHIFTY_MISMATCH if the workspace isn't the project's, or a
 // Situ repo has no workspace id to link one by.
@@ -219,9 +224,15 @@ ShiftyResult shifty_link_dir(ShiftyStore *store, const char *dir, ShiftyId proje
                              const ShiftyId *workspace_id, int64_t now, int32_t *via);
 ShiftyResult shifty_link_app(ShiftyStore *store, const char *bundle_id, ShiftyId project_id,
                              const ShiftyId *workspace_id, int64_t now);
-// Removes a link; SHIFTY_NOT_FOUND if there's none.
+// Links a keyword (kept trimmed and lowercase): a window titled with it is
+// the project's. SHIFTY_MISMATCH if it can't be one (empty, over 64 bytes, a
+// line break).
+ShiftyResult shifty_link_keyword(ShiftyStore *store, const char *word, ShiftyId project_id,
+                                 const ShiftyId *workspace_id, int64_t now);
+// Removes an id's link to `project_id`, or all its links (NULL);
+// SHIFTY_NOT_FOUND if there's none.
 ShiftyResult shifty_unlink(ShiftyStore *store, const char *provider, const char *kind,
-                           const char *external_id, int64_t now);
+                           const char *external_id, const ShiftyId *project_id, int64_t now);
 // Every link as UTF-8 JSON: [{"provider","kind","external_id","project_id",
 // "workspace_id"}]. Release with shifty_free.
 ShiftyResult shifty_links_json(ShiftyStore *store, char **out, size_t *len);

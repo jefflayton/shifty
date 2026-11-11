@@ -1322,6 +1322,24 @@ do {
   expectEqual(links.map(\.externalId), ["github.com/o/web", "com.example.chat"])
   try! store.unlink(links[1])
   check(try! store.place(dir: nil, app: "com.example.chat").target == nil, "unlinked app")
+
+  // The repo, shared with Chat: the first linked until Chat is tracked,
+  // and a keyword in the window's title picks, whatever was tracked.
+  try! store.link(dir: repo, to: .init(project: chat))
+  p = try! store.place(dir: repo, app: nil)
+  expectEqual(p.choices, 2, "a repo two projects share")
+  expectEqual(p.target, .init(project: web))
+  try! store.link(keyword: "  Chat ", to: .init(project: chat))
+  p = try! store.place(dir: repo, app: "com.superlogical.rex", title: "chat — zsh")
+  expectEqual(p.via, .keyword, "a Rex session named for the project")
+  expectEqual(p.keyword, "chat")
+  expectEqual(p.target, .init(project: chat))
+  let shared = try! store.links().filter { $0.externalId == "github.com/o/web" }
+  expectEqual(shared.count, 2)
+  try! store.unlink(shared.first { $0.projectId == chat }!)
+  expectEqual(try! store.place(dir: repo, app: nil).choices, 1, "Web keeps its link")
+  try! store.unlink(try! store.links().first { $0.provider == "keyword" }!)
+
   check(try! store.spotsPath().hasSuffix("/here.tsv"), "the hook's record sits by the db")
   expectEqual(try! store.spots(), [], "no hook yet")
 
@@ -1421,6 +1439,116 @@ do {
   undo?()
   tracking.reload(now: at(15, 32))
   check(tracking.running != nil && tracking.runningTarget == nil, "undo unassigns it")
+}
+
+// MARK: Teams meetings
+
+do {
+  expectEqual(Meetings.name(fromTitle: "Shifty sync | Microsoft Teams"), "Shifty sync")
+  expectEqual(Meetings.name(fromTitle: "Chat | Situ | Microsoft Teams"), "Chat | Situ")
+  check(Meetings.name(fromTitle: " | Microsoft Teams") == nil, "only Teams' own name")
+  check(Meetings.isTeams("com.microsoft.teams2"), "new Teams")
+  check(Meetings.isTeams("com.microsoft.teams"), "classic Teams")
+  check(Meetings.isTeams("com.microsoft.teams2.helper"), "one of its helpers")
+  check(!Meetings.isTeams("com.microsoft.teamsplus"), "not a lookalike")
+  check(!Meetings.isTeams(nil), "no bundle")
+  check(
+    Meetings.isTeams(path: "/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"),
+    "by its path")
+  expectEqual(
+    Meetings.ordered(["Chat | Microsoft Teams", "Sync | Microsoft Teams"], before: ["Chat | Microsoft Teams"]),
+    ["Sync | Microsoft Teams", "Chat | Microsoft Teams"], "a window opened for the call first")
+
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let situ = try! store.createProject(name: "Situ")
+  let shifty = try! store.createProject(name: "Shifty")
+  try! store.link(keyword: "shifty", to: .init(project: shifty))
+  let p = try! store.place(dir: nil, app: nil, title: "Shifty sync | Microsoft Teams")
+  expectEqual(p.via, .keyword, "a meeting named for the project")
+  expectEqual(p.target, .init(project: shifty))
+
+  let prefs = Preferences(defaults: testDefaults())
+  check(prefs.meetingSwitch, "meetings offer by default")
+  prefs.autoSwitch = true
+  prefs.autoSwitchDelay = 30
+  let tracking = TrackingModel(store: store)
+  tracking.choose(project: situ, workspace: nil, now: at(9))
+  tracking.reload(now: at(9, 1))
+  let auto = AutoSwitchModel(tracking: tracking, preferences: prefs)
+  let toShifty = ShiftStore.Target(project: shifty)
+  let toSitu = ShiftStore.Target(project: situ)
+  typealias Seen = AutoSwitchModel.MeetingSeen
+
+  // A call that names no project: nothing.
+  auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(10))
+  check(auto.meeting != nil, "a call is on")
+  check(auto.offer == nil, "no project, no offer")
+  auto.observeMeeting(nil, now: at(10, 15))
+  check(auto.meeting == nil, "it ended")
+
+  // A call for Shifty while Situ runs: it offers, and waits for you.
+  auto.observeMeeting(Seen(title: "Shifty sync", target: nil), now: at(11))
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(11, 1))
+  expectEqual(auto.offer?.kind, .meeting)
+  expectEqual(auto.offer?.name, "Shifty")
+  expectEqual(auto.offer?.from, "Situ")
+  expectEqual(auto.offer?.place, "Shifty sync")
+  expectEqual(auto.offer?.arrived, at(11), "from when the call began")
+  check(auto.offer?.deadline == nil, "no countdown")
+  auto.tick(now: at(11, 30))
+  expectEqual(tracking.runningTarget, toSitu, "it doesn't switch by itself")
+  // Where you work changes nothing while the call's on.
+  auto.observe(toSitu, place: "situ", now: at(11, 31))
+  auto.observe(toSitu, place: "situ", now: at(11, 40))
+  expectEqual(auto.offer?.kind, .meeting, "still offered")
+  auto.switchNow(now: at(11, 41))
+  expectEqual(tracking.runningTarget, toShifty, "switched")
+  expectEqual(tracking.running?.start, at(11), "from when the call began")
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(11, 42))
+  check(auto.offer == nil, "nothing more to offer")
+  auto.dismissSwitched()
+
+  // It ends: back to Situ?
+  auto.observeMeeting(nil, now: at(12))
+  expectEqual(auto.offer?.kind, .meetingOver)
+  expectEqual(auto.offer?.name, "Situ")
+  expectEqual(auto.offer?.from, "Shifty")
+  expectEqual(auto.offer?.place, "Shifty sync ended")
+  check(auto.offer?.deadline == nil, "this waits too")
+  auto.switchNow(now: at(12, 2))
+  expectEqual(tracking.runningTarget, toSitu, "back")
+  expectEqual(tracking.running?.start, at(12), "from when it ended")
+  auto.dismissSwitched()
+
+  // Keep: not offered again that call, and the place's offers aren't held
+  // off.
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(13))
+  expectEqual(auto.offer?.kind, .meeting)
+  auto.keep(now: at(13, 1))
+  check(auto.offer == nil, "kept")
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(13, 2))
+  check(auto.offer == nil, "once a call")
+  auto.observeMeeting(nil, now: at(13, 30))
+  check(auto.offer == nil, "nothing to go back from")
+  auto.observe(toShifty, place: "shifty", now: at(13, 31))
+  auto.observe(toShifty, place: "shifty", now: at(13, 32))
+  expectEqual(auto.offer?.kind, .place, "a place still offers")
+  auto.keep(now: at(13, 32))
+
+  // A call ends a place's countdown.
+  auto.observe(toShifty, place: "shifty", now: at(14, 10))
+  auto.observe(toShifty, place: "shifty", now: at(14, 11))
+  check(auto.offer?.kind == .place, "counting down")
+  auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(14, 11) + 2)
+  check(auto.offer == nil, "the call takes over")
+  auto.observeMeeting(nil, now: at(14, 30))
+
+  // Off: nothing.
+  prefs.meetingSwitch = false
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(15))
+  check(auto.meeting == nil && auto.offer == nil, "off")
 }
 
 for name in ["shifty-tests", "shifty-tests-none"] {

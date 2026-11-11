@@ -23,9 +23,11 @@ struct AutoSwitchSettings: View {
         ForEach(Preferences.autoSwitchCountdowns, id: \.self) { Text(Self.seconds($0)).tag($0) }
       }
       .disabled(!preferences.autoSwitch)
+      Toggle("Offer to switch for Teams meetings", isOn: $preferences.meetingSwitch)
+        .disabled(!preferences.autoSwitch)
     } footer: {
       Text(
-        "While a timer runs, staying in a repo, folder, or app linked to another project brings up an offer to switch at the top of the screen. When it counts down, the timer switches, from when you got there. Clocked in with no timer, it offers to start one. Link repos, folders, and apps to projects in the Projects window. Places nothing links to change nothing."
+        "While a timer runs, staying in a repo, folder, or app linked to another project brings up an offer to switch at the top of the screen. When it counts down, the timer switches, from when you got there. Clocked in with no timer, it offers to start one. Link repos, folders, and apps to projects in the Projects window. Places nothing links to change nothing.\n\nWhen a Teams meeting starts and its title has another project's keyword, it offers to switch, from when the meeting began, and waits for you instead of counting down. When the meeting ends, it offers to switch back."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)

@@ -59,11 +59,20 @@ pub const usage =
     \\  link <project>[/<workspace>]
     \\                             Link the repo or folder you're in to a
     \\                             project: by its Situ ids, else its git
-    \\                             remote, else its path
+    \\                             remote, else its path. A repo can link
+    \\                             to several projects
     \\  link --app <bundle id> <project>[/<workspace>]
     \\                             Link a macOS app, for the menu bar's
     \\                             auto-switch
-    \\  unlink [--app <bundle id>]  Remove the link for here, or an app's
+    \\  unlink [<project>]         Remove here's link to <project>, or all
+    \\                             of here's links
+    \\  unlink --app <bundle id> [<project>]
+    \\                             The same for an app
+    \\  keyword add <project>[/<workspace>] <word>...
+    \\                             A window titled with <word> (a Rex
+    \\                             session or tab, say) is <project>'s
+    \\  keyword remove <word>...   Stop matching <word>
+    \\  keywords                   List keywords and their projects
     \\  hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
     \\                             bar which folder your terminal is in
     \\  here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
@@ -71,7 +80,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, hook, here };
+const Command = enum { status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -150,6 +159,8 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .client => try client(&c, rest),
         .link => try link(&c, rest),
         .unlink => try unlink(&c, rest),
+        .keyword => try keyword(&c, rest),
+        .keywords => try listKeywords(&c, rest),
         .hook, .here => unreachable,
     }
 }
@@ -573,7 +584,7 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
     if (spec) |s| {
         target = try resolve(c, s);
     } else if (try cwd(c)) |d| {
-        const p = try place.resolve(&c.db, c.io, c.arena, d, null);
+        const p = try place.resolve(&c.db, c.io, c.arena, d, null, null);
         target = p.target;
         if (target == null) unlinked = p.root;
     }
@@ -791,43 +802,92 @@ fn link(c: *Ctx, args: []const [:0]const u8) !void {
         error.NoWorkspaceId => return c.fail("this Situ repo's {s} has no workspace_id to link to a workspace", .{situ.file_name}),
         else => return e,
     };
-    const p = try place.resolve(&c.db, c.io, c.arena, dir, null);
+    const p = try place.resolve(&c.db, c.io, c.arena, dir, null, null);
     const what = p.root orelse p.folder orelse dir;
     const by: []const u8 = switch (via) {
         .situ => "its Situ ids",
         .git => p.repo.?.remote.?,
         .folder => "its path",
-        .app => unreachable,
+        .app, .keyword => unreachable,
     };
     try c.out.print("Linked {s} ({s}) to {s}.\n", .{ what, by, try label(c, target.project_id, target.workspace_id) });
 }
 
 fn unlink(c: *Ctx, args: []const [:0]const u8) !void {
-    if (args.len == 2 and std.mem.eql(u8, args[0], "--app")) {
-        c.db.unlink(place.app_provider, place.app_kind, args[1], c.now.ts) catch |e| switch (e) {
-            error.NotFound => return c.fail("{s} isn't linked", .{args[1]}),
+    if (args.len >= 2 and args.len <= 3 and std.mem.eql(u8, args[0], "--app")) {
+        const pid = if (args.len == 3) (try resolve(c, args[2])).project_id else null;
+        c.db.unlink(place.app_provider, place.app_kind, args[1], pid, c.now.ts) catch |e| switch (e) {
+            error.NotFound => return c.fail("{s} isn't linked{s}", .{ args[1], if (pid != null) " to that project" else "" }),
             else => return e,
         };
         return c.out.print("Unlinked {s}.\n", .{args[1]});
     }
-    try noArgs(c, "unlink", args);
+    if (args.len > 1 or (args.len == 1 and args[0][0] == '-'))
+        return c.fail("usage: shifty unlink [<project>], or unlink --app <bundle id> [<project>]", .{});
+    const pid = if (args.len == 1) (try resolve(c, args[0])).project_id else null;
     const dir = try cwd(c) orelse return c.fail("can't tell which directory this is", .{});
-    const p = try place.resolve(&c.db, c.io, c.arena, dir, null);
+    const p = try place.resolve(&c.db, c.io, c.arena, dir, null, null);
     const via = p.via orelse return c.fail("nothing links {s} to a project", .{p.root orelse dir});
-    switch (via) {
-        .situ => {
+    const removed = switch (via) {
+        .situ => situ: {
             const m = p.marker.?;
-            if (m.workspace_id) |w| c.db.unlink(situ.provider, "workspace", w, c.now.ts) catch {};
-            if (m.project_id) |pid| c.db.unlink(situ.provider, "project", pid, c.now.ts) catch {};
+            var any = false;
+            if (m.workspace_id) |w| if (gone(c.db.unlink(situ.provider, "workspace", w, pid, c.now.ts))) {
+                any = true;
+            };
+            if (m.project_id) |id| if (gone(c.db.unlink(situ.provider, "project", id, pid, c.now.ts))) {
+                any = true;
+            };
+            break :situ any;
         },
-        .git => try c.db.unlink(integrations.git.provider, integrations.git.kind_remote, p.repo.?.remote.?, c.now.ts),
-        .folder => try c.db.unlink(place.folder_provider, place.folder_kind, p.folder.?, c.now.ts),
-        .app => unreachable,
-    }
-    const after = try place.resolve(&c.db, c.io, c.arena, dir, null);
+        .git => gone(c.db.unlink(integrations.git.provider, integrations.git.kind_remote, p.repo.?.remote.?, pid, c.now.ts)),
+        .folder => gone(c.db.unlink(place.folder_provider, place.folder_kind, p.folder.?, pid, c.now.ts)),
+        .app, .keyword => unreachable,
+    };
+    if (!removed) return c.fail("{s} isn't linked to that project", .{p.folder orelse p.root orelse dir});
+    const after = try place.resolve(&c.db, c.io, c.arena, dir, null, null);
     try c.out.print("Unlinked {s}.", .{p.folder orelse p.root orelse dir});
     if (after.target) |t| try c.out.print(" It's still {s}, through {s}.", .{ try label(c, t.project_id, t.workspace_id), @tagName(after.via.?) });
     try c.out.writeAll("\n");
+}
+
+/// Whether an unlink removed something.
+fn gone(r: store.Error!void) bool {
+    r catch return false;
+    return true;
+}
+
+fn keyword(c: *Ctx, args: []const [:0]const u8) !void {
+    const how = "usage: shifty keyword add <project>[/<workspace>] <word>..., or keyword remove <word>...";
+    if (args.len < 2) return c.fail(how, .{});
+    if (std.mem.eql(u8, args[0], "add")) {
+        if (args.len < 3) return c.fail(how, .{});
+        const target = try resolve(c, args[1]);
+        const raw = try std.mem.join(c.arena, " ", args[2..]);
+        const word = try place.linkKeyword(&c.db, c.arena, raw, target, c.now.ts) orelse
+            return c.fail("a keyword is 1 to {d} characters on one line", .{place.max_keyword});
+        return c.out.print("Windows titled with \"{s}\" are {s}.\n", .{ word, try label(c, target.project_id, target.workspace_id) });
+    }
+    if (std.mem.eql(u8, args[0], "remove")) {
+        const word = try place.keyword(c.arena, try std.mem.join(c.arena, " ", args[1..])) orelse return c.fail(how, .{});
+        c.db.unlink(place.keyword_provider, place.keyword_kind, word, null, c.now.ts) catch |e| switch (e) {
+            error.NotFound => return c.fail("\"{s}\" isn't a keyword", .{word}),
+            else => return e,
+        };
+        return c.out.print("Removed \"{s}\".\n", .{word});
+    }
+    return c.fail(how, .{});
+}
+
+fn listKeywords(c: *Ctx, args: []const [:0]const u8) !void {
+    try noArgs(c, "keywords", args);
+    var any = false;
+    for (try c.db.links(c.arena)) |l| {
+        if (!std.mem.eql(u8, l.provider, place.keyword_provider)) continue;
+        any = true;
+        try c.out.print("{s}\t{s}\n", .{ l.external_id, try label(c, l.target.project_id, l.target.workspace_id) });
+    }
+    if (!any) try c.out.writeAll("No keywords yet; `shifty keyword add <project> <word>`.\n");
 }
 
 fn cwd(c: *Ctx) !?[]const u8 {

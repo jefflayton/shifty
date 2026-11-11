@@ -199,7 +199,8 @@ Timesheet or Projects in its sidebar (⌘1, ⌘2).
   hidden unless they have time on them.
 - **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
   its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
-  project. The link button (or right-click) links a repo, folder, or app to it for auto-switch.
+  project. The link button (or right-click) links a repo, folder, app, or keyword to it for
+  auto-switch.
 
 ### Auto-switch
 
@@ -216,13 +217,37 @@ Shifty knows where you are by:
 
 - **Terminals**: a prompt hook records each shell's folder. Settings shows the line to add for
   zsh, fish, bash, or Neovim (Neovim reports the folder of the file you're in). It runs the CLI
-  bundled in the app, so it works whether or not you've installed the `shifty` command.
+  bundled in the app, so it works whether or not you've installed the `shifty` command. In a
+  terminal with tabs, like Rex, the shell whose folder the window's title names wins over the
+  last one to show a prompt.
 - **Editors** like VS Code and Zed: the folder the front window has open, which needs the
   Accessibility permission.
 - **Apps**: the app in front, for apps linked as a whole.
+- **Keywords**: words or phrases you give a project (**Add Keyword…** in the link menu, or
+  `shifty keyword add`). A front window whose title has one, as a whole word in any case, is that
+  project's, whatever repo it's in. Name a Rex session or tab for the project, or give the project
+  the session's name. Reading titles needs the Accessibility permission.
 
 A repo links by its Situ ids if it has a `situ.toml`, else its git remote (so every clone
 matches), else its path.
+
+A repo (or folder, or app) can link to several projects, like a library two projects work in.
+There, a keyword in the window's title picks; else the project you tracked most recently, so a
+running timer on one of them stays put; else the one linked first.
+
+### Teams meetings
+
+When a Microsoft Teams call starts and one of Teams' window titles has another project's keyword,
+the banner asks whether to switch to it, from when the call began. It doesn't count down, since a
+meeting can name a project without being for it, and it works with Teams behind other windows.
+**Switch** or **Keep …** answer it, and Keep holds for the rest of the call. If you switched, the
+call's end asks whether to switch back. While a call is on, where you work switches nothing.
+Turn it off with **Offer to switch for Teams meetings** in Settings → Auto-Switch.
+
+A call is on while Teams has the microphone, which Core Audio tells without any permission, and
+for a minute after, in case muting lets go of it. Reading Teams' window titles needs the
+Accessibility permission. Shifty logs the titles it sees during a call (`meeting: Teams windows:`),
+to check what Teams puts in them.
 
 ## CLI
 
@@ -289,11 +314,20 @@ client add <name>
 link <project>[/<workspace>]
                            Link the repo or folder you're in to a
                            project: by its Situ ids, else its git
-                           remote, else its path
+                           remote, else its path. A repo can link
+                           to several projects
 link --app <bundle id> <project>[/<workspace>]
                            Link a macOS app, for the menu bar's
                            auto-switch
-unlink [--app <bundle id>]  Remove the link for here, or an app's
+unlink [<project>]         Remove here's link to <project>, or all
+                           of here's links
+unlink --app <bundle id> [<project>]
+                           The same for an app
+keyword add <project>[/<workspace>] <word>...
+                           A window titled with <word> (a Rex
+                           session or tab, say) is <project>'s
+keyword remove <word>...   Stop matching <word>
+keywords                   List keywords and their projects
 hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
                            bar which folder your terminal is in
 here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
