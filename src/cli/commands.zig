@@ -22,9 +22,11 @@ const place = integrations.place;
 const here_ = integrations.here;
 const rex_ = integrations.rex;
 const clock_link = integrations.clock_link;
+const tui = @import("tui");
 
 pub const usage =
     \\Commands:
+    \\  tui                        Open the terminal UI
     \\  status                     What's running: shift, break, lunch, timer
     \\  in [-s <time>] [-l <len>] [--open]
     \\                             Clock in (default: now, 8h), with the
@@ -87,7 +89,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
+const Command = enum { tui, status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -131,11 +133,16 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
 
     const command = std.meta.stringToEnum(Command, args[0]).?;
     const rest = args[1..];
-    // Hot paths that run at every prompt: no database.
     switch (command) {
+        // Hot paths that run at every prompt: no database.
         .hook => return hook(&c, rest),
         .here => return here(&c, rest),
         .rex => return rex(&c, rest),
+        // Opens the database itself, before it takes over the terminal.
+        .tui => {
+            try noArgs(&c, "tui", rest);
+            return tui.run(init);
+        },
         else => {},
     }
 
@@ -169,7 +176,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .unlink => try unlink(&c, rest),
         .keyword => try keyword(&c, rest),
         .keywords => try listKeywords(&c, rest),
-        .hook, .here, .rex => unreachable,
+        .hook, .here, .rex, .tui => unreachable,
     }
 }
 
@@ -1071,8 +1078,27 @@ test "parseYmd" {
 }
 
 test "isCommand" {
+    try testing.expect(isCommand("tui"));
     try testing.expect(isCommand("start"));
     try testing.expect(isCommand("break"));
     try testing.expect(!isCommand("-s"));
     try testing.expect(!isCommand("9am"));
+}
+
+test "tui takes no arguments" {
+    var err_buf: [128]u8 = undefined;
+    var err: Io.Writer = .fixed(&err_buf);
+    var c: Ctx = .{
+        .io = testing.io,
+        .arena = testing.allocator,
+        .env = undefined,
+        .out = undefined,
+        .err = &err,
+        .db = undefined,
+        .now = undefined,
+        .tz_buf = undefined,
+    };
+    try noArgs(&c, "tui", &.{});
+    try testing.expectError(error.Reported, noArgs(&c, "tui", &.{"--week"}));
+    try testing.expectEqualStrings("shifty: tui takes no arguments\n", err.buffered());
 }
