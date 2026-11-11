@@ -184,6 +184,13 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(autoSwitchCountdown, forKey: Self.autoSwitchCountdownKey) }
   }
 
+  /// Whether a Teams meeting whose title has a project's keyword brings up
+  /// an offer to switch to that project (and back, when it ends). It only
+  /// offers, never switches by itself. Kept on this Mac.
+  var meetingSwitch: Bool {
+    didSet { defaults.set(meetingSwitch, forKey: Self.meetingSwitchKey) }
+  }
+
   static let autoSwitchDelays: [TimeInterval] = [10, 30, 60, 120, 300]
   static let autoSwitchCountdowns: [TimeInterval] = [5, 10, 15, 30]
 
@@ -203,6 +210,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let autoSwitchKey = "autoSwitch"
   static let autoSwitchDelayKey = "autoSwitch.delay"
   static let autoSwitchCountdownKey = "autoSwitch.countdown"
+  static let meetingSwitchKey = "autoSwitch.meetings"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
   static let snoozeSetting = "snooze_secs"
@@ -229,6 +237,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     autoSwitchDelay = defaults.object(forKey: Self.autoSwitchDelayKey) as? TimeInterval ?? 30
     autoSwitchCountdown =
       defaults.object(forKey: Self.autoSwitchCountdownKey) as? TimeInterval ?? 10
+    meetingSwitch = defaults.object(forKey: Self.meetingSwitchKey) as? Bool ?? true
     breakIcon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)
       .flatMap { $0.isEmpty ? nil : $0 }
 
