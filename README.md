@@ -235,6 +235,20 @@ A repo (or folder, or app) can link to several projects, like a library two proj
 There, a keyword in the window's title picks; else the project you tracked most recently, so a
 running timer on one of them stays put; else the one linked first.
 
+### Teams meetings
+
+When a Microsoft Teams call starts and one of Teams' window titles has another project's keyword,
+the banner asks whether to switch to it, from when the call began. It doesn't count down, since a
+meeting can name a project without being for it, and it works with Teams behind other windows.
+**Switch** or **Keep …** answer it, and Keep holds for the rest of the call. If you switched, the
+call's end asks whether to switch back. While a call is on, where you work switches nothing.
+Turn it off with **Offer to switch for Teams meetings** in Settings → Auto-Switch.
+
+A call is on while Teams has the microphone, which Core Audio tells without any permission, and
+for a minute after, in case muting lets go of it. Reading Teams' window titles needs the
+Accessibility permission. Shifty logs the titles it sees during a call (`meeting: Teams windows:`),
+to check what Teams puts in them.
+
 ## CLI
 
 The app comes with the CLI. To run it from any terminal, choose **Shifty → Install Command Line
