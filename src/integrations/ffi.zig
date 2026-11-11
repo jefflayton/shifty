@@ -14,6 +14,7 @@ const gpa = sffi.gpa;
 const git = @import("git.zig");
 const place = @import("place.zig");
 const here = @import("here.zig");
+const rex = @import("rex.zig");
 
 /// `place.Place` for the app: what to call it and what it's linked to.
 const PlaceJson = struct {
@@ -153,6 +154,42 @@ export fn shifty_here_json(h: *Handle, out: *?[*]u8, len: *usize) Result {
     return writeJson(spots, out, len);
 }
 
+/// The Rex tab and session you're on, as the Rex script last recorded
+/// them (see rex.zig), as UTF-8 JSON: {"ts","server","session","window",
+/// "title"}, or `null` if there's no record from the last day before `now`.
+/// Release it with `shifty_free`.
+export fn shifty_rex_json(h: *Handle, now: i64, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const path = rex.pathFor(a, h.path) catch return .no_memory;
+    const focus = rex.current(h.threaded.io(), a, path, now) catch return .no_memory;
+    const f = focus orelse return writeJson(null, out, len);
+    return writeJson(.{
+        .ts = f.ts,
+        .server = f.server,
+        .session = f.session,
+        .window = f.window,
+        .title = rex.title(a, f) catch return .no_memory,
+    }, out, len);
+}
+
+/// Writes the Lua script for `rex do` that calls `exe rex` (see rex.zig),
+/// as UTF-8; release it with `shifty_free`.
+export fn shifty_rex_script(exe: [*:0]const u8, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const text = rex.script(arena.allocator(), std.mem.span(exe)) catch return .no_memory;
+    const copy = gpa.dupe(u8, text) catch return .no_memory;
+    out.* = copy.ptr;
+    len.* = copy.len;
+    return .ok;
+}
+
 const testing = std.testing;
 
 test "C API - place, link, unlink" {
@@ -197,4 +234,16 @@ test "C API - place, link, unlink" {
     var buf: [1024]u8 = undefined;
     try testing.expectEqual(Result.ok, shifty_here_path(h, &buf, buf.len));
     try testing.expect(std.mem.endsWith(u8, std.mem.span(@as([*:0]u8, @ptrCast(&buf))), "here.tsv"));
+
+    var out4: ?[*]u8 = null;
+    var len4: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_rex_json(h, 0, &out4, &len4));
+    defer sffi.shifty_free(out4, len4);
+    try testing.expectEqualStrings("null", out4.?[0..len4]);
+
+    var out5: ?[*]u8 = null;
+    var len5: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_rex_script("/opt/shifty", &out5, &len5));
+    defer sffi.shifty_free(out5, len5);
+    try testing.expect(std.mem.indexOf(u8, out5.?[0..len5], "'/opt/shifty'") != null);
 }

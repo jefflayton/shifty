@@ -227,6 +227,14 @@ Shifty knows where you are by:
   `shifty keyword add`). A front window whose title has one, as a whole word in any case, is that
   project's, whatever repo it's in. Name a Rex session or tab for the project, or give the project
   the session's name. Reading titles needs the Accessibility permission.
+- **Rex tabs and sessions**: turn on **Follow Rex tabs and sessions** (Settings… → Auto-Switch →
+  Rex) and list any remote hosts you connect to, by their names from `rex hosts`. Shifty then runs
+  a small Lua script with `rex do` on your Mac, one for this Mac's Rex server and one for each
+  host. Rex runs a `rex do` script where the `rex` command is, so it hears which tab and session
+  you switch to even when the session lives on a remote host, where the prompt hook can't reach
+  your Mac and side tabs show no prompt. While Rex is in front, a keyword in that tab's or
+  session's name picks the project. `shifty hook rex` prints the script, to run it yourself:
+  `rex -S <host> do shifty.lua --all server=<host>`.
 
 A repo links by its Situ ids if it has a `situ.toml`, else its git remote (so every clone
 matches), else its path.
@@ -332,8 +340,14 @@ keyword remove <word>...   Stop matching <word>
 keywords                   List keywords and their projects
 hook <fish|zsh|bash|nvim>  Print a prompt hook that tells the menu
                            bar which folder your terminal is in
+hook rex                   Print a Lua script for `rex do` that
+                           tells the menu bar which Rex tab and
+                           session you're on, remote hosts too
 here [<dir>] [--pid <pid>]  What the hook runs: record <dir>
                            (default: this one) for the shell <pid>
+rex --session <label> [--window <label>] [--server <host>]
+                           What the Rex script runs: record the
+                           Rex tab and session you're on
 ```
 
 ```sh

@@ -514,6 +514,32 @@ final class ShiftStore {
     return String(cString: buf)
   }
 
+  /// The Rex tab and session you're on, as the `rex do` script
+  /// (`shifty hook rex`) last told the store.
+  struct RexFocus: Decodable, Equatable {
+    var ts: Int64
+    /// The host's label from `rex hosts`; empty for this Mac's server.
+    var server: String
+    var session: String
+    var window: String
+    /// "tab - session", as Rex titles its window.
+    var title: String
+  }
+
+  /// What the Rex script last recorded, if it did in the day before `now`.
+  func rexFocus(now: Date = Date()) throws -> RexFocus? {
+    try json(RexFocus?.none) { shifty_rex_json(handle, ts(now), $0, $1) }
+  }
+
+  /// The Lua script for `rex do`, calling `cli rex`.
+  static func rexScript(cli: String) -> String {
+    var ptr: UnsafeMutablePointer<CChar>?
+    var len = 0
+    guard shifty_rex_script(cli, &ptr, &len) == SHIFTY_OK, let ptr else { return "" }
+    defer { shifty_free(ptr, len) }
+    return String(decoding: UnsafeRawBufferPointer(start: ptr, count: len), as: UTF8.self)
+  }
+
   private func withOptionalCString<R>(_ s: String?, _ body: (UnsafePointer<CChar>?) -> R) -> R {
     guard let s else { return body(nil) }
     return s.withCString(body)
