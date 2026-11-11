@@ -7,11 +7,13 @@ import Darwin
 /// folder comes from the shell hook's record (`shifty hook`); an editor's
 /// from its window. The title is how a project's keywords find it, like a
 /// Rex session or tab named for it. Reading windows needs the
-/// Accessibility permission. Shifty's own windows don't count.
+/// Accessibility permission. Shifty's own windows don't count. It looks for
+/// a Teams call too, with `MeetingWatcher`.
 @MainActor
 final class FocusWatcher {
   private let store: ShiftStore
   private let model: AutoSwitchModel
+  private let meetings: MeetingWatcher
   private var timer: Timer?
   private var observer: NSObjectProtocol?
   /// Which app owns each shell; shells don't change hands.
@@ -22,6 +24,7 @@ final class FocusWatcher {
   init(store: ShiftStore, model: AutoSwitchModel) {
     self.store = store
     self.model = model
+    meetings = MeetingWatcher(store: store, model: model)
   }
 
   func start() {
@@ -50,8 +53,12 @@ final class FocusWatcher {
   /// Looks again, now.
   func check(now: Date = Date()) {
     let tracking = model.tracking
-    guard model.preferences.autoSwitch else { return model.observe(nil, place: "", now: now) }
+    guard model.preferences.autoSwitch else {
+      meetings.check(now: now)
+      return model.observe(nil, place: "", now: now)
+    }
     tracking.reload(now: now)
+    meetings.check(now: now)
     guard let app = NSWorkspace.shared.frontmostApplication,
       app.processIdentifier != ProcessInfo.processInfo.processIdentifier
     else { return model.tick(now: now) }
@@ -161,7 +168,7 @@ final class FocusWatcher {
     return nil
   }
 
-  private static func executablePath(_ pid: Int32) -> String? {
+  static func executablePath(_ pid: Int32) -> String? {
     var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
     guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return nil }
     return String(cString: buf)
