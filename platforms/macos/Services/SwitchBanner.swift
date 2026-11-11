@@ -4,7 +4,8 @@ import SwiftUI
 /// Auto-switch's offer, in a small panel at the top of the screen that
 /// floats over everything without taking focus: what it's switching to, a
 /// countdown, and buttons to switch now or keep the current project. After
-/// a switch it says so, with Undo, for a moment.
+/// a switch it says so, with Undo, for a moment. A meeting's offer has no
+/// countdown: it waits for you.
 @MainActor
 final class SwitchBanner {
   private let model: AutoSwitchModel
@@ -25,8 +26,7 @@ final class SwitchBanner {
     timer = nil
     if let offer = model.offer, offer.target != shown?.target { chime() }
     shown = model.offer
-    let due = model.offer?.deadline ?? model.switched?.until
-    guard let due else {
+    guard model.offer != nil || model.switched != nil else {
       panel?.orderOut(nil)
       return
     }
@@ -36,6 +36,7 @@ final class SwitchBanner {
     panel.orderFrontRegardless()
     // The model acts when its time's up; the watcher only looks every few
     // seconds.
+    guard let due = model.offer?.deadline ?? model.switched?.until else { return }
     let timer = Timer(fire: due, interval: 0, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated { self?.model.tick() }
     }
@@ -56,6 +57,9 @@ final class SwitchBanner {
     panel.backgroundColor = .clear
     panel.hasShadow = true
     panel.isMovableByWindowBackground = false
+    // Kept out of screen shares, since a meeting's offer stays up during
+    // the call.
+    panel.sharingType = .none
     // The panel follows the banner's size as it's laid out: measuring when
     // the model changes reads the old text, and clips the new.
     let host = NSHostingView(
@@ -104,10 +108,12 @@ struct SwitchBannerView: View {
 
   var body: some View {
     Group {
-      if let offer = model.offer {
+      if let offer = model.offer, offer.kind != .place {
+        MeetingOfferView(model: model, offer: offer)
+      } else if let offer = model.offer, let deadline = offer.deadline {
         HStack(spacing: 12) {
-          Countdown(start: offer.deadline.addingTimeInterval(-model.preferences.autoSwitchCountdown),
-            end: offer.deadline)
+          Countdown(start: deadline.addingTimeInterval(-model.preferences.autoSwitchCountdown),
+            end: deadline)
           VStack(alignment: .leading, spacing: 1) {
             Text("\(offer.starts ? "Starting" : "Switching to") \(Text(offer.name).bold())")
             Text("You're in \(offer.place)" + (offer.from.map { " · from \($0)" } ?? ""))
@@ -159,6 +165,42 @@ struct SwitchBannerView: View {
     .padding(8)
     .fixedSize()
     .onGeometryChange(for: CGSize.self) { $0.size } action: { resized($0) }
+  }
+}
+
+/// A meeting's offer, or the offer to go back once it ends: no countdown,
+/// since it waits for you.
+private struct MeetingOfferView: View {
+  let model: AutoSwitchModel
+  let offer: AutoSwitchModel.Offer
+
+  private var over: Bool { offer.kind == .meetingOver }
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Image(systemName: over ? "arrow.uturn.backward" : "video")
+        .font(.title3)
+        .foregroundStyle(.tint)
+        .frame(width: 30)
+      VStack(alignment: .leading, spacing: 1) {
+        if over {
+          Text("Back to \(Text(offer.name).bold())?")
+        } else {
+          Text("\(offer.starts ? "Start" : "Switch to") \(Text(offer.name).bold())?")
+        }
+        Text((over ? offer.place : "In \(offer.place)") + (offer.from.map { " · from \($0)" } ?? ""))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .truncationMode(.middle)
+      }
+      .lineLimit(1)
+      .frame(maxWidth: 320, alignment: .leading)
+      Spacer(minLength: 8)
+      Button(offer.from.map { "Keep \($0)" } ?? "Not Now") { model.keep() }
+        .lineLimit(1)
+      Button(over ? "Switch Back" : offer.starts ? "Start" : "Switch") { model.switchNow() }
+        .buttonStyle(.borderedProminent)
+    }
   }
 }
 
