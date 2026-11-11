@@ -6,8 +6,9 @@ import Darwin
 /// front, the folder it has open, and its window's title. A terminal's
 /// folder comes from the shell hook's record (`shifty hook`); an editor's
 /// from its window. The title is how a project's keywords find it, like a
-/// Rex session or tab named for it. Reading windows needs the
-/// Accessibility permission. Shifty's own windows don't count. It looks for
+/// Rex session or tab named for it; with "Follow Rex tabs" on, the tab
+/// and session the Rex script last heard (`RexFollow`) stand in for Rex's
+/// title. Reading windows needs the Accessibility permission. Shifty's own windows don't count. It looks for
 /// a Teams call too, with `MeetingWatcher`.
 @MainActor
 final class FocusWatcher {
@@ -64,9 +65,15 @@ final class FocusWatcher {
     else { return model.tick(now: now) }
     let bundle = app.bundleIdentifier
     let window = Self.focusedWindow(app)
-    let title = window.flatMap { Self.attribute($0, kAXTitleAttribute) as? String }
-    let dir = window.flatMap { editorDirectory($0, title: title) }
-      ?? terminalDirectory(bundle, title: title)
+    let windowTitle = window.flatMap { Self.attribute($0, kAXTitleAttribute) as? String }
+    let dir = window.flatMap { editorDirectory($0, title: windowTitle) }
+      ?? terminalDirectory(bundle, title: windowTitle)
+    // Rex's tab and session, as the Rex script heard them: its window can't
+    // always say, as on a remote host.
+    let focus =
+      model.preferences.followRex && RexFollow.isRex(bundle)
+      ? (try? store.rexFocus(now: now)) ?? nil : nil
+    let title = RexFollow.title(app: bundle, window: windowTitle, focus: focus)
     let place: ShiftStore.Place
     do {
       place = try store.place(dir: dir, app: bundle, title: title)

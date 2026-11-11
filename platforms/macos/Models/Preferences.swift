@@ -191,6 +191,19 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(meetingSwitch, forKey: Self.meetingSwitchKey) }
   }
 
+  /// Whether Shifty runs Rex's `rex do` script (`RexFollow`) so auto
+  /// switch follows the Rex tab and session you're on, remote ones too.
+  /// Kept on this Mac.
+  var followRex: Bool {
+    didSet { defaults.set(followRex, forKey: Self.followRexKey) }
+  }
+
+  /// Rex hosts to follow besides this Mac's server: their labels from
+  /// `rex hosts`, separated by commas or spaces. Kept on this Mac.
+  var rexHosts: String {
+    didSet { defaults.set(rexHosts, forKey: Self.rexHostsKey) }
+  }
+
   static let autoSwitchDelays: [TimeInterval] = [10, 30, 60, 120, 300]
   static let autoSwitchCountdowns: [TimeInterval] = [5, 10, 15, 30]
 
@@ -211,6 +224,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let autoSwitchDelayKey = "autoSwitch.delay"
   static let autoSwitchCountdownKey = "autoSwitch.countdown"
   static let meetingSwitchKey = "autoSwitch.meetings"
+  static let followRexKey = "autoSwitch.rex"
+  static let rexHostsKey = "autoSwitch.rexHosts"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
   static let snoozeSetting = "snooze_secs"
@@ -238,6 +253,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     autoSwitchCountdown =
       defaults.object(forKey: Self.autoSwitchCountdownKey) as? TimeInterval ?? 10
     meetingSwitch = defaults.object(forKey: Self.meetingSwitchKey) as? Bool ?? true
+    followRex = defaults.bool(forKey: Self.followRexKey)
+    rexHosts = defaults.string(forKey: Self.rexHostsKey) ?? ""
     breakIcon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)
       .flatMap { $0.isEmpty ? nil : $0 }
 

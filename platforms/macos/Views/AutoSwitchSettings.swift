@@ -61,6 +61,32 @@ struct AutoSwitchSettings: View {
     }
 
     Section {
+      Toggle("Follow Rex tabs and sessions", isOn: $preferences.followRex)
+        .disabled(!preferences.autoSwitch)
+      TextField("Remote hosts", text: $preferences.rexHosts, prompt: Text("devbox"))
+        .disabled(!preferences.autoSwitch || !preferences.followRex)
+      if preferences.autoSwitch && preferences.followRex {
+        TimelineView(.periodic(from: .now, by: 2)) { _ in
+          if let problem = RexWatcher.problem {
+            Label(problem, systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.secondary)
+          } else {
+            Label("Listening to Rex", systemImage: "checkmark.circle.fill")
+              .foregroundStyle(.green)
+          }
+        }
+      }
+    } header: {
+      Text("Rex")
+    } footer: {
+      Text(
+        "Rex's sessions on a remote host run their shells there, so the hook above can't reach this Mac, and switching side tabs shows no prompt. With this on, Shifty runs a small Rex script on this Mac that hears which tab and session you switch to, on this Mac and on each remote host you list (their names from `rex hosts`, separated by commas). Name a tab or session with a project's keyword and auto-switch follows it."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    Section {
       TimelineView(.periodic(from: .now, by: 2)) { _ in
         LabeledContent("Read editor windows") {
           if FocusWatcher.canReadWindows {

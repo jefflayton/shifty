@@ -244,4 +244,12 @@ ShiftyResult shifty_here_path(ShiftyStore *store, char *buf, size_t cap);
 // "dir"}]. Release with shifty_free.
 ShiftyResult shifty_here_json(ShiftyStore *store, char **out, size_t *len);
 
+// The Rex tab and session you're on, as the `rex do` script from
+// `shifty hook rex` last recorded them: {"ts","server","session","window",
+// "title"} as UTF-8 JSON, or null if there's no record from the day before
+// `now`. Release with shifty_free.
+ShiftyResult shifty_rex_json(ShiftyStore *store, int64_t now, char **out, size_t *len);
+// That script, calling `exe rex`, as UTF-8. Release with shifty_free.
+ShiftyResult shifty_rex_script(const char *exe, char **out, size_t *len);
+
 #endif // SHIFTY_H
