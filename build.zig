@@ -79,11 +79,11 @@ pub fn build(b: *Build) void {
     const macos_step = buildMacOS(b, optimize, release, .{ .core = core, .store = store, .integrations = integrations });
     b.getInstallStep().dependOn(macos_step);
 
-    const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
-    test_step.dependOn(tui.tests);
-    const tui_step = tui.step;
     const cli = buildCli(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations });
     test_step.dependOn(cli.tests);
+    const tui = buildTui(b, target, optimize, .{ .core = core, .store = store, .integrations = integrations }, cli);
+    test_step.dependOn(tui.tests);
+    const tui_step = tui.step;
 
     const all = b.step("all", "Build all applicable apps");
     all.dependOn(test_step);
@@ -99,8 +99,9 @@ pub fn build(b: *Build) void {
 
 const Deps = struct { core: *Build.Module, store: *Build.Module, integrations: *Build.Module };
 
-/// The `shifty` command line tool. `zig build cli` builds it for this
-/// machine, and the macOS app bundles one (see `buildMacOS`).
+/// The `shifty` command line tool, with the TUI inside as `shifty tui`.
+/// `zig build cli` builds it for this machine, and the macOS app bundles one
+/// (see `buildMacOS`).
 fn addCli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, deps: Deps) *Build.Step.Compile {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/cli/main.zig"),
@@ -110,16 +111,43 @@ fn addCli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Optimiz
     mod.addImport("core", deps.core);
     mod.addImport("store", deps.store);
     mod.addImport("integrations", deps.integrations);
+    mod.addImport("tui", addTuiModule(b, target, optimize, deps));
     return b.addExecutable(.{ .name = "shifty", .root_module = mod });
 }
+
+/// The TUI, as a module the CLI imports. Per target, since vaxis is.
+fn addTuiModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, deps: Deps) *Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("core", deps.core);
+    mod.addImport("store", deps.store);
+    mod.addImport("integrations", deps.integrations);
+
+    const vaxis = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("vaxis", vaxis.module("vaxis"));
+    return mod;
+}
+
+const Cli = struct {
+    step: *Build.Step,
+    tests: *Build.Step,
+    exe: *Build.Step.Compile,
+    install: *Build.Step,
+};
 
 fn buildCli(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     deps: Deps,
-) struct { step: *Build.Step, tests: *Build.Step } {
-    const cli_step = b.step("cli", "Build the CLI");
+) Cli {
+    const cli_step = b.step("cli", "Build the CLI (with the TUI)");
 
     const exe = addCli(b, target, optimize, deps);
     const mod = exe.root_module;
@@ -135,47 +163,29 @@ fn buildCli(
     const tests = b.addTest(.{ .root_module = mod });
     const run_tests = b.addRunArtifact(tests);
 
-    return .{ .step = cli_step, .tests = &run_tests.step };
+    return .{ .step = cli_step, .tests = &run_tests.step, .exe = exe, .install = &install_exe.step };
 }
 
+/// The TUI lives in the CLI binary, so `zig build tui` builds the CLI and
+/// `zig build run-tui` runs `shifty tui`.
 fn buildTui(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     deps: Deps,
+    cli: Cli,
 ) struct { step: *Build.Step, tests: *Build.Step } {
-    const tui_step = b.step("tui", "Build the TUI");
+    const tui_step = b.step("tui", "Build the CLI, which opens the TUI as `shifty tui`");
+    tui_step.dependOn(cli.install);
 
-    const mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    mod.addImport("core", deps.core);
-    mod.addImport("store", deps.store);
-    mod.addImport("integrations", deps.integrations);
-
-    const vaxis = b.dependency("vaxis", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    mod.addImport("vaxis", vaxis.module("vaxis"));
-
-    const exe_opts: Build.ExecutableOptions = .{
-        .name = "shifty-tui",
-        .root_module = mod,
-    };
-    const exe = b.addExecutable(exe_opts);
-    const install_exe = b.addInstallArtifact(exe, .{});
-    tui_step.dependOn(&install_exe.step);
-
-    const run_step = b.step("run-tui", "Run the TUI");
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(&install_exe.step);
+    const run_step = b.step("run-tui", "Run the TUI (shifty tui)");
+    const run_cmd = b.addRunArtifact(cli.exe);
+    run_cmd.addArg("tui");
+    run_cmd.step.dependOn(cli.install);
     if (b.args) |args| run_cmd.addArgs(args);
     run_step.dependOn(&run_cmd.step);
 
-    const tests = b.addTest(.{ .root_module = mod });
+    const tests = b.addTest(.{ .root_module = addTuiModule(b, target, optimize, deps) });
     const run_tests = b.addRunArtifact(tests);
 
     return .{ .step = tui_step, .tests = &run_tests.step };

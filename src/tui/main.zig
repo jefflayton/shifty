@@ -1,3 +1,6 @@
+//! The TUI, which `shifty tui` opens. It lives in the CLI binary, so the one
+//! command line install gives you both.
+
 const std = @import("std");
 const Io = std.Io;
 
@@ -10,7 +13,8 @@ const Calculator = @import("calc.zig").Calculator;
 const Tracker = @import("tracker.zig").Tracker;
 const Timesheet = @import("timesheet.zig").Timesheet;
 
-pub fn main(init: std.process.Init) !void {
+/// Opens the TUI on the shared database and runs it until you quit.
+pub fn run(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
     const arena = init.arena.allocator();
@@ -23,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
     // where it can be read.
     const path = store.defaultPath(arena, init.environ_map) catch |e| switch (e) {
         error.NoHome => {
-            try stderr.writeAll("shifty-tui: $HOME isn't set; set $SHIFTY_DB to choose where the database goes\n");
+            try stderr.writeAll("shifty tui: $HOME isn't set; set $SHIFTY_DB to choose where the database goes\n");
             try stderr_writer.flush();
             std.process.exit(1);
         },
@@ -31,8 +35,8 @@ pub fn main(init: std.process.Init) !void {
     };
     var db = store.Store.open(io, path) catch |e| {
         switch (e) {
-            error.SchemaTooNew => try stderr.print("shifty-tui: {s} was written by a newer Shifty; update this one\n", .{path}),
-            else => try stderr.print("shifty-tui: can't open {s}: {t}\n", .{ path, e }),
+            error.SchemaTooNew => try stderr.print("shifty tui: {s} was written by a newer Shifty; update this one\n", .{path}),
+            else => try stderr.print("shifty tui: can't open {s}: {t}\n", .{ path, e }),
         }
         try stderr_writer.flush();
         std.process.exit(1);
