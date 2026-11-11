@@ -1343,6 +1343,30 @@ do {
   check(try! store.spotsPath().hasSuffix("/here.tsv"), "the hook's record sits by the db")
   expectEqual(try! store.spots(), [], "no hook yet")
 
+  // The Rex script's record: with Rex in front, its tab and session stand in
+  // for its window's title, which can't say on a remote host.
+  expectEqual(try! store.rexFocus(now: at(10)), nil, "no Rex record yet")
+  let rexFile = ((path as NSString).deletingLastPathComponent as NSString)
+    .appendingPathComponent("rex.tsv")
+  defer { try? FileManager.default.removeItem(atPath: rexFile) }
+  try! "\(Int64(at(9).timeIntervalSince1970))\tdevbox\tChat\tapi\n"
+    .write(toFile: rexFile, atomically: true, encoding: .utf8)
+  let focus = try! store.rexFocus(now: at(10))
+  expectEqual(focus?.title, "api - Chat", "tab, then session, as Rex titles them")
+  expectEqual(focus?.server, "devbox")
+  expectEqual(try! store.rexFocus(now: at(10, day: 2)), nil, "a day-old record says nothing")
+  let rexTitle = RexFollow.title(
+    app: "com.superlogical.rex", window: "zsh ~ - remote", focus: focus)
+  expectEqual(rexTitle, "api - Chat")
+  expectEqual(
+    RexFollow.title(app: "com.apple.Terminal", window: "zsh", focus: focus), "zsh",
+    "only Rex's windows")
+  try! store.link(keyword: "chat", to: .init(project: chat))
+  expectEqual(
+    try! store.place(dir: nil, app: "com.superlogical.rex", title: rexTitle).target,
+    .init(project: chat), "the Rex session's keyword")
+  try! store.unlink(try! store.links().first { $0.provider == "keyword" }!)
+
   // Auto-switch: a running timer on Web, then working somewhere that's Chat.
   let defaults = testDefaults()
   let prefs = Preferences(defaults: defaults)
@@ -1728,6 +1752,35 @@ do {
   m.lunchRule = rule
   m.breaks = []
   expectEqual(m.clockOut(now: at(10)), at(17), "lunch window off")
+}
+
+// MARK: Rex
+
+do {
+  expectEqual(RexFollow.hosts(" devbox, build  devbox,,"), ["devbox", "build"])
+  expectEqual(RexFollow.servers(hosts: ["devbox"]), [nil, "devbox"], "this Mac's, then each host")
+  expectEqual(
+    RexFollow.arguments(script: "/s.lua", server: nil, cli: "/bin/shifty"),
+    ["--autostart=false", "do", "/s.lua", "--all", "shifty=/bin/shifty"])
+  expectEqual(
+    RexFollow.arguments(script: "/s.lua", server: "devbox", cli: "/bin/shifty"),
+    [
+      "--autostart=false", "-S", "devbox", "do", "/s.lua", "--all", "shifty=/bin/shifty",
+      "server=devbox",
+    ])
+  check(RexFollow.isRex("com.superlogical.rex.server"), "Rex Server is Rex")
+  check(!RexFollow.isRex("com.superlogical.rexx"), "another app isn't")
+  check(!RexFollow.isRex(nil), "nothing in front")
+  check(ShiftStore.rexScript(cli: "/bin/shifty").contains("'/bin/shifty'"), "the script calls the CLI")
+
+  let defaults = testDefaults()
+  let prefs = Preferences(defaults: defaults)
+  check(!prefs.followRex, "off until you turn it on")
+  prefs.followRex = true
+  prefs.rexHosts = "devbox"
+  let again = Preferences(defaults: defaults)
+  check(again.followRex, "kept")
+  expectEqual(again.rexHosts, "devbox")
 }
 
 print("\(count - failures)/\(count) checks passed")

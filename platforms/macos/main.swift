@@ -42,6 +42,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   /// Moves the timer to the project linked to where you work.
   lazy var autoSwitch = tracking.map { AutoSwitchModel(tracking: $0, preferences: preferences) }
   private var focusWatcher: FocusWatcher?
+  /// Runs Rex's script so auto switch follows its tabs and sessions.
+  private var rexWatcher: RexWatcher?
   private var switchBanner: SwitchBanner?
   let loginItem = LoginItem()
   private var storeWatcher: Timer?
@@ -81,6 +83,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       switchBanner = banner
       focusWatcher = FocusWatcher(store: store, model: autoSwitch)
       focusWatcher?.start()
+      rexWatcher = RexWatcher()
+      followRex()
     }
 
     setupMenu()
@@ -118,6 +122,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       // Wait for the status item to be placed in the menu bar.
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.toggle() }
     }
+  }
+
+  /// Runs the Rex script while auto switch follows Rex, for this Mac and
+  /// the hosts in the settings.
+  private func followRex() {
+    withObservationTracking {
+      rexWatcher?.update(
+        follow: preferences.autoSwitch && preferences.followRex,
+        hosts: RexFollow.hosts(preferences.rexHosts))
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.followRex() }
+    }
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    rexWatcher?.stop()
   }
 
   /// Keeps the shift's lunch window, which clock out counts, up with the
