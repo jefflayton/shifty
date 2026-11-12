@@ -71,8 +71,11 @@ timesheet window.
 ## Menu bar
 
 Set your shift length, clock-in time (**Now** sets it to the current time), and breaks; Shifty shows
-when to clock out. Your shift and alarms are saved, and a shift that ended more than 12 hours ago
-rolls over to today, with today's [scheduled breaks](#scheduled-breaks) instead of yesterday's.
+when to clock out. Your shift and alarms are saved. Off the clock, yesterday's shift rolls over to
+today once it's over (a shift you're clocked in to, once it ended more than 12 hours ago), with
+today's [scheduled](#scheduled-breaks) and [one-off breaks](#one-off-breaks) instead of
+yesterday's. Each day's breaks stay on that day's shift; clocking in starts the new shift with
+today's.
 
 Click **Clock In** to start tracking the shift for real. Once you're clocked in, from the menu
 bar, the TUI, or `shifty in`, the popover shows that shift, and changes from any of them show
@@ -115,6 +118,15 @@ remove that break in the popover or on the timesheet. A break that would start a
 isn't added, and one already underway when you clock in counts from clock in. Changes apply from
 the next day's shift; to put one on today's shift too, click **Add to Today** beside it (shown
 while it fits: it's for today, isn't over, and doesn't overlap a break you already have).
+
+### One-off breaks
+
+For a break on one day only, like the dentist on Thursday from 2 to 3, click **+** on the Breaks
+page (or **Add One-Off Break** under *One-Off Breaks*) and pick the day, the times, a name, and an
+icon; or run `shifty break plan 2pm 3pm -d thu -n Dentist`. It goes on that day's shift when you
+clock in, or straight away if you're on that day's shift and it's still to come, and pushes clock
+out later. Edit or remove one from the list, or `shifty break unplan 2pm -d thu`: until it starts,
+that takes it off your shift too.
 
 With **Time Until Break** in the menu bar, Shifty counts down to the next break, then to the end
 of the one you're on; with no break left, it shows the time left. During a planned break the icon
@@ -215,8 +227,12 @@ Timesheet, Meetings, Breaks, or Projects in its sidebar (⌘1 to ⌘4).
   timesheet's rows (the note is the title). **+** adds one you didn't log. Below them are the
   [Teams](#teams-meetings) switches and the window titles Teams showed during your last call, each
   with **Add Keyword** to link its name to a project.
-- **Breaks**: the lunch window, scheduled breaks, and the icon for other breaks. Without the
-  shared database (Shifty as a calculator only) they're in Settings instead.
+- **Breaks**: the week's breaks by day, each named (lunch, a one-off or scheduled break) with
+  its times and length, and each day's time on break. A day whose lunch window closed with no
+  lunch says **No lunch**; a late one, **Lunch was late**. Below them are the
+  [one-off breaks](#one-off-breaks) still to come, then the lunch window, scheduled breaks, and the
+  icon for other breaks. It shares the timesheet's week (⌘← and ⌘→). Without the shared database
+  (Shifty as a calculator only) the settings are in Settings instead.
 - **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
   its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
   project. The link button (or right-click) links a repo, folder, app, or keyword to it for
@@ -322,6 +338,15 @@ in [-s <time>] [-l <len>] [--open]
 out [--open]               Clock out
 break [--open]             Start or end a break; --open opens the
                            clock link for lunch
+break plan <start> <end> [-d <day>] [-n <name>]
+                           Plan a one-off break, like the dentist:
+                           it goes on that day's shift. Days:
+                           today, tomorrow, mon...sun (the next
+                           one), or 2026-11-14
+break unplan <start> [-d <day>]
+                           Drop the one-off break starting then
+breaks [<day>] [--last]    The week's breaks by day, lunch marked,
+                           and the one-off breaks still to come
 sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
                            lunch, and time, with totals
 add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
@@ -410,7 +435,8 @@ By client
 shift (worked, past its length, and how lunch went), its breaks and tracked time, then the week's
 totals. `shifty sheet mon` shows the week holding that day; `--last`, the week before. `add` without
 `-d` puts the time on today, or yesterday if it starts later than now. With the lunch window on,
-`status`, `in`, and `break` count lunch in clock out and say where lunch stands.
+`status`, `in`, and `break` count lunch in clock out and say where lunch stands. `shifty breaks`
+lists the week's breaks the way the Breaks page does, and the one-off breaks still to come.
 
 `shifty goal 20h` sets a [weekly goal](#weekly-goal) (`20`, `20h`, and `37:30` all work), `shifty
 goal` shows the week against it, and `shifty goal off` turns it off. With a goal, `status` adds a

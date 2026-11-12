@@ -35,6 +35,15 @@ pub const usage =
     \\  out [--open]               Clock out
     \\  break [--open]             Start or end a break; --open opens the
     \\                             clock link for lunch
+    \\  break plan <start> <end> [-d <day>] [-n <name>]
+    \\                             Plan a one-off break, like the dentist:
+    \\                             it goes on that day's shift. Days:
+    \\                             today, tomorrow, mon...sun (the next
+    \\                             one), or 2026-11-14
+    \\  break unplan <start> [-d <day>]
+    \\                             Drop the one-off break starting then
+    \\  breaks [<day>] [--last]    The week's breaks by day, lunch marked,
+    \\                             and the one-off breaks still to come
     \\  sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
     \\                             lunch, and time, with totals
     \\  goal [<hours>|off]         Show the weekly hours goal and what's
@@ -99,7 +108,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { tui, status, in, out, @"break", sheet, goal, add, start, stop, meetings, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
+const Command = enum { tui, status, in, out, @"break", breaks, sheet, goal, add, start, stop, meetings, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -171,7 +180,8 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .status => try status(&c, rest),
         .in => try clockIn(&c, rest),
         .out => try clockOut(&c, rest),
-        .@"break" => try toggleBreak(&c, rest),
+        .@"break" => try breakCommand(&c, rest),
+        .breaks => try listBreaks(&c, rest),
         .sheet => try timesheet(&c, rest),
         .goal => try goal(&c, rest),
         .add => try add(&c, rest),
@@ -327,6 +337,13 @@ fn clockOut(c: *Ctx, args: []const [:0]const u8) !void {
     if (open) try openLink(c, .out);
 }
 
+/// `break`, `break plan`, or `break unplan`.
+fn breakCommand(c: *Ctx, args: []const [:0]const u8) !void {
+    if (args.len > 0 and std.mem.eql(u8, args[0], "plan")) return planBreak(c, args[1..]);
+    if (args.len > 0 and std.mem.eql(u8, args[0], "unplan")) return unplanBreak(c, args[1..]);
+    return toggleBreak(c, args);
+}
+
 fn toggleBreak(c: *Ctx, args: []const [:0]const u8) !void {
     const open = try onlyOpen(c, "break", args);
     const now = c.now.ts;
@@ -355,6 +372,169 @@ fn toggleBreak(c: *Ctx, args: []const [:0]const u8) !void {
     if (is_lunch) try c.out.print(" Clock out holds until you've had {f}.", .{dur(lunch.?.minimum_secs)});
     try c.out.writeAll("\n");
     if (open and is_lunch and lunch.?.clock_link) try openLink(c, .out);
+}
+
+// ── One-off breaks ──────────────────────────────────────────────────────────
+
+fn planBreak(c: *Ctx, args: []const [:0]const u8) !void {
+    var times: [2]time.Time = undefined;
+    var n_times: usize = 0;
+    var name: ?[]const u8 = null;
+    var day: ?i64 = null;
+    var it: Args = .{ .c = c, .cmd = "break plan", .list = args };
+    while (it.peek()) |arg| {
+        if (eqlAny(arg, &.{ "-n", "--name" })) {
+            _ = it.next();
+            name = try it.value(arg);
+        } else if (eqlAny(arg, &.{ "-d", "--day" })) {
+            _ = it.next();
+            day = try parseNextDay(c, try it.value(arg));
+        } else if (arg.len > 0 and arg[0] != '-' and n_times < 2) {
+            times[n_times] = try it.time("break plan");
+            n_times += 1;
+        } else {
+            _ = it.next();
+            return it.unexpected(arg);
+        }
+    }
+    if (n_times < 2) return c.fail("usage: shifty break plan <start> <end> [-d <day>] [-n <name>]", .{});
+
+    const now = c.now.ts;
+    const midnight = day orelse fmt.dayStart(now, c.now.utc_offset_secs);
+    const noon = midnight + std.time.s_per_day / 2;
+    const off = local.utcOffset(noon);
+    const from = sheet.onDay(noon, off, times[0]);
+    const end = sheet.endAfter(from, off, times[1]);
+    if (!sheet.validBreak(from, end)) return c.fail("a break can't run longer than 12 hours", .{});
+    if (end <= now) return c.fail("that's over already; -d for another day", .{});
+
+    const label_ = name orelse "Break";
+    const a = c.arena;
+    const was = if (try c.db.currentShift(a)) |sh| (try c.db.breaks(a, sh.id)).len else 0;
+    try c.db.putOneOffBreak(.{ .id = .v7(c.io), .name = label_, .in_ts = from, .out_ts = end }, now);
+    const at_off = local.utcOffset(from);
+    try c.out.print("Planned {s} on {f}, {f} – {f}.\n", .{ label_, fmt.date(from, at_off), clock(from, at_off), clock(end, at_off) });
+    if (try c.db.currentShift(a)) |sh| {
+        const brks = try c.db.breaks(a, sh.id);
+        if (brks.len > was) {
+            const lunch = try sheet.Lunch.load(&c.db, a);
+            const out = try sheet.clockOut(a, sh, brks, lunch, now);
+            try c.out.print("It's on today's shift: clock out at {f}.\n", .{clock(out, c.now.utc_offset_secs)});
+        }
+    }
+}
+
+fn unplanBreak(c: *Ctx, args: []const [:0]const u8) !void {
+    var from_time: ?time.Time = null;
+    var day: ?i64 = null;
+    var it: Args = .{ .c = c, .cmd = "break unplan", .list = args };
+    while (it.peek()) |arg| {
+        if (eqlAny(arg, &.{ "-d", "--day" })) {
+            _ = it.next();
+            day = try parseNextDay(c, try it.value(arg));
+        } else if (arg.len > 0 and arg[0] != '-' and from_time == null) {
+            from_time = try it.time("break unplan");
+        } else {
+            _ = it.next();
+            return it.unexpected(arg);
+        }
+    }
+    const t = from_time orelse return c.fail("usage: shifty break unplan <start> [-d <day>]", .{});
+    const midnight = day orelse fmt.dayStart(c.now.ts, c.now.utc_offset_secs);
+    const noon = midnight + std.time.s_per_day / 2;
+    const from = sheet.onDay(noon, local.utcOffset(noon), t);
+    for (try c.db.oneOffBreaks(c.arena, midnight, midnight + std.time.s_per_day)) |o| {
+        if (o.in_ts != from) continue;
+        try c.db.deleteOneOffBreak(o.id, c.now.ts);
+        const o_off = local.utcOffset(o.in_ts);
+        return c.out.print("Dropped {s} on {f}, {f} – {f}.\n", .{ o.name, fmt.date(o.in_ts, o_off), clock(o.in_ts, o_off), clock(o.out_ts, o_off) });
+    }
+    return c.fail("no one-off break starts at {f} on {f}; `shifty breaks` lists them", .{ clock(from, local.utcOffset(from)), fmt.date(noon, local.utcOffset(noon)) });
+}
+
+/// A day's local midnight, looking ahead: `today`, `tomorrow`, a weekday
+/// (the next one, today included), or `YYYY-MM-DD`.
+fn parseNextDay(c: *Ctx, str: []const u8) !i64 {
+    const today = fmt.dayStart(c.now.ts, c.now.utc_offset_secs);
+    if (std.ascii.eqlIgnoreCase(str, "today")) return today;
+    if (std.ascii.eqlIgnoreCase(str, "tomorrow")) return midnightOf(today + std.time.s_per_day + std.time.s_per_day / 2);
+    const names = [_][]const u8{ "mon", "tue", "wed", "thu", "fri", "sat", "sun" };
+    for (names, 1..) |n, iso| {
+        if (str.len >= 3 and std.ascii.startsWithIgnoreCase(str, n) and std.ascii.startsWithIgnoreCase(fullDay(iso), str)) {
+            const wd = sheet.isoWeekday(c.now.ts + c.now.utc_offset_secs);
+            const ahead: i64 = @mod(@as(i64, @intCast(iso)) - @as(i64, wd), 7);
+            return midnightOf(today + ahead * std.time.s_per_day + std.time.s_per_day / 2);
+        }
+    }
+    const ymd = parseYmd(str) orelse return c.fail("can't read '{s}' as a day; use today, tomorrow, mon...sun, or 2026-11-14", .{str});
+    return midnightOf(ymd * std.time.s_per_day + std.time.s_per_day / 2);
+}
+
+/// The week's breaks by day, with lunch marked and days that missed it,
+/// then the one-off breaks still to come.
+fn listBreaks(c: *Ctx, args: []const [:0]const u8) !void {
+    var day: ?i64 = null;
+    var last = false;
+    var it: Args = .{ .c = c, .cmd = "breaks", .list = args };
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--last")) {
+            last = true;
+        } else if (day == null and arg[0] != '-') {
+            day = try parseDay(c, arg);
+        } else return it.unexpected(arg);
+    }
+    const a = c.arena;
+    const now = c.now.ts;
+    var ref = (day orelse fmt.dayStart(now, c.now.utc_offset_secs)) + std.time.s_per_day / 2;
+    if (last) ref -= 7 * std.time.s_per_day;
+    const first = sheet.weekStart(ref, local.utcOffset(ref), try sheet.weekStartDay(&c.db, a));
+    const w: sheet.Week = try .load(&c.db, a, sheet.weekDays(first, local.utcOffset));
+
+    // A break a one-off put on its shift goes by the one-off's name.
+    const one_offs = try c.db.oneOffBreaks(a, w.days[0], w.days[7]);
+
+    try c.out.print("Breaks, week of {f}\n", .{fmt.date(w.days[0], local.utcOffset(w.days[0]))});
+    var total: i64 = 0;
+    var any = false;
+    for (0..7) |d| {
+        const shifts = try w.shiftsOn(a, d);
+        if (shifts.len == 0) continue;
+        any = true;
+        try c.out.print("\n{f}\n", .{fmt.date(w.days[d], local.utcOffset(w.days[d]))});
+        for (shifts) |sh| {
+            const off = sh.shift.utc_offset_secs;
+            const plan = try w.lunchOf(a, sh, now);
+            for (sh.breaks) |b| {
+                const secs = (b.out_ts orelse @max(now, b.in_ts)) - b.in_ts;
+                total += secs;
+                try printSpan(c, b.in_ts, b.out_ts, off);
+                const is_lunch = if (plan) |p| p.isLunch(b.in_ts) else false;
+                var what: []const u8 = if (is_lunch) "Lunch" else "Break";
+                for (one_offs) |o| {
+                    if (o.out_ts == b.out_ts and o.in_ts <= b.in_ts and !is_lunch) what = o.name;
+                }
+                try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, secs), what });
+            }
+            if (plan) |p| switch (p.status(now)) {
+                .missed => try c.out.writeAll("  No lunch\n"),
+                .late => try c.out.writeAll("  Lunch was late\n"),
+                else => {},
+            };
+            if (sh.breaks.len == 0 and plan == null) try c.out.writeAll("  No breaks\n");
+        }
+    }
+    if (any) {
+        try c.out.print("\n  {s: >7}  on break\n", .{try padDur(c, total)});
+    } else try c.out.writeAll("\nNo shifts this week.\n");
+
+    const today = fmt.dayStart(now, c.now.utc_offset_secs);
+    const planned = try c.db.oneOffBreaks(a, now, today + 60 * std.time.s_per_day);
+    if (planned.len == 0) return;
+    try c.out.writeAll("\nPlanned\n");
+    for (planned) |o| {
+        const off = local.utcOffset(o.in_ts);
+        try c.out.print("  {f}  {f} – {f}  {s: >7}  {s}\n", .{ fmt.date(o.in_ts, off), clock(o.in_ts, off), clock(o.out_ts, off), try padDur(c, o.out_ts - o.in_ts), o.name });
+    }
 }
 
 /// How lunch stands on the shift you're on.

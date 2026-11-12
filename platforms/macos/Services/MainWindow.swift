@@ -10,6 +10,7 @@ import SwiftUI
 final class MainWindow: NSObject, NSWindowDelegate {
   private let timesheet: TimesheetModel
   private let projects: ProjectsModel
+  private let oneOffs: OneOffBreaksModel
   private let preferences: Preferences
   private let shift: ShiftModel?
   private let autoSwitch: AutoSwitchModel?
@@ -24,11 +25,18 @@ final class MainWindow: NSObject, NSWindowDelegate {
   ) {
     timesheet = TimesheetModel(store: store, preferences: preferences)
     projects = ProjectsModel(store: store)
+    oneOffs = OneOffBreaksModel(store: store)
     self.preferences = preferences
     self.shift = shift
     self.autoSwitch = autoSwitch
     super.init()
     timesheet.undoManager = undoManager
+    // A one-off break for today goes on the shift straight away: the
+    // timesheet and the menu bar read it.
+    oneOffs.didChange = { [weak self] in
+      self?.timesheet.reload()
+      self?.timesheet.didChange?()
+    }
   }
 
   /// Called after the timesheet writes, e.g. moving a clock in.
@@ -58,7 +66,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     let host = NSHostingController(
       rootView: MainView(
-        timesheet: timesheet, projects: projects, preferences: preferences, shift: shift,
+        timesheet: timesheet, projects: projects, oneOffs: oneOffs, preferences: preferences, shift: shift,
         autoSwitch: autoSwitch, navigation: navigation))
     // Let the views' .toolbar and titles fill the window's.
     host.sceneBridgingOptions = [.toolbars, .title]
@@ -87,6 +95,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
   func reload() {
     timesheet.reload()
     projects.reload()
+    oneOffs.reload(week: timesheet.week)
     preferences.pull()
   }
 

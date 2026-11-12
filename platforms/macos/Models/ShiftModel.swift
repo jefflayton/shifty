@@ -204,6 +204,9 @@ import Observation
   /// the next one at the same time of day today, with today's scheduled
   /// breaks instead of yesterday's. A clocked-in shift ends in the store
   /// first, at its clock out.
+  ///
+  /// Off the clock, a draft from an earlier day rolls over as soon as its
+  /// shift is over, so a new day never starts with yesterday's breaks.
   func rollOverIfStale(now: Date = Date(), calendar: Calendar = .current) {
     if isClockedIn, let store, (try? store.closeStaleShift(now: now)) == true {
       shiftID = nil
@@ -212,10 +215,15 @@ import Observation
     if let breakStart, breakStart < now.addingTimeInterval(-Self.staleAfter) {
       self.breakStart = nil
     }
-    guard clockOut(now: now) < now.addingTimeInterval(-Self.staleAfter) else { return }
+    let stale = clockOut(now: now) < now.addingTimeInterval(-Self.staleAfter)
+    let earlierDay =
+      !isClockedIn && !calendar.isDate(clockInTime, inSameDayAs: now)
+      && clockInTime < now && clockOut(now: now) <= now
+    guard stale || earlierDay else { return }
     let today = ShiftTimes.on(now, timeOf: clockInTime, calendar: calendar)
     // Only assign real changes: every set notifies observers.
     if today != clockInTime { clockInTime = today }
+    if breakStart != nil { breakStart = nil }
     let planned = scheduledBreaks(clockIn: today)
     if breaks != planned { breaks = planned }
   }
@@ -224,9 +232,27 @@ import Observation
 
   /// Clocks in now, making this the store's open shift. If another app
   /// clocked in first, shows that shift instead.
-  func clockInNow(now: Date = Date()) {
+  ///
+  /// The shift starts with the day's planned breaks (scheduled and one-off)
+  /// and the draft's breaks still to come today, all as new breaks. The
+  /// draft's breaks can be an ended shift's under that shift's ids, and
+  /// saving one of those here would take it off its own day.
+  func clockInNow(now: Date = Date(), calendar: Calendar = .current) {
     guard let store, !isClockedIn else { return }
+    let ahead = draftBreaksAhead(now: now, calendar: calendar)
     clockInTime = now
+    // A break you started today goes along, as a new one; an older one was
+    // forgotten.
+    if let start = breakStart, calendar.isDate(start, inSameDayAs: now), start <= now {
+      breakStartID = UUID()
+    } else {
+      breakStart = nil
+    }
+    var fresh = scheduledBreaks(clockIn: now)
+    for brk in ahead where !fresh.contains(where: { $0.inDate < brk.outDate && brk.inDate < $0.outDate }) {
+      fresh.append(brk)
+    }
+    breaks = fresh.sorted { $0.inDate < $1.inDate }
     do {
       shiftID = try store.startShift(at: now, lengthSeconds: lengthSeconds)
       push(now: now)
@@ -247,6 +273,17 @@ import Observation
     // The store ended any break with the shift.
     endBreak(now: now)
     shiftID = nil
+  }
+
+  /// The draft's breaks that end after `now` on today's clock, under new
+  /// ids, cut to start no earlier than `now`. None from another day's draft.
+  private func draftBreaksAhead(now: Date, calendar: Calendar) -> [Interval] {
+    guard calendar.isDate(clockInTime, inSameDayAs: now) else { return [] }
+    return breaks.filter(\.isValid).compactMap { brk in
+      let (start, end) = ShiftTimes.anchor(brk, clockIn: clockInTime, calendar: calendar)
+      guard end > now, calendar.isDate(start, inSameDayAs: now) || start < now else { return nil }
+      return Interval(inDate: max(start, now), outDate: end)
+    }
   }
 
   private var lengthSeconds: Int64 { Int64((shiftLength * 3600).rounded()) }

@@ -28,6 +28,7 @@ enum MainScreen: String, CaseIterable, Identifiable {
 struct MainView: View {
   let timesheet: TimesheetModel
   let projects: ProjectsModel
+  let oneOffs: OneOffBreaksModel
   let preferences: Preferences
   /// The menu bar's shift, for adding a scheduled break to it today.
   let shift: ShiftModel?
@@ -52,7 +53,8 @@ struct MainView: View {
       case .timesheet: TimesheetView(model: timesheet)
       case .meetings:
         MeetingsView(model: timesheet, preferences: preferences, autoSwitch: autoSwitch)
-      case .breaks: BreaksView(preferences: preferences, shift: shift)
+      case .breaks:
+        BreaksView(model: timesheet, oneOffs: oneOffs, preferences: preferences, shift: shift)
       case .projects: ProjectsView(model: projects)
       }
     }
@@ -61,7 +63,11 @@ struct MainView: View {
       // Pick up what another screen changed: a deleted project's time.
       switch new {
       case .timesheet, .meetings: timesheet.reload()
-      case .breaks: preferences.pull()
+      case .breaks:
+        timesheet.reload()
+        oneOffs.reload(week: timesheet.week)
+        oneOffs.clearError()
+        preferences.pull()
       case .projects:
         projects.reload()
         projects.clearError()

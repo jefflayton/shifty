@@ -277,6 +277,7 @@ export fn shifty_breaks(h: *Handle, shift_id: Id, out: [*]Break, cap: usize, cou
 }
 
 /// Creates or replaces a break; `running` nonzero leaves it open.
+/// `conflict` if `break_id` is another shift's.
 export fn shifty_put_break(h: *Handle, break_id: Id, shift_id: Id, in_ts: i64, out_ts: i64, running: i32, now: i64) Result {
     h.store.putBreak(id(break_id), id(shift_id), in_ts, if (running != 0) null else out_ts, now) catch |e| return result(e);
     return .ok;
@@ -418,6 +419,43 @@ export fn shifty_put_break_preset(h: *Handle, preset: BreakPreset, name: [*:0]co
 /// Deletes a break preset and its alarms.
 export fn shifty_delete_break_preset(h: *Handle, preset_id: Id, now: i64) Result {
     h.store.deleteBreakPreset(id(preset_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Writes the one-off breaks overlapping `[from, to)`, oldest first, as a
+/// UTF-8 JSON array of {"id","name","icon","in_ts","out_ts","clock_link"}
+/// into a new buffer; release it with `shifty_free`.
+export fn shifty_one_off_breaks_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const list = h.store.oneOffBreaks(arena.allocator(), from, to) catch |e| return result(e);
+    const json = std.json.Stringify.valueAlloc(gpa, list, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
+/// Creates or replaces a one-off break; on the open shift too when it's for
+/// that shift's day and still to come. `icon` null (or empty) is the
+/// default. `conflict` if it ends before it starts or runs over 12 hours.
+export fn shifty_put_one_off_break(h: *Handle, break_id: Id, name: [*:0]const u8, icon: ?[*:0]const u8, in_ts: i64, out_ts: i64, clock_link: i32, now: i64) Result {
+    h.store.putOneOffBreak(.{
+        .id = id(break_id),
+        .name = std.mem.span(name),
+        .icon = if (icon) |i| std.mem.span(i) else null,
+        .in_ts = in_ts,
+        .out_ts = out_ts,
+        .clock_link = clock_link != 0,
+    }, now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Deletes a one-off break, and takes it off the open shift if it hasn't
+/// started.
+export fn shifty_delete_one_off_break(h: *Handle, break_id: Id, now: i64) Result {
+    h.store.deleteOneOffBreak(id(break_id), now) catch |e| return result(e);
     return .ok;
 }
 

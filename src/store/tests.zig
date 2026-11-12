@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(7, stmt.int(0));
+    try testing.expectEqual(8, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -1134,4 +1134,202 @@ test "projects - rename, recolor, delete keeps the time" {
     try testing.expectEqual(null, (try s.runningEntry(a)).?.out_ts);
     usage = try s.projectUsage(a, 7 * h);
     try testing.expectEqual(1, usage.len);
+}
+
+// ── Breaks stay on their day ───────────────────────────────────────────────
+
+test "putBreak - a break can't move to another shift" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    // Monday's lunch, under the id the menu bar gave it.
+    const monday = try s.startShift(8 * h, at(tue - 24 * h + 8 * h));
+    const lunch: core.Uuid = .v7At(5, @splat(3));
+    try s.putBreak(lunch, monday, tue - 24 * h + 12 * h, tue - 24 * h + 12 * h + 1800, tue - 24 * h + 12 * h);
+    _ = try s.endShift(tue - 24 * h + 17 * h);
+
+    // Tuesday, the same id again: refused, and Monday keeps its lunch.
+    const tuesday = try s.startShift(8 * h, at(tue + 8 * h));
+    try testing.expectError(error.Conflict, s.putBreak(lunch, tuesday, tue + 12 * h, tue + 12 * h + 1800, tue + 8 * h));
+    try testing.expectEqual(0, (try s.breaks(a, tuesday)).len);
+    const kept = try s.breaks(a, monday);
+    try testing.expectEqual(1, kept.len);
+    try testing.expectEqual(tue - 24 * h + 12 * h, kept[0].in_ts);
+
+    // Deleted, it's still Monday's.
+    try s.deleteBreak(lunch, tue + 9 * h);
+    try testing.expectError(error.Conflict, s.putBreak(lunch, tuesday, tue + 12 * h, tue + 13 * h, tue + 9 * h));
+}
+
+test "open - breaks moved onto a later day go back to theirs" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    const mon = tue - 24 * h;
+    const wed = tue + 24 * h;
+    const off = -5 * h;
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(tmp.path).?) catch {};
+    const db: store.sqlite.Db = try .open(tmp.path);
+    inline for (.{ "0001_init", "0002_lunch_alarms", "0003_break_presets", "0004_link_deletes", "0005_break_icons", "0006_shared_links", "0007_meetings" }) |m|
+        try db.execScript(@embedFile("migrations/" ++ m ++ ".sql"));
+    try db.execScript("PRAGMA user_version = 7");
+    // Shifts Monday to Wednesday, 8 to 5ish.
+    try db.exec(
+        \\INSERT INTO shifts (id, in_ts, utc_offset_secs, target_secs, out_ts, created_ts, updated_ts)
+        \\VALUES (x'01010101010101010101010101010101', ?1 + 28800, ?4, 28800, ?1 + 63000, ?1 + 28800, ?1 + 28800),
+        \\       (x'02020202020202020202020202020202', ?2 + 28800, ?4, 28800, ?2 + 63000, ?2 + 28800, ?2 + 28800),
+        \\       (x'03030303030303030303030303030303', ?3 + 28800, ?4, 28800, NULL, ?3 + 28800, ?3 + 28800)
+    , .{ mon, tue, wed, off });
+    try db.exec(
+        \\INSERT INTO breaks (id, shift_id, in_ts, out_ts, created_ts, updated_ts, deleted_ts) VALUES
+        // Monday's lunch, taken at noon, moved to Tuesday at clock in and
+        // deleted there.
+        \\(x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', x'02020202020202020202020202020202',
+        \\ ?2 + 43200, ?2 + 46800, ?1 + 43200, ?2 + 36000, ?2 + 36000),
+        // Tuesday's lunch, moved to Wednesday and still there.
+        \\(x'0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', x'03030303030303030303030303030303',
+        \\ ?3 + 45000, ?3 + 46800, ?2 + 45000, ?3 + 28800, NULL),
+        // Wednesday's own break.
+        \\(x'0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c', x'03030303030303030303030303030303',
+        \\ ?3 + 54000, ?3 + 54600, ?3 + 54000, ?3 + 54000, NULL),
+        // Moved onto Wednesday, then made Wednesday's: stays.
+        \\(x'0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d', x'03030303030303030303030303030303',
+        \\ ?3 + 36000, ?3 + 36600, ?2 + 36000, ?3 + 40000, NULL)
+    , .{ mon, tue, wed });
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const monday = try s.breaks(a, .{ .bytes = @splat(1) });
+    try testing.expectEqual(1, monday.len);
+    try testing.expectEqual(mon + 12 * h, monday[0].in_ts);
+    try testing.expectEqual(mon + 13 * h, monday[0].out_ts.?);
+    const tuesday = try s.breaks(a, .{ .bytes = @splat(2) });
+    try testing.expectEqual(1, tuesday.len);
+    try testing.expectEqual(tue + 45000, tuesday[0].in_ts);
+    const wednesday = try s.breaks(a, .{ .bytes = @splat(3) });
+    try testing.expectEqual(2, wednesday.len);
+    try testing.expect(wednesday[0].id.eql(.{ .bytes = @splat(0x0d) }));
+    try testing.expect(wednesday[1].id.eql(.{ .bytes = @splat(0x0c) }));
+}
+
+// ── One-off breaks ─────────────────────────────────────────────────────────
+
+fn oneOff(id: core.Uuid, in_ts: i64, out_ts: i64) store.OneOffBreak {
+    return .{ .id = id, .name = "Dentist", .in_ts = in_ts, .out_ts = out_ts };
+}
+
+test "one-off breaks - put, list, edit, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const id: core.Uuid = .v7(io);
+    var dentist = oneOff(id, tue + 14 * h, tue + 15 * h);
+    dentist.icon = "cross.case";
+    try s.putOneOffBreak(dentist, 0);
+    try s.putOneOffBreak(oneOff(.v7(io), tue + 24 * h + 9 * h, tue + 24 * h + 10 * h), 0);
+
+    var list = try s.oneOffBreaks(a, tue, tue + 24 * h);
+    try testing.expectEqual(1, list.len);
+    try testing.expectEqualStrings("Dentist", list[0].name);
+    try testing.expectEqualStrings("cross.case", list[0].icon.?);
+    try testing.expectEqual(2, (try s.oneOffBreaks(a, tue, tue + 7 * 24 * h)).len);
+
+    dentist.in_ts = tue + 16 * h;
+    dentist.out_ts = tue + 17 * h;
+    dentist.icon = "";
+    try s.putOneOffBreak(dentist, 1);
+    list = try s.oneOffBreaks(a, tue, tue + 24 * h);
+    try testing.expectEqual(tue + 16 * h, list[0].in_ts);
+    try testing.expectEqual(null, list[0].icon);
+
+    try testing.expectError(error.Conflict, s.putOneOffBreak(oneOff(.v7(io), tue + 15 * h, tue + 14 * h), 2));
+    try testing.expectError(error.Conflict, s.putOneOffBreak(oneOff(.v7(io), tue, tue + 13 * h), 2));
+
+    try s.deleteOneOffBreak(id, 3);
+    try testing.expectError(error.NotFound, s.deleteOneOffBreak(id, 3));
+    try testing.expectEqual(0, (try s.oneOffBreaks(a, tue, tue + 24 * h)).len);
+    try testing.expectEqual(null, try s.oneOffBreak(a, id));
+}
+
+test "one-off breaks - clocking in that day puts them on the shift" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    try s.putOneOffBreak(oneOff(.v7(io), tue + 14 * h, tue + 15 * h), 0);
+    // Monday: nothing.
+    const monday = try s.startShift(8 * h, at(tue - 24 * h + 9 * h));
+    try testing.expectEqual(0, (try s.breaks(a, monday)).len);
+    _ = try s.endShift(tue - 24 * h + 17 * h);
+
+    // Tuesday at 9: the dentist, pushing clock out to 6.
+    try testing.expectEqual(1, (try s.scheduledBreaks(a, at(tue + 9 * h), 8 * h)).len);
+    const tuesday = try s.startShift(8 * h, at(tue + 9 * h));
+    const brks = try s.breaks(a, tuesday);
+    try testing.expectEqual(1, brks.len);
+    try testing.expectEqual(tue + 14 * h, brks[0].in_ts);
+    try testing.expectEqual(tue + 15 * h, brks[0].out_ts.?);
+    try testing.expectEqual(tue + 18 * h, store.clockOut((try s.currentShift(a)).?, brks, tue + 9 * h));
+
+    // Clocking in after it's over: nothing.
+    _ = try s.endShift(tue + 10 * h);
+    try testing.expectEqual(0, (try s.scheduledBreaks(a, at(tue + 16 * h), 8 * h)).len);
+}
+
+test "one-off breaks - on today's shift straight away, until they start" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const shift = try s.startShift(8 * h, at(tue + 8 * h));
+    const lunch = try s.addBreak(shift, tue + 12 * h, tue + 12 * h + 1800, tue + 8 * h);
+
+    // Planned at 10 for 2 to 3: on the shift now.
+    const id: core.Uuid = .v7(io);
+    var dentist = oneOff(id, tue + 14 * h, tue + 15 * h);
+    try s.putOneOffBreak(dentist, tue + 10 * h);
+    var brks = try s.breaks(a, shift);
+    try testing.expectEqual(2, brks.len);
+    try testing.expectEqual(tue + 14 * h, brks[1].in_ts);
+
+    // Moved to 3 to 4: so is the shift's.
+    dentist.in_ts = tue + 15 * h;
+    dentist.out_ts = tue + 16 * h;
+    try s.putOneOffBreak(dentist, tue + 11 * h);
+    brks = try s.breaks(a, shift);
+    try testing.expectEqual(2, brks.len);
+    try testing.expectEqual(tue + 15 * h, brks[1].in_ts);
+
+    // One over lunch, one already over, and tomorrow's don't go on.
+    try s.putOneOffBreak(oneOff(.v7(io), tue + 12 * h, tue + 13 * h), tue + 11 * h);
+    try s.putOneOffBreak(oneOff(.v7(io), tue + 9 * h, tue + 10 * h), tue + 11 * h);
+    try s.putOneOffBreak(oneOff(.v7(io), tue + 24 * h + 14 * h, tue + 24 * h + 15 * h), tue + 11 * h);
+    try testing.expectEqual(2, (try s.breaks(a, shift)).len);
+
+    // Deleted before it starts: off the shift; lunch stays.
+    try s.deleteOneOffBreak(id, tue + 13 * h);
+    brks = try s.breaks(a, shift);
+    try testing.expectEqual(1, brks.len);
+    try testing.expect(brks[0].id.eql(lunch));
+
+    // Once it's started, deleting the plan leaves the break you took.
+    const coffee: core.Uuid = .v7(io);
+    try s.putOneOffBreak(oneOff(coffee, tue + 14 * h, tue + 14 * h + 900), tue + 13 * h);
+    try testing.expectEqual(2, (try s.breaks(a, shift)).len);
+    try s.deleteOneOffBreak(coffee, tue + 14 * h + 60);
+    try testing.expectEqual(2, (try s.breaks(a, shift)).len);
 }
