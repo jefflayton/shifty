@@ -1933,7 +1933,7 @@ do {
   expectEqual(night.clockInTime, at(22, day: -1), "a night shift's draft waits for its clock out")
   night.rollOverIfStale(now: at(6, 30), calendar: cal)
   expectEqual(night.clockInTime, at(22), "then rolls to tonight")
-  check(night.breaks.isEmpty)
+  check(night.breaks.isEmpty, "with tonight's breaks")
 }
 
 do {
