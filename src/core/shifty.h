@@ -117,6 +117,7 @@ ShiftyResult shifty_close_stale_shift(ShiftyStore *store, int64_t now);
 // Fills up to `cap` breaks; `count` gets the total, which may exceed `cap`.
 ShiftyResult shifty_breaks(ShiftyStore *store, ShiftyId shift_id, ShiftyBreak *out, size_t cap,
                            size_t *count);
+// SHIFTY_CONFLICT if `break_id` is another shift's: a break stays on its day.
 ShiftyResult shifty_put_break(ShiftyStore *store, ShiftyId break_id, ShiftyId shift_id,
                               int64_t in_ts, int64_t out_ts, int32_t running, int64_t now);
 ShiftyResult shifty_delete_break(ShiftyStore *store, ShiftyId break_id, int64_t now);
@@ -136,6 +137,22 @@ ShiftyResult shifty_put_break_preset(ShiftyStore *store, ShiftyBreakPreset prese
                                      const char *name, const char *icon, int64_t now);
 // Deletes a break preset and its alarms; breaks it put on shifts stay.
 ShiftyResult shifty_delete_break_preset(ShiftyStore *store, ShiftyId preset_id, int64_t now);
+
+// One-off breaks overlapping [from, to), oldest first, as a UTF-8 JSON array
+// of {"id","name","icon","in_ts","out_ts","clock_link"} (icon null for the
+// default). Release with shifty_free.
+ShiftyResult shifty_one_off_breaks_json(ShiftyStore *store, int64_t from, int64_t to, char **out,
+                                        size_t *len);
+// Creates or replaces a one-off break, a break on one day only. On the open
+// shift too when it's for that shift's day, still to come, and clear of its
+// breaks; a changed one moves there until it starts. `icon` NULL (or "") is
+// the default. SHIFTY_CONFLICT if it ends first or runs over 12 hours.
+ShiftyResult shifty_put_one_off_break(ShiftyStore *store, ShiftyId break_id, const char *name,
+                                      const char *icon, int64_t in_ts, int64_t out_ts,
+                                      int32_t clock_link, int64_t now);
+// Deletes a one-off break, and takes it off the open shift if it hasn't
+// started yet.
+ShiftyResult shifty_delete_one_off_break(ShiftyStore *store, ShiftyId break_id, int64_t now);
 
 // Copies up to `cap` bytes (no NUL); `len` gets the full length.
 ShiftyResult shifty_setting(ShiftyStore *store, const char *key, char *buf, size_t cap,

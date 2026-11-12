@@ -1914,5 +1914,116 @@ do {
   expectEqual(again.rexHosts, "devbox")
 }
 
+// MARK: Breaks by day
+
+do {
+  // Off the clock, a new day starts without yesterday's breaks, once its
+  // shift is over; before, the draft only rolled over 12 hours after.
+  let m = ShiftModel()
+  m.clockInTime = at(9, day: -1)
+  m.breaks = [brk(at(12, day: -1), at(13, day: -1))]
+  m.rollOverIfStale(now: at(0, 30), calendar: cal)
+  expectEqual(m.clockInTime, at(9), "rolled to today just after midnight")
+  check(m.breaks.isEmpty, "a new day starts without yesterday's lunch")
+
+  let night = ShiftModel()
+  night.clockInTime = at(22, day: -1)
+  night.breaks = [brk(at(1), at(1, 30))]
+  night.rollOverIfStale(now: at(5), calendar: cal)
+  expectEqual(night.clockInTime, at(22, day: -1), "a night shift's draft waits for its clock out")
+  night.rollOverIfStale(now: at(6, 30), calendar: cal)
+  expectEqual(night.clockInTime, at(22), "then rolls to tonight")
+  check(night.breaks.isEmpty)
+}
+
+do {
+  // Clocking in the next morning with yesterday's lunch still in the draft
+  // leaves the lunch on yesterday's shift.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9)
+  m.breaks = [brk(at(12), at(12, 30))]
+  m.clockInNow(now: at(9), calendar: cal)
+  let monday = try! store.currentShift()!
+  m.clockOutNow(now: at(17))
+  check(!m.breaks.isEmpty, "the draft still has Monday's lunch")
+
+  m.clockInNow(now: at(9, day: 1), calendar: cal)
+  let tuesday = try! store.currentShift()!
+  check(tuesday.id != monday.id, "a new shift")
+  expectEqual(try! store.breaks(of: monday.id).map(\.start), [at(12)], "Monday keeps its lunch")
+  check(try! store.breaks(of: tuesday.id).isEmpty, "Tuesday starts without it")
+  check(m.breaks.isEmpty, "and so does the menu bar")
+
+  // The store won't move a break to another shift under its id.
+  let lunch = try! store.breaks(of: monday.id)[0]
+  do {
+    try store.putBreak(lunch, shift: tuesday.id, now: at(10, day: 1))
+    check(false, "moving a break is refused")
+  } catch let error as ShiftStore.Error {
+    expectEqual(error.result, SHIFTY_CONFLICT, "moving a break is refused")
+  } catch {
+    check(false, "unexpected \(error)")
+  }
+  expectEqual(try! store.breaks(of: monday.id).count, 1, "still on Monday")
+}
+
+do {
+  // One-off breaks: saved, listed, put on that day's shift, removed.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let oneOffs = OneOffBreaksModel(store: store, calendar: cal)
+  var changed = 0
+  oneOffs.didChange = { changed += 1 }
+
+  let dentist = OneOffBreaksModel.Draft(
+    name: " Dentist ", icon: "cross.case", start: at(14, day: 1), end: at(15, day: 1))
+  check(oneOffs.save(dentist, now: at(9)), "saved")
+  expectEqual(oneOffs.breaks.map(\.name), ["Dentist"], "name trimmed")
+  expectEqual(oneOffs.breaks.first?.icon, "cross.case")
+  expectEqual(oneOffs.breaks.first?.start, at(14, day: 1))
+  expectEqual(oneOffs.breaks.first?.end, at(15, day: 1))
+  expectEqual(oneOffs.breaks(on: at(0, day: 1)).count, 1, "on its day")
+  check(oneOffs.breaks(on: at(0)).isEmpty, "not today")
+  expectEqual(changed, 1, "the shift hears about it")
+
+  check(!oneOffs.save(.init(start: at(15), end: at(14)), now: at(9)), "ends first")
+  expectEqual(oneOffs.error, "Ends before it starts")
+  check(!oneOffs.save(.init(start: at(7), end: at(8)), now: at(9)), "already over")
+  check(!oneOffs.save(.init(start: at(10), end: at(23)), now: at(9)), "over 12 hours")
+  expectEqual(oneOffs.breaks.count, 1, "none of those saved")
+  oneOffs.clearError()
+
+  // Unnamed is "Break"; a new one starts at the next hour.
+  let new = OneOffBreaksModel.Draft.new(on: at(0), now: at(9, 20), calendar: cal)
+  expectEqual(new.start, at(10))
+  expectEqual(new.end, at(11))
+  check(oneOffs.save(new, now: at(9, 20)), "saved")
+  expectEqual(oneOffs.breaks.map(\.name), ["Break", "Dentist"], "earliest first")
+  oneOffs.delete(new.id, now: at(9, 30))
+  expectEqual(oneOffs.breaks.map(\.name), ["Dentist"], "deleted")
+
+  // Clocking in that day brings it along.
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9, day: 1)
+  m.clockInNow(now: at(9, day: 1), calendar: cal)
+  let shift = try! store.currentShift()!
+  expectEqual(
+    try! store.breaks(of: shift.id).map(\.start), [at(14, day: 1)], "the dentist is on the shift")
+  expectEqual(m.clockOut(now: at(9, day: 1)), at(18, day: 1), "and pushes clock out")
+  check(oneOffs.match(start: at(14, day: 1), end: at(15, day: 1)) != nil, "named on the Breaks page")
+
+  // Removed before it starts, it comes off the shift.
+  oneOffs.delete(dentist.id, now: at(10, day: 1))
+  m.pull()
+  check(try! store.breaks(of: shift.id).isEmpty, "off the shift")
+  check(m.breaks.isEmpty, "and the menu bar")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

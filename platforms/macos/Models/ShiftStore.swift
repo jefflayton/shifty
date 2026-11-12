@@ -137,6 +137,48 @@ final class ShiftStore {
     try check(shifty_delete_break(handle, ShiftyId(id), ts(now)))
   }
 
+  /// A break on one day only, like the dentist on Thursday from 2 to 3.
+  struct OneOffBreak: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var name: String
+    /// An SF Symbol name; nil for the default.
+    var icon: String?
+    var inTs: Int64
+    var outTs: Int64
+    var clockLink: Bool
+
+    var start: Date { date(inTs) }
+    var end: Date { date(outTs) }
+  }
+
+  /// One-off breaks overlapping `range`, earliest first.
+  func oneOffBreaks(_ range: DateInterval) throws -> [OneOffBreak] {
+    try json([OneOffBreak]()) {
+      shifty_one_off_breaks_json(handle, ts(range.start), ts(range.end), $0, $1)
+    }
+  }
+
+  /// Creates or replaces a one-off break. It goes on the shift you're on
+  /// straight away when it's for today and still to come. Throws
+  /// `SHIFTY_CONFLICT` if it ends first or runs over 12 hours.
+  func putOneOffBreak(
+    id: UUID, name: String, icon: String? = nil, start: Date, end: Date,
+    clockLink: Bool = false, now: Date = Date()
+  ) throws {
+    let icon = icon?.isEmpty == false ? icon : nil
+    let result = withOptionalCString(icon) { i in
+      shifty_put_one_off_break(
+        handle, ShiftyId(id), name, i, ts(start), ts(end), clockLink ? 1 : 0, ts(now))
+    }
+    try check(result)
+  }
+
+  /// Deletes a one-off break, and takes it off your shift if it hasn't
+  /// started yet.
+  func deleteOneOffBreak(_ id: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_one_off_break(handle, ShiftyId(id), ts(now)))
+  }
+
   // MARK: Alarms and settings
 
   func alarmRules() throws -> [ShiftyAlarmRule] {

@@ -162,6 +162,20 @@ pub const BreakPreset = struct {
     }
 };
 
+/// A break on one day only, like the dentist on Thursday from 2 to 3. It
+/// goes on that day's shift when you clock in, or straight away when you're
+/// on that day's shift and it's still to come.
+pub const OneOffBreak = struct {
+    id: Uuid,
+    name: []const u8,
+    /// An SF Symbol name, as for presets; null is the default.
+    icon: ?[]const u8 = null,
+    in_ts: i64,
+    out_ts: i64,
+    /// Whether starting and ending it offers the clock links.
+    clock_link: bool = false,
+};
+
 /// What a link (or an entry) points at.
 pub const Target = struct {
     project_id: Uuid,
@@ -181,6 +195,9 @@ pub fn clockOut(shift: Shift, brks: []const Break, now: i64) i64 {
     }
     return core.shift.clockIn(shift.target_secs, shift.in_ts, buf[0..n]);
 }
+
+/// A one-off break runs at most this long, as any break.
+pub const max_one_off_secs = 12 * std.time.s_per_hour;
 
 /// A break shorter than this was a mis-click, not a break.
 pub const min_break_secs = 60;
@@ -212,6 +229,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0005_break_icons.sql"),
     @embedFile("migrations/0006_shared_links.sql"),
     @embedFile("migrations/0007_meetings.sql"),
+    @embedFile("migrations/0008_break_days.sql"),
 };
 
 pub const Store = struct {
@@ -720,9 +738,10 @@ pub const Store = struct {
     }
 
     /// The breaks the enabled scheduled presets put on a `target_secs` shift
-    /// clocking in `at`: those for its local weekday, cut to start no
-    /// earlier than clock in, and none starting after the clock out they
-    /// push to. Oldest first. Allocated in `arena`.
+    /// clocking in `at`, with the one-off breaks for its local day: presets
+    /// for its local weekday, cut to start no earlier than clock in, and none
+    /// starting after the clock out they push to. Oldest first. Allocated in
+    /// `arena`.
     pub fn scheduledBreaks(self: *Store, arena: Allocator, at: Stamp, target_secs: i64) Error![]core.shift.Interval {
         const local_ts = at.ts + at.utc_offset_secs;
         const midnight = at.ts - @mod(local_ts, std.time.s_per_day);
@@ -739,6 +758,11 @@ pub const Store = struct {
             const end = midnight + times.end_secs;
             if (end <= at.ts) continue;
             try out.append(arena, .{ .in_ts = @max(at.ts, midnight + times.start_secs), .out_ts = end });
+        }
+        // And the one-off breaks that start that day.
+        for (try self.oneOffBreaks(arena, midnight, midnight + std.time.s_per_day)) |o| {
+            if (o.in_ts < midnight or o.out_ts <= at.ts) continue;
+            try out.append(arena, .{ .in_ts = @max(at.ts, o.in_ts), .out_ts = o.out_ts });
         }
         std.mem.sort(core.shift.Interval, out.items, {}, struct {
             fn lessThan(_: void, l: core.shift.Interval, r: core.shift.Interval) bool {
@@ -1047,15 +1071,21 @@ pub const Store = struct {
     /// Creates or replaces a break under an id the caller chose, so a UI's
     /// own ids for breaks carry through. `out_ts` null is the running break,
     /// which stops the running entry, as `startBreak` does.
+    /// A break stays on the shift it was made on: `Conflict` if `break_id`
+    /// is another shift's, deleted or not, so a frontend holding on to
+    /// yesterday's breaks can't move them onto today.
     pub fn putBreak(self: *Store, break_id: Uuid, shift_id: Uuid, in_ts: i64, out_ts: ?i64, now: i64) Error!void {
         try self.begin();
         errdefer self.rollback();
+        if (try self.oneId("SELECT shift_id FROM breaks WHERE id = ?", .{blob(&break_id)})) |on| {
+            if (!on.eql(shift_id)) return error.Conflict;
+        }
         if (out_ts == null) _ = try self.closeRunning(@max(in_ts, now));
         try self.db.exec(
             \\INSERT INTO breaks (id, shift_id, in_ts, out_ts, created_ts, updated_ts)
             \\VALUES (?, ?, ?, ?, ?5, ?5)
             \\ON CONFLICT (id) DO UPDATE SET
-            \\    shift_id = excluded.shift_id, in_ts = excluded.in_ts, out_ts = excluded.out_ts,
+            \\    in_ts = excluded.in_ts, out_ts = excluded.out_ts,
             \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
         , .{ blob(&break_id), blob(&shift_id), in_ts, out_ts, now });
         try self.commit();
@@ -1073,6 +1103,117 @@ pub const Store = struct {
             \\UPDATE breaks SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
         , .{ now, blob(&break_id) });
         if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    // ── One-off breaks ────────────────────────────────────────────────────
+
+    /// One-off breaks not deleted that overlap `[from, to)`, oldest first.
+    /// Allocated in `arena`.
+    pub fn oneOffBreaks(self: *Store, arena: Allocator, from: i64, to: i64) Error![]OneOffBreak {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, icon, in_ts, out_ts, clock_link FROM one_off_breaks
+            \\WHERE deleted_ts IS NULL AND in_ts < ? AND out_ts > ?
+            \\ORDER BY in_ts, rowid
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{ to, from });
+        var out: std.ArrayList(OneOffBreak) = .empty;
+        while (try stmt.step()) try out.append(arena, try oneOffRow(arena, stmt));
+        return out.items;
+    }
+
+    /// A one-off break that isn't deleted, by id. Allocated in `arena`.
+    pub fn oneOffBreak(self: *Store, arena: Allocator, break_id: Uuid) Error!?OneOffBreak {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, icon, in_ts, out_ts, clock_link FROM one_off_breaks
+            \\WHERE id = ? AND deleted_ts IS NULL
+        );
+        defer stmt.deinit();
+        try stmt.bindAll(.{blob(&break_id)});
+        return if (try stmt.step()) try oneOffRow(arena, stmt) else null;
+    }
+
+    fn oneOffRow(arena: Allocator, stmt: sqlite.Stmt) Error!OneOffBreak {
+        return .{
+            .id = try id(stmt, 0),
+            .name = try stmt.text(arena, 1),
+            .icon = if (stmt.isNull(2)) null else try stmt.text(arena, 2),
+            .in_ts = stmt.int(3),
+            .out_ts = stmt.int(4),
+            .clock_link = stmt.int(5) != 0,
+        };
+    }
+
+    /// Creates or replaces a one-off break under an id the caller chose.
+    /// When you're on the shift for its day, it goes on that shift too, if
+    /// it's still to come, starts before clock out, and no break there
+    /// overlaps it; a changed one moves there, until it starts. `Conflict`
+    /// if it ends before it starts or runs longer than `max_one_off_secs`.
+    pub fn putOneOffBreak(self: *Store, o: OneOffBreak, now: i64) Error!void {
+        if (o.out_ts <= o.in_ts or o.out_ts - o.in_ts > max_one_off_secs) return error.Conflict;
+        // An empty icon is the default, like none.
+        const icon: ?[]const u8 = if (o.icon) |i| (if (i.len == 0) null else i) else null;
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try self.begin();
+        errdefer self.rollback();
+        if (try self.oneOffBreak(a, o.id)) |old| try self.unplanOneOff(a, old, now);
+        try self.db.exec(
+            \\INSERT INTO one_off_breaks (id, name, icon, in_ts, out_ts, clock_link, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?7, ?7)
+            \\ON CONFLICT (id) DO UPDATE SET
+            \\    name = excluded.name, icon = excluded.icon, in_ts = excluded.in_ts,
+            \\    out_ts = excluded.out_ts, clock_link = excluded.clock_link,
+            \\    updated_ts = excluded.updated_ts, deleted_ts = NULL
+        , .{ blob(&o.id), o.name, icon, o.in_ts, o.out_ts, o.clock_link, now });
+        try self.planOneOff(a, o, now);
+        try self.commit();
+    }
+
+    /// Deletes a one-off break, and takes it off the shift you're on if it
+    /// hasn't started yet.
+    pub fn deleteOneOffBreak(self: *Store, break_id: Uuid, now: i64) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer arena.deinit();
+        try self.begin();
+        errdefer self.rollback();
+        const old = try self.oneOffBreak(arena.allocator(), break_id) orelse return error.NotFound;
+        try self.unplanOneOff(arena.allocator(), old, now);
+        try self.db.exec(
+            \\UPDATE one_off_breaks SET deleted_ts = ?, updated_ts = ?1 WHERE id = ?
+        , .{ now, blob(&break_id) });
+        try self.commit();
+    }
+
+    /// Puts a one-off break on the open shift, if it's for that shift's day
+    /// and fits (see `putOneOffBreak`). Clock in cuts one that started
+    /// before it, as for scheduled breaks.
+    fn planOneOff(self: *Store, arena: Allocator, o: OneOffBreak, now: i64) Error!void {
+        const shift = try self.currentShift(arena) orelse return;
+        const midnight = core.fmt.dayStart(shift.in_ts, shift.utc_offset_secs);
+        if (o.in_ts < midnight or o.in_ts >= midnight + std.time.s_per_day) return;
+        const start = @max(o.in_ts, shift.in_ts);
+        if (o.out_ts <= now or o.out_ts <= start) return;
+        const brks = try self.breaks(arena, shift.id);
+        if (start >= clockOut(shift, brks, now)) return;
+        for (brks) |b| {
+            if (b.in_ts < o.out_ts and start < (b.out_ts orelse std.math.maxInt(i64))) return;
+        }
+        _ = try self.addBreak(shift.id, start, o.out_ts, now);
+    }
+
+    /// Takes a one-off break back off the open shift: the break it put
+    /// there, if it hasn't started yet.
+    fn unplanOneOff(self: *Store, arena: Allocator, o: OneOffBreak, now: i64) Error!void {
+        const shift = try self.currentShift(arena) orelse return;
+        const start = @max(o.in_ts, shift.in_ts);
+        if (start <= now) return;
+        try self.db.exec(
+            \\UPDATE breaks SET deleted_ts = ?, updated_ts = ?1
+            \\WHERE shift_id = ? AND in_ts = ? AND out_ts = ? AND deleted_ts IS NULL
+        , .{ now, blob(&shift.id), start, o.out_ts });
     }
 
     // ── Alarms and settings ───────────────────────────────────────────────
