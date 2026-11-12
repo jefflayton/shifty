@@ -131,7 +131,7 @@ private struct BreakDay: View {
       ForEach(shifts) { shift in rows(of: shift) }
       // One-offs that no shift has: still to come, or a day you didn't work.
       ForEach(waiting(shifts)) { brk in
-        BreakLine(
+        BreaksPageRow(
           name: brk.name, symbol: BreakIcon.symbol(brk.icon, or: preferences.breakSymbol),
           start: brk.start, end: brk.end, now: now,
           note: brk.end > now ? "Planned" : "Not on a shift")
@@ -161,10 +161,10 @@ private struct BreakDay: View {
     }
   }
 
-  private func line(for brk: ShiftStore.SheetBreak, lunch: LunchPlan?) -> BreakLine {
+  private func line(for brk: ShiftStore.SheetBreak, lunch: LunchPlan?) -> BreaksPageRow {
     let t = model.times(of: brk)
     let (name, symbol) = describe(start: t.start, end: t.end, lunch: lunch)
-    return BreakLine(name: name, symbol: symbol, start: t.start, end: t.end, now: now)
+    return BreaksPageRow(name: name, symbol: symbol, start: t.start, end: t.end, now: now)
   }
 
   /// This day's one-offs that aren't on one of its shifts.
@@ -193,7 +193,7 @@ private struct BreakDay: View {
 }
 
 /// A break: its icon and name, its times, and how long it ran.
-private struct BreakLine: View {
+private struct BreaksPageRow: View {
   let name: String
   let symbol: String
   let start: Date
