@@ -491,6 +491,40 @@ export fn shifty_timesheet_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, le
     return .ok;
 }
 
+/// The week against the weekly goal, as `shifty_week_goal_json` writes it.
+const WeekGoal = struct {
+    goal_secs: i64,
+    worked_secs: i64,
+    left_secs: i64,
+    over_secs: i64,
+    at_clock_out_secs: ?i64,
+    meets_at: ?i64,
+};
+
+/// Writes how the week starting at local midnight `from` stands against the
+/// weekly goal as UTF-8 JSON into a new buffer; release it with
+/// `shifty_free`. `none` without a goal.
+export fn shifty_week_goal_json(h: *Handle, from: i64, now: i64, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const week = store.sheet.Week.load(&h.store, a, store.sheet.weekDays(from, local.utcOffset)) catch |e| return result(e);
+    const g = (week.goal(a, now) catch return .no_memory) orelse return .none;
+    const json = std.json.Stringify.valueAlloc(gpa, WeekGoal{
+        .goal_secs = g.secs,
+        .worked_secs = g.worked,
+        .left_secs = g.left(),
+        .over_secs = g.over(),
+        .at_clock_out_secs = g.at_clock_out,
+        .meets_at = g.meets_at,
+    }, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
 pub export fn shifty_free(ptr: ?[*]u8, len: usize) void {
     if (ptr) |p| gpa.free(p[0..len]);
 }
@@ -688,6 +722,33 @@ test "C API - timesheet JSON and entry edits" {
 
     try testing.expectEqual(Result.ok, shifty_delete_entry(s, e, 20));
     try testing.expectEqual(Result.not_found, shifty_delete_entry(s, e, 21));
+}
+
+test "C API - weekly goal JSON" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.none, shifty_week_goal_json(s, 0, 3 * 3600, &ptr, &len));
+    try testing.expectEqual(null, ptr);
+
+    try testing.expectEqual(Result.ok, shifty_set_setting(s, "weekly_goal_secs", "28800", 0));
+    var open: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_shift(s, 3600, 4 * 3600, 0, &open));
+    try testing.expectEqual(Result.ok, shifty_week_goal_json(s, 0, 3 * 3600, &ptr, &len));
+    defer shifty_free(ptr, len);
+    const parsed = try std.json.parseFromSlice(WeekGoal, testing.allocator, ptr.?[0..len], .{});
+    defer parsed.deinit();
+    const v = parsed.value;
+    try testing.expectEqual(8 * 3600, v.goal_secs);
+    try testing.expectEqual(2 * 3600, v.worked_secs);
+    try testing.expectEqual(6 * 3600, v.left_secs);
+    try testing.expectEqual(0, v.over_secs);
+    try testing.expectEqual(4 * 3600, v.at_clock_out_secs.?);
+    try testing.expectEqual(9 * 3600, v.meets_at.?);
 }
 
 test "C API - shifts on the timesheet" {

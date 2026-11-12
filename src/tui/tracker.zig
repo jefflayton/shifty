@@ -58,6 +58,8 @@ const Snap = struct {
     totals: report.Totals = .{ .by_project = &.{}, .by_client = &.{}, .any_client = false, .total = 0 },
     /// What the repo or folder the TUI started in is linked to.
     here: ?store.Target = null,
+    /// This week against the weekly goal, if there is one.
+    goal: ?sheet.Goal = null,
 };
 
 pub const Tracker = struct {
@@ -160,6 +162,12 @@ pub const Tracker = struct {
         snap.today = try self.db.entriesBetween(a, snap.from, now.ts + 1);
         snap.totals = try report.totals(a, snap.names, snap.today, snap.from, now.ts);
         if (self.dir) |d| snap.here = (try place.resolve(self.db, self.io, a, d, null, null)).target;
+        // The week is only read with a goal to measure it against.
+        if (try sheet.weeklyGoal(self.db, a) != null) {
+            const first = sheet.weekStart(now.ts, now.utc_offset_secs, try sheet.weekStartDay(self.db, a));
+            const w: sheet.Week = try .load(self.db, a, sheet.weekDays(first, local.utcOffset));
+            snap.goal = try w.goal(a, now.ts);
+        }
 
         self.snap = snap;
         self.live = next;
@@ -518,6 +526,14 @@ pub const Tracker = struct {
         } else p.put("Off shift", dim);
         p.nl(1);
 
+        // Week
+        if (snap.goal) |g| {
+            p.put("Week", bold);
+            p.col = value_col;
+            try drawGoal(&p, g, now.utc_offset_secs);
+            p.nl(1);
+        }
+
         // Now
         p.put("Now", bold);
         p.col = value_col;
@@ -571,6 +587,23 @@ pub const Tracker = struct {
         ui.drawOptions(p, try self.options(a), self.selected, bottom);
     }
 };
+
+/// This week against the weekly goal, and where today's shift leaves it.
+fn drawGoal(p: *Painter, g: sheet.Goal, off: i64) !void {
+    try p.print(.{}, "{f}", .{fmt.dur(g.worked)});
+    try p.print(dim, " of {f}", .{fmt.dur(g.secs)});
+    if (g.isMet()) {
+        try p.print(green, "  ·  goal met", .{});
+        if (g.over() >= 60) try p.print(dim, "  ·  {f} over", .{fmt.dur(g.over())});
+        return;
+    }
+    try p.print(.{}, "  ·  {f} left", .{fmt.dur(g.left())});
+    if (g.leftAfterClockOut()) |after| {
+        if (after == 0) {
+            try p.print(green, "  ·  met at {f}", .{fmt.clock(g.meets_at.?, off)});
+        } else try p.print(dim, "  ·  {f} after today", .{fmt.dur(after)});
+    }
+}
 
 /// The shift from clock in to clock out (or now, if later): work done,
 /// breaks, the lunch window, and what's left.

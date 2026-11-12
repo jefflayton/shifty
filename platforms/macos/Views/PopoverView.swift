@@ -42,7 +42,8 @@ struct PopoverView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      ShiftSummaryView(model: model, lunch: preferences.lunch)
+      ShiftSummaryView(
+        model: model, lunch: preferences.lunch, showsWeekGoal: preferences.weeklyGoal != nil)
 
       ShiftActions(model: model, preferences: preferences, clocked: clocked)
 
@@ -136,6 +137,8 @@ struct PopoverView: View {
 struct ShiftSummaryView: View {
   let model: ShiftModel
   let lunch: LunchRule
+  /// Whether there's a weekly goal to show the week against.
+  var showsWeekGoal = false
 
   var body: some View {
     // Inside the timeline: during a break, clock out moves with the clock.
@@ -197,9 +200,40 @@ struct ShiftSummaryView: View {
           LunchStatus(plan: plan, now: context.date, symbol: lunch.symbol)
             .font(.caption)
         }
+
+        if showsWeekGoal, let goal = model.weekGoal(now: context.date) {
+          WeekGoalStatus(goal: goal)
+            .font(.caption)
+        }
       }
       .animation(.snappy, value: clockOut)
     }
+  }
+}
+
+/// This week against the weekly goal: worked of the goal, then what's left,
+/// or when today's shift gets you there.
+struct WeekGoalStatus: View {
+  let goal: ShiftStore.WeekGoal
+
+  var body: some View {
+    HStack {
+      Label {
+        Text(
+          "\(TimesheetFormat.duration(goal.worked)) of \(TimesheetFormat.duration(goal.goal)) this week"
+        )
+      } icon: {
+        Image(systemName: goal.isMet ? "checkmark.circle.fill" : "target")
+      }
+      Spacer()
+      Text(goal.detail)
+        .foregroundStyle(
+          goal.isMet || goal.leftAfterClockOut == 0
+            ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+    }
+    .foregroundStyle(.secondary)
+    .monospacedDigit()
+    .help(goal.helpText)
   }
 }
 

@@ -175,6 +175,17 @@ then show a **Clock Out** button that opens it and stops the alarm. If you clock
 turn on **Separate clock-in link**; the TUI and CLI read it from the `clock_in_link` setting, and
 without it clocking in uses the clock-out link (`clock_out_link`).
 
+### Weekly goal
+
+For a set number of hours a week, like 20 for a part-time job, turn on **Weekly goal** in
+Settings (General) and set the hours (40 when you first turn it on). The popover shows what you've
+worked this week against it under clock out, and what's left: when you're clocked in, when
+today's shift gets you there (**Met at 3:40 PM**), or how much is still to go after today's clock
+out. The timesheet's inspector shows the goal and what's left for the week shown. It's off until
+you turn it on, and kept in the shared database (`weekly_goal_secs`), so `shifty goal`, the TUI,
+and the app use the same goal. The app's weeks follow your Mac's calendar; the TUI and CLI's,
+the `week_start` setting.
+
 ### Timesheet and projects
 
 **Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Pick
@@ -380,6 +391,11 @@ totals. `shifty sheet mon` shows the week holding that day; `--last`, the week b
 `-d` puts the time on today, or yesterday if it starts later than now. With the lunch window on,
 `status`, `in`, and `break` count lunch in clock out and say where lunch stands.
 
+`shifty goal 20h` sets a [weekly goal](#weekly-goal) (`20`, `20h`, and `37:30` all work), `shifty
+goal` shows the week against it, and `shifty goal off` turns it off. With a goal, `status` adds a
+line like `This week: 14h 30m of your 20h 00m goal, 5h 30m left; 1h 30m after today's clock out.`,
+and `sheet` lists the goal with the week's totals.
+
 Weeks start on Sunday unless the `week_start` setting is an ISO weekday (`1` for Monday). Days you
 don't work (the `work_days` setting) are hidden unless they have time on them.
 
@@ -394,7 +410,8 @@ the app (or `zig build cli`) gets you both; a dev build's is `shifty-dev tui`.
 
 It opens on your day: the shift and its clock out, a bar of the shift (work done in
 green, breaks, the lunch window, time over in yellow), where lunch stands, what you're tracking,
-today's entries, and totals by project and client. It reads the same database as the CLI and
+today's entries, and totals by project and client. With a [weekly goal](#weekly-goal), a Week line
+shows this week against it and when today's shift meets it. It reads the same database as the CLI and
 reloads every second, so a `shifty start` in another terminal shows up right away. Clock out counts
 lunch still to come, as the menu bar does.
 
@@ -414,7 +431,7 @@ lunch still to come, as the menu bar does.
 ### Timesheet
 
 `t` opens the week as the menu bar app's timesheet shows it: a strip of each day's hours, the
-week's time worked, tracked, untracked, and on break, then each day with its shift, breaks, and
+week's time worked, tracked, untracked, and on break (and the weekly goal, with one), then each day with its shift, breaks, and
 tracked time in the order they started. A shift shows how far it ran past its length and how lunch
 went. Today starts open and other days folded. Every change goes straight to the database and can
 be undone.

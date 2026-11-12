@@ -621,6 +621,19 @@ struct WeekTotals: View {
         .accessibilityElement(children: .combine)
 
         let worked = model.worked(now: now)
+        if let goal = model.weeklyGoal {
+          TotalsList(title: "Weekly Goal") {
+            ProgressView(value: min(worked, goal), total: goal)
+              .tint(worked >= goal ? .green : .accentColor)
+              .accessibilityLabel("Weekly goal")
+            FigureRow(name: "Goal", seconds: goal)
+            if worked >= goal {
+              FigureRow(name: "Over goal", seconds: worked - goal)
+            } else {
+              FigureRow(name: "Left", seconds: goal - worked)
+            }
+          }
+        }
         if worked > 0 {
           TotalsList(title: "Shifts") {
             FigureRow(name: "Worked", seconds: worked)

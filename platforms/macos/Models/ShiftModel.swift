@@ -85,6 +85,21 @@ import Observation
   /// Whether the break you're on now is lunch under `rule`: the first break
   /// long enough to be, or the one you're on if none before it was. False
   /// off a break, or when the shift doesn't need lunch.
+  /// This week against the weekly goal, the open shift included; nil
+  /// without a goal or the store. A shift that isn't clocked in isn't in
+  /// the store, so it doesn't count yet.
+  func weekGoal(now: Date, calendar: Calendar = .current) -> ShiftStore.WeekGoal? {
+    guard let store else { return nil }
+    let start =
+      calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now)
+    do {
+      return try store.weekGoal(weekStart: start, now: now)
+    } catch {
+      log("read weekly goal:", error)
+      return nil
+    }
+  }
+
   func isOnLunch(_ rule: LunchRule?, now: Date = Date()) -> Bool {
     guard let breakStart, let lunch = lunch(rule, now: now)?.lunch else { return false }
     return lunch.end == nil && lunch.start == breakStart

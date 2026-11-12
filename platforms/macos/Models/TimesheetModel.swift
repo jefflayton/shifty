@@ -105,6 +105,9 @@ import Observation
   /// Days off with nothing on them.
   var hiddenDays: [Date] { days.filter { !isWorkDay($0) && !hasTime(on: $0) } }
 
+  /// Hours to work each week, if there's a goal.
+  var weeklyGoal: TimeInterval? { preferences?.weeklyGoal }
+
   func isWorkDay(_ day: Date) -> Bool {
     preferences?.isWorkDay(day, calendar: calendar) ?? true
   }

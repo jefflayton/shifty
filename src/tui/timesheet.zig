@@ -932,6 +932,22 @@ pub const Timesheet = struct {
         p.put(" worked", dim);
         if (s.over > 0) try p.print(yellow, "  +{f}", .{fmt.dur(s.over)});
         try p.print(dim, "  ·  {f} tracked  ·  {f} untracked  ·  {f} on break", .{ fmt.dur(s.tracked), fmt.dur(s.untracked), fmt.dur(s.on_break) });
+        if (try w.goal(a, now)) |g| {
+            p.nl(1);
+            try p.print(dim, "Goal {f}", .{fmt.dur(g.secs)});
+            if (g.isMet()) {
+                p.put("  ·  ", dim);
+                p.put("met", green);
+                if (g.over() >= 60) try p.print(dim, "  ·  {f} over", .{fmt.dur(g.over())});
+            } else {
+                try p.print(.{}, "  ·  {f} left", .{fmt.dur(g.left())});
+                if (g.leftAfterClockOut()) |after| {
+                    if (after == 0) {
+                        try p.print(green, "  ·  met at {f}", .{fmt.clock(g.meets_at.?, self.utc_offset_secs)});
+                    } else try p.print(dim, "  ·  {f} after today's clock out", .{fmt.dur(after)});
+                }
+            }
+        }
         p.nl(2);
 
         switch (self.mode) {
