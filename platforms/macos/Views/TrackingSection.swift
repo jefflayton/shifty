@@ -36,6 +36,18 @@ struct TrackingSection: View {
           .accessibilityLabel("Stop tracking")
         }
       }
+      if let running, running.isMeeting {
+        HStack(spacing: 6) {
+          Image(systemName: "video")
+            .foregroundStyle(.secondary)
+          Text("In a meeting: \(running.note ?? AutoSwitchModel.untitled)")
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
+        .font(.caption)
+        .help("Logged as a meeting; it ends with the call, or when you stop or switch the timer")
+      }
       if let autoSwitch, let here = autoSwitch.unlinked, let running,
         let name = tracking.label(project: running.projectId, workspace: running.workspaceId)
       {

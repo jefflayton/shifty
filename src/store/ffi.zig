@@ -540,14 +540,29 @@ pub fn optStr(s: ?[*:0]const u8) ?[]const u8 {
 /// Records time after the fact. Null ids leave it unassigned (a workspace
 /// implies its project); a null note is none.
 export fn shifty_add_entry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, in_ts: i64, out_ts: i64, note: ?[*:0]const u8, out: *Id) Result {
+    return addEntry(h, project_id, workspace_id, in_ts, out_ts, note, .work, out);
+}
+
+/// A meeting recorded after the fact, titled `title`.
+export fn shifty_add_meeting(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, in_ts: i64, out_ts: i64, title: ?[*:0]const u8, out: *Id) Result {
+    return addEntry(h, project_id, workspace_id, in_ts, out_ts, title, .meeting, out);
+}
+
+fn addEntry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, in_ts: i64, out_ts: i64, note: ?[*:0]const u8, kind: store.EntryKind, out: *Id) Result {
     var tz_buf: local.TzBuf = undefined;
     const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
     const new = h.store.addEntry(
-        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .manual, .note = optStr(note) },
+        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .manual, .note = optStr(note), .kind = kind },
         .{ .ts = in_ts, .utc_offset_secs = local.utcOffset(in_ts), .tz = tz },
         out_ts,
     ) catch |e| return result(e);
     out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// Makes an entry a meeting (`meeting` nonzero) or plain work.
+export fn shifty_set_entry_kind(h: *Handle, entry_id: Id, meeting: i32, now: i64) Result {
+    h.store.setEntryKind(id(entry_id), if (meeting != 0) .meeting else .work, now) catch |e| return result(e);
     return .ok;
 }
 
@@ -584,11 +599,21 @@ export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*co
 /// Starts tracking now, stopping the running entry and ending a break in
 /// progress. Null ids leave it unassigned (a workspace implies its project).
 export fn shifty_start_entry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, note: ?[*:0]const u8, now: i64, out: *Id) Result {
+    return startEntry(h, project_id, workspace_id, note, now, .work, out);
+}
+
+/// Starts a meeting titled `title` at `in_ts`, when the call began: the
+/// running entry stops there, as `shifty_start_entry` stops it now.
+export fn shifty_start_meeting(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, title: ?[*:0]const u8, in_ts: i64, out: *Id) Result {
+    return startEntry(h, project_id, workspace_id, title, in_ts, .meeting, out);
+}
+
+fn startEntry(h: *Handle, project_id: ?*const Id, workspace_id: ?*const Id, note: ?[*:0]const u8, ts: i64, kind: store.EntryKind, out: *Id) Result {
     var tz_buf: local.TzBuf = undefined;
     const tz = local.tzName(h.threaded.io(), if (std.c.getenv("TZ")) |v| std.mem.span(v) else null, &tz_buf);
     const new = h.store.startEntry(
-        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .menubar, .note = optStr(note) },
-        .{ .ts = now, .utc_offset_secs = local.utcOffset(now), .tz = tz },
+        .{ .project_id = optId(project_id), .workspace_id = optId(workspace_id), .source = .menubar, .note = optStr(note), .kind = kind },
+        .{ .ts = ts, .utc_offset_secs = local.utcOffset(ts), .tz = tz },
     ) catch |e| return result(e);
     out.* = .{ .bytes = new.bytes };
     return .ok;
@@ -848,6 +873,45 @@ test "C API - start and stop tracking" {
 
     try testing.expectEqual(Result.ok, shifty_stop_entry(s, 3000));
     try testing.expectEqual(Result.none, shifty_stop_entry(s, 3001));
+}
+
+test "C API - meetings" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var web: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    var work: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_entry(s, &web, null, null, 1000, &work));
+    // The call began at 1500; it's noticed later.
+    var call: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_start_meeting(s, &web, null, "Stand up", 1500, &call));
+    try testing.expectEqual(Result.ok, shifty_stop_entry(s, 2400));
+    var planning: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_add_meeting(s, &web, null, 3000, 3600, "Planning", &planning));
+    try testing.expectEqual(Result.ok, shifty_set_entry_kind(s, work, 1, 4000));
+    try testing.expectEqual(Result.ok, shifty_set_entry_kind(s, work, 0, 4001));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_timesheet_json(s, 0, 86400, &ptr, &len));
+    defer shifty_free(ptr, len);
+    const Parsed = struct {
+        entries: []const struct { in_ts: i64, out_ts: ?i64, note: ?[]const u8, kind: []const u8 },
+    };
+    const parsed = try std.json.parseFromSlice(Parsed, testing.allocator, ptr.?[0..len], .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const entries = parsed.value.entries;
+    try testing.expectEqual(3, entries.len);
+    try testing.expectEqualStrings("work", entries[0].kind);
+    try testing.expectEqual(1500, entries[0].out_ts.?);
+    try testing.expectEqualStrings("meeting", entries[1].kind);
+    try testing.expectEqualStrings("Stand up", entries[1].note.?);
+    try testing.expectEqual(2400, entries[1].out_ts.?);
+    try testing.expectEqualStrings("meeting", entries[2].kind);
+    try testing.expectEqualStrings("Planning", entries[2].note.?);
 }
 
 test "C API - break presets" {

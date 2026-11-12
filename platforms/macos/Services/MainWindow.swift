@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The main window: the timesheet and projects, picked in a sidebar.
+/// The main window: the timesheet, meetings, breaks, and projects, picked
+/// in a sidebar.
 /// Shifty lives in the menu bar; while this is open it's also a regular app
 /// with a Dock icon and menus (see `AppWindows`). It needs the store;
 /// settings have their own window.
@@ -10,15 +11,22 @@ final class MainWindow: NSObject, NSWindowDelegate {
   private let timesheet: TimesheetModel
   private let projects: ProjectsModel
   private let preferences: Preferences
+  private let shift: ShiftModel?
+  private let autoSwitch: AutoSwitchModel?
   private let navigation = MainNavigation()
   private var window: NSWindow?
   /// The window's undo: timesheet changes, and typing in its fields.
   private let undoManager = UndoManager()
 
-  init(store: ShiftStore, preferences: Preferences) {
+  init(
+    store: ShiftStore, preferences: Preferences, shift: ShiftModel? = nil,
+    autoSwitch: AutoSwitchModel? = nil
+  ) {
     timesheet = TimesheetModel(store: store, preferences: preferences)
     projects = ProjectsModel(store: store)
     self.preferences = preferences
+    self.shift = shift
+    self.autoSwitch = autoSwitch
     super.init()
     timesheet.undoManager = undoManager
   }
@@ -49,7 +57,9 @@ final class MainWindow: NSObject, NSWindowDelegate {
     window.title = appName
     window.isReleasedWhenClosed = false
     let host = NSHostingController(
-      rootView: MainView(timesheet: timesheet, projects: projects, navigation: navigation))
+      rootView: MainView(
+        timesheet: timesheet, projects: projects, preferences: preferences, shift: shift,
+        autoSwitch: autoSwitch, navigation: navigation))
     // Let the views' .toolbar and titles fill the window's.
     host.sceneBridgingOptions = [.toolbars, .title]
     // Only hold the window to the content's minimum. By default SwiftUI

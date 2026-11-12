@@ -4,8 +4,9 @@ import SwiftUI
 /// Auto-switch's offer, in a small panel at the top of the screen that
 /// floats over everything without taking focus: what it's switching to, a
 /// countdown, and buttons to switch now or keep the current project. After
-/// a switch it says so, with Undo, for a moment. A meeting's offer has no
-/// countdown: it waits for you.
+/// a switch it says so, with Undo, for a moment. A call's offer to log it
+/// as a meeting has no countdown: it waits for you. When the call ends, it
+/// says the meeting did, with Undo.
 @MainActor
 final class SwitchBanner {
   private let model: AutoSwitchModel
@@ -131,16 +132,15 @@ struct SwitchBannerView: View {
         }
       } else if let switched = model.switched {
         HStack(spacing: 12) {
-          Image(systemName: "arrow.triangle.swap")
-            .font(.title3)
-            .foregroundStyle(.tint)
-            .frame(width: 30)
+          Image(
+            systemName: switched.ended
+              ? "arrow.uturn.backward" : switched.meeting != nil ? "video" : "arrow.triangle.swap"
+          )
+          .font(.title3)
+          .foregroundStyle(.tint)
+          .frame(width: 30)
           VStack(alignment: .leading, spacing: 1) {
-            Text("\(switched.started ? "Tracking" : "Switched to") \(Text(switched.name).bold())")
-            Text("You're in \(switched.place)")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .truncationMode(.middle)
+            SwitchedText(switched: switched)
           }
           .lineLimit(1)
           .frame(maxWidth: 320, alignment: .leading)
@@ -168,27 +168,49 @@ struct SwitchBannerView: View {
   }
 }
 
-/// A meeting's offer, or the offer to go back once it ends: no countdown,
-/// since it waits for you.
+/// What a switch just made says: the project, a meeting logged, or a
+/// meeting that ended with its call.
+private struct SwitchedText: View {
+  let switched: AutoSwitchModel.Switched
+
+  var body: some View {
+    if switched.ended {
+      Text("\(Text(switched.meeting ?? AutoSwitchModel.untitled).bold()) ended")
+      Text(switched.stopped ? "The meeting's logged · timer stopped" : "Back to \(switched.name)")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .truncationMode(.middle)
+    } else if let meeting = switched.meeting {
+      Text("Logging \(Text(meeting).bold())")
+      Text("A meeting on \(switched.name)")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .truncationMode(.middle)
+    } else {
+      Text("\(switched.started ? "Tracking" : "Switched to") \(Text(switched.name).bold())")
+      Text("You're in \(switched.place)")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .truncationMode(.middle)
+    }
+  }
+}
+
+/// A call's offer to log it as a meeting: no countdown, since it waits
+/// for you.
 private struct MeetingOfferView: View {
   let model: AutoSwitchModel
   let offer: AutoSwitchModel.Offer
 
-  private var over: Bool { offer.kind == .meetingOver }
-
   var body: some View {
     HStack(spacing: 12) {
-      Image(systemName: over ? "arrow.uturn.backward" : "video")
+      Image(systemName: "video")
         .font(.title3)
         .foregroundStyle(.tint)
         .frame(width: 30)
       VStack(alignment: .leading, spacing: 1) {
-        if over {
-          Text("Back to \(Text(offer.name).bold())?")
-        } else {
-          Text("\(offer.starts ? "Start" : "Switch to") \(Text(offer.name).bold())?")
-        }
-        Text((over ? offer.place : "In \(offer.place)") + (offer.from.map { " · from \($0)" } ?? ""))
+        Text("Log \(Text(offer.meeting ?? offer.place).bold()) as a meeting?")
+        Text(subtitle)
           .font(.caption)
           .foregroundStyle(.secondary)
           .truncationMode(.middle)
@@ -196,11 +218,20 @@ private struct MeetingOfferView: View {
       .lineLimit(1)
       .frame(maxWidth: 320, alignment: .leading)
       Spacer(minLength: 8)
-      Button(offer.from.map { "Keep \($0)" } ?? "Not Now") { model.keep() }
-        .lineLimit(1)
-      Button(over ? "Switch Back" : offer.starts ? "Start" : "Switch") { model.switchNow() }
+      Button(offer.logsHere ? "Not Now" : offer.from.map { "Keep \($0)" } ?? "Not Now") {
+        model.keep()
+      }
+      .lineLimit(1)
+      Button("Log Meeting") { model.switchNow() }
         .buttonStyle(.borderedProminent)
     }
+  }
+
+  /// Which project it goes on, and what it takes over from.
+  private var subtitle: String {
+    if offer.starts { return "On \(offer.name) · starts a timer" }
+    if offer.logsHere { return "On \(offer.name)" }
+    return "On \(offer.name)" + (offer.from.map { " · from \($0)" } ?? "")
   }
 }
 

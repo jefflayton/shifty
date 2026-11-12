@@ -1099,7 +1099,9 @@ pub const Timesheet = struct {
         p.pad(label_col);
         if (e.out_ts == null) p.put("● ", green);
         p.put(try w.names.label(a, e.project_id, e.workspace_id), ui.projectStyle(w.names, e.project_id, false));
-        if (e.note) |n| try p.print(dim, "  {s}", .{n});
+        if (e.kind == .meeting) {
+            try p.print(cyan, "  Meeting: {s}", .{e.note orelse "untitled"});
+        } else if (e.note) |n| try p.print(dim, "  {s}", .{n});
     }
 
     fn drawBreak(self: *Timesheet, p: *Painter, w: sheet.Week, a: Allocator, b: store.Break, s: sheet.SheetShift) !void {

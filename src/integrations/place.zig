@@ -170,18 +170,55 @@ fn choose(db: *store.Store, p: Place, choices: []const store.Target, via: Via) s
 }
 
 /// Whether `title` has `word` (lowercase) in it, as a whole word or
-/// phrase: not inside a longer word. Case doesn't matter.
+/// phrase: not inside a longer word. Case doesn't matter, and neither do
+/// the spaces and dashes between words: "stand up" finds "Standup",
+/// "Stand-up", and "Stand  up", and "standup" finds "Stand up", since
+/// meeting and session names spell them every way.
 pub fn titleHas(title: []const u8, word: []const u8) bool {
-    if (word.len == 0 or word.len > title.len) return false;
+    if (word.len == 0) return false;
     var i: usize = 0;
-    while (i + word.len <= title.len) : (i += 1) {
-        if (!std.ascii.eqlIgnoreCase(title[i..][0..word.len], word)) continue;
-        const before_ok = i == 0 or !isWordByte(title[i - 1]);
-        const after = i + word.len;
-        const after_ok = after == title.len or !isWordByte(title[after]);
-        if (before_ok and after_ok) return true;
+    while (i < title.len) : (i += 1) {
+        if (i > 0 and isWordByte(title[i - 1])) continue;
+        const end = matchAt(title, i, word) orelse continue;
+        if (end == title.len or !isWordByte(title[end])) return true;
     }
     return false;
+}
+
+/// Where `word` ends if it starts at `title[at]`, skipping separators on
+/// either side between its letters; null if it isn't there. It never
+/// starts or ends on a separator.
+fn matchAt(title: []const u8, at: usize, word: []const u8) ?usize {
+    var t = at;
+    var w: usize = 0;
+    while (w < word.len) {
+        if (sepLen(word, w)) |n| {
+            w += n;
+            continue;
+        }
+        // Separators between two of the word's letters, not before the
+        // first.
+        if (w > 0) {
+            while (sepLen(title, t)) |n| t += n;
+        }
+        if (t >= title.len or std.ascii.toLower(title[t]) != std.ascii.toLower(word[w])) return null;
+        t += 1;
+        w += 1;
+    }
+    return t;
+}
+
+/// The length of the separator at `s[i]`: a space, tab, dash, underscore,
+/// or a no-break space; null if there isn't one.
+fn sepLen(s: []const u8, i: usize) ?usize {
+    if (i >= s.len) return null;
+    return switch (s[i]) {
+        ' ', '\t', '-', '_' => 1,
+        // U+00A0 no-break space, U+2011 non-breaking hyphen, U+2013 en dash
+        0xC2 => if (i + 1 < s.len and s[i + 1] == 0xA0) 2 else null,
+        0xE2 => if (i + 2 < s.len and s[i + 1] == 0x80 and (s[i + 2] == 0x91 or s[i + 2] == 0x93)) 3 else null,
+        else => null,
+    };
 }
 
 fn isWordByte(c: u8) bool {
@@ -407,4 +444,25 @@ test "titleHas - whole words, any case" {
     try testing.expect(!titleHas("api_v2", "api"));
     try testing.expect(titleHas("api-v2", "api"));
     try testing.expect(!titleHas("", "api"));
+}
+
+test "titleHas - spaces and dashes between words don't matter" {
+    // A keyword "Stand up" and a meeting spelled any way.
+    try testing.expect(titleHas("Stand up | Microsoft Teams", "stand up"));
+    try testing.expect(titleHas("Daily Standup | Microsoft Teams", "stand up"));
+    try testing.expect(titleHas("Stand-up | Microsoft Teams", "stand up"));
+    try testing.expect(titleHas("Stand  Up", "stand up"));
+    try testing.expect(titleHas("Stand\u{a0}up | Microsoft Teams", "stand up"));
+    try testing.expect(titleHas("Stand\u{2013}up", "stand up"));
+    try testing.expect(titleHas("Stand up | Microsoft Teams", "standup"));
+    try testing.expect(titleHas("Team stand-up", "standup"));
+    try testing.expect(titleHas("store_galore", "store galore"));
+    // Still whole words.
+    try testing.expect(!titleHas("Standups", "stand up"));
+    try testing.expect(!titleHas("Withstand up", "stand up"));
+    try testing.expect(!titleHas("api_v2", "api"));
+    try testing.expect(!titleHas("Stand by", "stand up"));
+    // Not a word followed by a separator and more letters.
+    try testing.expect(!titleHas("Stand-upkeep", "stand up"));
+    try testing.expect(titleHas("Stand up — notes", "stand up"));
 }

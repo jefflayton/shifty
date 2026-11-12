@@ -174,6 +174,15 @@ ShiftyResult shifty_add_entry(ShiftyStore *store, const ShiftyId *project_id,
 ShiftyResult shifty_edit_entry(ShiftyStore *store, ShiftyId entry_id, const ShiftyId *project_id,
                                const ShiftyId *workspace_id, int64_t in_ts, int64_t out_ts,
                                int32_t running, const char *note, int64_t now);
+// A meeting recorded after the fact, titled `title` (its note). Meetings are
+// worked time on their project like any other entry; the timesheet's entries
+// say "kind":"meeting" for them and "work" for the rest.
+ShiftyResult shifty_add_meeting(ShiftyStore *store, const ShiftyId *project_id,
+                                const ShiftyId *workspace_id, int64_t in_ts, int64_t out_ts,
+                                const char *title, ShiftyId *out);
+// Makes an entry a meeting (`meeting` nonzero) or plain work.
+ShiftyResult shifty_set_entry_kind(ShiftyStore *store, ShiftyId entry_id, int32_t meeting,
+                                   int64_t now);
 ShiftyResult shifty_delete_entry(ShiftyStore *store, ShiftyId entry_id, int64_t now);
 // Brings back a deleted entry as it was. SHIFTY_NOT_FOUND unless it's deleted;
 // SHIFTY_CONFLICT if it was running and another entry runs now.
@@ -187,6 +196,11 @@ ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
 ShiftyResult shifty_start_entry(ShiftyStore *store, const ShiftyId *project_id,
                                 const ShiftyId *workspace_id, const char *note, int64_t now,
                                 ShiftyId *out);
+// Starts a meeting titled `title` at `in_ts`, when the call began (at or
+// before now): the running entry stops there, and a break in progress ends.
+ShiftyResult shifty_start_meeting(ShiftyStore *store, const ShiftyId *project_id,
+                                  const ShiftyId *workspace_id, const char *title, int64_t in_ts,
+                                  ShiftyId *out);
 // Stops the running entry; SHIFTY_NONE if nothing was running.
 ShiftyResult shifty_stop_entry(ShiftyStore *store, int64_t now);
 

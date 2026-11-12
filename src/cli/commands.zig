@@ -42,6 +42,9 @@ pub const usage =
     \\                             or turn it off
     \\  add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
     \\                             Record time after the fact
+    \\  add <start> <end> [<project>[/<workspace>]] -m <title> [-d <day>]
+    \\                             Record a meeting: worked time on the
+    \\                             project, kept apart and titled
     \\  add --shift <start> <end> [-d <day>]
     \\                             Record a shift you forgot to clock
     \\  add --break <start> <end> [-d <day>]
@@ -52,6 +55,10 @@ pub const usage =
     \\                             Track time. With no project, use the
     \\                             project linked to the repo or folder
     \\                             you're in, if any
+    \\  start [<project>[/<workspace>]] -m <title>
+    \\                             Track a meeting until the next start
+    \\                             or stop
+    \\  meetings [<day>] [--last]  The week's meetings, by day
     \\  stop                       Stop tracking
     \\  log [--week]               Time by project, today or the last 7 days
     \\  projects                   List projects and their workspaces
@@ -92,7 +99,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { tui, status, in, out, @"break", sheet, goal, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
+const Command = enum { tui, status, in, out, @"break", sheet, goal, add, start, stop, meetings, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -170,6 +177,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .add => try add(&c, rest),
         .start => try start(&c, rest),
         .stop => try stop(&c, rest),
+        .meetings => try meetings(&c, rest),
         .log => try log(&c, rest),
         .projects => try listProjects(&c, rest),
         .project => try project(&c, rest),
@@ -210,7 +218,9 @@ fn status(c: *Ctx, args: []const [:0]const u8) !void {
 
     if (try c.db.runningEntry(c.arena)) |e| {
         try c.out.print("Tracking {s} since {f} ({f})", .{ try label(c, e.project_id, e.workspace_id), clock(e.in_ts, e.utc_offset_secs), dur(now - e.in_ts) });
-        if (e.note) |n| try c.out.print(": {s}", .{n});
+        if (e.kind == .meeting) {
+            try c.out.print(", in the meeting {s}", .{e.note orelse "untitled"});
+        } else if (e.note) |n| try c.out.print(": {s}", .{n});
         try c.out.writeAll(".\n");
     } else try c.out.writeAll("Not tracking.\n");
 }
@@ -439,7 +449,7 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
             .entry => |e| {
                 try printSpan(c, @max(e.in_ts, w.days[0]), e.out_ts, e.utc_offset_secs);
                 try c.out.print("  {s: >7}  {s}", .{ try padDur(c, w.seconds(e, now)), try w.names.label(a, e.project_id, e.workspace_id) });
-                if (e.note) |n| try c.out.print("  {s}", .{n});
+                try printNote(c, e);
                 try c.out.writeAll("\n");
             },
             .brk => |b| {
@@ -482,6 +492,14 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     }
 }
 
+/// An entry's note, or a meeting's title.
+fn printNote(c: *Ctx, e: store.Entry) !void {
+    switch (e.kind) {
+        .meeting => try c.out.print("  Meeting: {s}", .{e.note orelse "untitled"}),
+        .work => if (e.note) |n| try c.out.print("  {s}", .{n}),
+    }
+}
+
 fn printSpan(c: *Ctx, from: i64, end: ?i64, off: i64) !void {
     try c.out.print("  {f} – ", .{clock(from, off)});
     if (end) |e| try c.out.print("{f}", .{clock(e, off)}) else try c.out.writeAll("     now");
@@ -500,6 +518,7 @@ fn add(c: *Ctx, args: []const [:0]const u8) !void {
     var n_times: usize = 0;
     var spec: ?[]const u8 = null;
     var note: ?[]const u8 = null;
+    var meeting: ?[]const u8 = null;
     var day: ?i64 = null;
     var it: Args = .{ .c = c, .cmd = "add", .list = args };
     while (it.peek()) |arg| {
@@ -512,6 +531,9 @@ fn add(c: *Ctx, args: []const [:0]const u8) !void {
         } else if (eqlAny(arg, &.{ "-n", "--note" })) {
             _ = it.next();
             note = try it.value(arg);
+        } else if (eqlAny(arg, &.{ "-m", "--meeting" })) {
+            _ = it.next();
+            meeting = try meetingTitle(c, try it.value(arg));
         } else if (eqlAny(arg, &.{ "-d", "--day" })) {
             _ = it.next();
             day = try parseDay(c, try it.value(arg));
@@ -529,7 +551,8 @@ fn add(c: *Ctx, args: []const [:0]const u8) !void {
         }
     }
     if (n_times < 2) return c.fail("usage: shifty add <start> <end> [<project>] [-n <note>] [-d <day>]", .{});
-    if (kind != .entry and (spec != null or note != null)) return c.fail("add --{t} takes only times and -d", .{kind});
+    if (kind != .entry and (spec != null or note != null or meeting != null)) return c.fail("add --{t} takes only times and -d", .{kind});
+    if (meeting != null and note != null) return c.fail("a meeting's note is its title; use -m alone", .{});
 
     const now = c.now.ts;
     // Today, or yesterday for a from that's still to come today.
@@ -557,10 +580,13 @@ fn add(c: *Ctx, args: []const [:0]const u8) !void {
                 .project_id = if (target) |t| t.project_id else null,
                 .workspace_id = if (target) |t| t.workspace_id else null,
                 .source = .cli,
-                .note = note,
+                .note = meeting orelse note,
+                .kind = if (meeting != null) .meeting else .work,
             }, at, end);
             const name = if (target) |t| try label(c, t.project_id, t.workspace_id) else try label(c, null, null);
-            try c.out.print("Added {f} of {s} on {f}, {f} – {f}.\n", .{ dur(end - from), name, fmt.date(from, at.utc_offset_secs), clock(from, at.utc_offset_secs), clock(end, at.utc_offset_secs) });
+            if (meeting) |m| {
+                try c.out.print("Added the meeting {s}, {f} of {s} on {f}, {f} – {f}.\n", .{ m, dur(end - from), name, fmt.date(from, at.utc_offset_secs), clock(from, at.utc_offset_secs), clock(end, at.utc_offset_secs) });
+            } else try c.out.print("Added {f} of {s} on {f}, {f} – {f}.\n", .{ dur(end - from), name, fmt.date(from, at.utc_offset_secs), clock(from, at.utc_offset_secs), clock(end, at.utc_offset_secs) });
         },
         .@"break" => {
             const shifts = try c.db.shiftsBetween(a, midnight, midnight + std.time.s_per_day);
@@ -635,14 +661,18 @@ fn parseYmd(str: []const u8) ?i64 {
 fn start(c: *Ctx, args: []const [:0]const u8) !void {
     var spec: ?[]const u8 = null;
     var note: ?[]const u8 = null;
+    var meeting: ?[]const u8 = null;
     var it: Args = .{ .c = c, .cmd = "start", .list = args };
     while (it.next()) |arg| {
         if (eqlAny(arg, &.{ "-n", "--note" })) {
             note = try it.value(arg);
+        } else if (eqlAny(arg, &.{ "-m", "--meeting" })) {
+            meeting = try meetingTitle(c, try it.value(arg));
         } else if (spec == null and arg[0] != '-') {
             spec = arg;
         } else return it.unexpected(arg);
     }
+    if (meeting != null and note != null) return c.fail("a meeting's note is its title; use -m alone", .{});
 
     var target: ?store.Target = null;
     var unlinked: ?[]const u8 = null;
@@ -659,7 +689,8 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
         .project_id = if (target) |t| t.project_id else null,
         .workspace_id = if (target) |t| t.workspace_id else null,
         .source = .cli,
-        .note = note,
+        .note = meeting orelse note,
+        .kind = if (meeting != null) .meeting else .work,
     }, c.now) catch |e| switch (e) {
         error.Conflict => return c.fail("another timer started at the same moment; try again", .{}),
         else => return e,
@@ -672,7 +703,9 @@ fn start(c: *Ctx, args: []const [:0]const u8) !void {
         } else try c.out.print("Dropped {s}: stopped the second it started.\n", .{name});
     }
     const name = if (target) |t| try label(c, t.project_id, t.workspace_id) else try label(c, null, null);
-    try c.out.print("Tracking {s} since {f}.\n", .{ name, clock(c.now.ts, c.now.utc_offset_secs) });
+    if (meeting) |m| {
+        try c.out.print("In the meeting {s} for {s} since {f}.\n", .{ m, name, clock(c.now.ts, c.now.utc_offset_secs) });
+    } else try c.out.print("Tracking {s} since {f}.\n", .{ name, clock(c.now.ts, c.now.utc_offset_secs) });
     if (unlinked) |root| try c.out.print("This repo ({s}) isn't linked to a project; `shifty link <project>` to track it.\n", .{root});
 }
 
@@ -683,6 +716,52 @@ fn stop(c: *Ctx, args: []const [:0]const u8) !void {
     if (try c.db.stopEntry(c.now.ts) == null) {
         try c.out.print("Dropped {s}: stopped the second it started.\n", .{name});
     } else try c.out.print("Stopped {s} after {f}.\n", .{ name, dur(c.now.ts - e.in_ts) });
+}
+
+/// A meeting's title, trimmed; it can't be empty.
+fn meetingTitle(c: *Ctx, raw: []const u8) ![]const u8 {
+    const title = std.mem.trim(u8, raw, " \t\r\n");
+    if (title.len == 0) return c.fail("a meeting needs a title", .{});
+    return title;
+}
+
+fn meetings(c: *Ctx, args: []const [:0]const u8) !void {
+    var day: ?i64 = null;
+    var last = false;
+    var it: Args = .{ .c = c, .cmd = "meetings", .list = args };
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--last")) {
+            last = true;
+        } else if (day == null and arg[0] != '-') {
+            day = try parseDay(c, arg);
+        } else return it.unexpected(arg);
+    }
+    var ref = (day orelse fmt.dayStart(c.now.ts, c.now.utc_offset_secs)) + std.time.s_per_day / 2;
+    if (last) ref -= 7 * std.time.s_per_day;
+    const a = c.arena;
+    const first = sheet.weekStart(ref, local.utcOffset(ref), try sheet.weekStartDay(&c.db, a));
+    const days = sheet.weekDays(first, local.utcOffset);
+    const now = c.now.ts;
+    const list = try c.db.meetingsBetween(a, days[0], days[7]);
+    try c.out.print("Meetings, week of {f}\n", .{fmt.date(days[0], local.utcOffset(days[0]))});
+    if (list.len == 0) return c.out.writeAll("\nNone this week.\n");
+
+    const names: Names = try .load(&c.db, a);
+    var current: ?i64 = null;
+    var total: i64 = 0;
+    for (list) |e| {
+        const in_ts = @max(e.in_ts, days[0]);
+        const d = fmt.dayStart(in_ts, e.utc_offset_secs);
+        if (current != d) {
+            try c.out.print("\n{f}\n", .{fmt.date(in_ts, e.utc_offset_secs)});
+            current = d;
+        }
+        const secs = store.report.clipped(e, days[0], @min(now, days[7]));
+        total += secs;
+        try printSpan(c, in_ts, e.out_ts, e.utc_offset_secs);
+        try c.out.print("  {s: >7}  {s}  {s}\n", .{ try padDur(c, secs), e.note orelse "untitled", try names.label(a, e.project_id, e.workspace_id) });
+    }
+    try c.out.print("\n  {s: >7}  in {d} meeting{s}\n", .{ try padDur(c, total), list.len, if (list.len == 1) "" else "s" });
 }
 
 fn log(c: *Ctx, args: []const [:0]const u8) !void {
@@ -710,7 +789,7 @@ fn log(c: *Ctx, args: []const [:0]const u8) !void {
         try c.out.print("  {f} – ", .{clock(in_ts, e.utc_offset_secs)});
         if (e.out_ts) |out| try c.out.print("{f}", .{clock(out, e.utc_offset_secs)}) else try c.out.writeAll("     now");
         try c.out.print("  {s: >7}  {s}", .{ try padDur(c, store.report.clipped(e, from, now)), try names.label(c.arena, e.project_id, e.workspace_id) });
-        if (e.note) |n| try c.out.print("  {s}", .{n});
+        try printNote(c, e);
         try c.out.writeAll("\n");
     }
 
@@ -1132,6 +1211,7 @@ test "isCommand" {
     try testing.expect(isCommand("start"));
     try testing.expect(isCommand("break"));
     try testing.expect(isCommand("goal"));
+    try testing.expect(isCommand("meetings"));
     try testing.expect(!isCommand("-s"));
     try testing.expect(!isCommand("9am"));
 }

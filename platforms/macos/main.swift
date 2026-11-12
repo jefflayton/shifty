@@ -19,7 +19,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   lazy var preferences = Preferences(store: store)
   /// The timesheet and projects; nil without the store.
   lazy var mainWindow: MainWindow? = store.map { store in
-    let window = MainWindow(store: store, preferences: preferences)
+    let window = MainWindow(
+      store: store, preferences: preferences, shift: model, autoSwitch: autoSwitch)
     // A clock in or break moved on the timesheet: the popover reads it before
     // it saves its own copy over it.
     window.didChange = { [weak self] in
@@ -214,6 +215,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   @objc func showProjects() {
     popover.close()
     mainWindow?.show(.projects)
+  }
+
+  @objc func showMeetings() {
+    popover.close()
+    mainWindow?.show(.meetings)
+  }
+
+  @objc func showBreaks() {
+    popover.close()
+    mainWindow?.show(.breaks)
   }
 
   /// An alarm's Clock Out: ends the shift as the popover's would, without
@@ -434,7 +445,11 @@ func setupMenu() {
   windowMenu.addItem(
     withTitle: "Timesheet", action: #selector(AppDelegate.showTimesheet), keyEquivalent: "1")
   windowMenu.addItem(
-    withTitle: "Projects", action: #selector(AppDelegate.showProjects), keyEquivalent: "2")
+    withTitle: "Meetings", action: #selector(AppDelegate.showMeetings), keyEquivalent: "2")
+  windowMenu.addItem(
+    withTitle: "Breaks", action: #selector(AppDelegate.showBreaks), keyEquivalent: "3")
+  windowMenu.addItem(
+    withTitle: "Projects", action: #selector(AppDelegate.showProjects), keyEquivalent: "4")
   windowMenu.addItem(.separator())
   windowMenu.addItem(
     withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)),

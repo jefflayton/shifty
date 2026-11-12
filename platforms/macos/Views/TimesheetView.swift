@@ -405,8 +405,8 @@ struct DaySection: View {
   }
 }
 
-/// The "+" on a day: an hour of project time, a shift you forgot to clock
-/// in for, or a break on the day's shift.
+/// The "+" on a day: an hour of project time, a meeting, a shift you forgot
+/// to clock in for, or a break on the day's shift.
 struct AddMenu: View {
   let model: TimesheetModel
   let day: Date
@@ -421,6 +421,10 @@ struct AddMenu: View {
         Button("Add Time") {
           model.expand(day)
           if let id = model.addEntry(on: day, now: now) { added(.entry(id)) }
+        }
+        Button("Add Meeting") {
+          model.expand(day)
+          if let id = model.addMeeting(on: day, now: now) { added(.entry(id)) }
         }
         Button("Add Shift") {
           model.expand(day)
@@ -439,7 +443,7 @@ struct AddMenu: View {
     }
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("Add time, a shift, or a break on \(name)")
+    .help("Add time, a meeting, a shift, or a break on \(name)")
   }
 }
 
@@ -487,9 +491,17 @@ struct EntryRow: View {
         ProjectPicker(model: model, entry: entry)
           .frame(width: 140, alignment: .leading)
 
+        if entry.isMeeting {
+          Image(systemName: "video")
+            .foregroundStyle(.secondary)
+            .help("A meeting: its note is its title")
+        }
+
         // The prompt shows where you're pointing, not on every row.
         TextField(
-          "Note", text: $note, prompt: hovered || noteFocused ? Text("Add a note") : Text(""))
+          entry.isMeeting ? "Title" : "Note", text: $note,
+          prompt: hovered || noteFocused
+            ? Text(entry.isMeeting ? "Meeting title" : "Add a note") : Text(""))
           .textFieldStyle(.plain)
           .focused($noteFocused)
           .onSubmit { model.setNote(entry, to: note) }
@@ -524,6 +536,9 @@ struct EntryRow: View {
     .contextMenu {
       if running { Button("Stop") { model.stop(entry) } }
       Button("Copy") { copy(model.text(of: .entry(entry.id), now: now)) }
+      Button(entry.isMeeting ? "Not a Meeting" : "Mark as Meeting") {
+        model.setMeeting(entry, !entry.isMeeting)
+      }
       Divider()
       Button("Delete", role: .destructive) { model.delete(entry) }
     }
