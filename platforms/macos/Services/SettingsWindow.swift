@@ -29,7 +29,9 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
   private func makeWindow() -> NSWindow {
     let tabs = SettingsTabsController()
     tabs.tabStyle = .toolbar
-    for tab in SettingsTab.allCases {
+    // Breaks have a page of their own in the main window, which needs the
+    // store; without it they stay here.
+    for tab in SettingsTab.allCases where tab != .breaks || !preferences.hasStore {
       let host = NSHostingController(
         rootView: SettingsPane(
           tab: tab, preferences: preferences, loginItem: loginItem, shift: shift))

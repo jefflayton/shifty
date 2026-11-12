@@ -232,10 +232,14 @@ final class ShiftStore {
     var outTs: Int64?
     var source: String
     var note: String?
+    /// "work", or "meeting" for a call, whose note is its title. Older
+    /// cores leave it out, which reads as work.
+    var kind: String? = nil
 
     var start: Date { date(inTs) }
     /// nil while it's running.
     var end: Date? { outTs.map(date) }
+    var isMeeting: Bool { kind == "meeting" }
   }
 
   /// A shift on the timesheet, clock in to clock out, with its breaks.
@@ -366,6 +370,23 @@ final class ShiftStore {
     return UUID(out)
   }
 
+  /// A meeting recorded after the fact, titled `title`: worked time on its
+  /// project, kept apart from other work.
+  func addMeeting(project: UUID?, workspace: UUID?, start: Date, end: Date, title: String)
+    throws -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_add_meeting(handle, p, w, ts(start), ts(end), title, &out))
+    }
+    return UUID(out)
+  }
+
+  /// Makes an entry a meeting, or plain work again.
+  func setMeeting(_ id: UUID, _ meeting: Bool, now: Date = Date()) throws {
+    try check(shifty_set_entry_kind(handle, ShiftyId(id), meeting ? 1 : 0, ts(now)))
+  }
+
   /// Replaces an entry's project, times, and note. A nil `end` keeps a
   /// running entry running.
   func editEntry(
@@ -389,6 +410,19 @@ final class ShiftStore {
     var out = ShiftyId()
     try withIds(project, workspace) { p, w in
       try check(shifty_start_entry(handle, p, w, note, ts(now), &out))
+    }
+    return UUID(out)
+  }
+
+  /// Starts a meeting titled `title` at `start`, when the call began,
+  /// stopping the running entry there. A workspace implies its project.
+  @discardableResult
+  func startMeeting(project: UUID?, workspace: UUID?, title: String, at start: Date) throws
+    -> UUID
+  {
+    var out = ShiftyId()
+    try withIds(project, workspace) { p, w in
+      try check(shifty_start_meeting(handle, p, w, title, ts(start), &out))
     }
     return UUID(out)
   }

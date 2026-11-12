@@ -92,12 +92,13 @@ open then; a timer you start during the break keeps running.
 
 For a break you didn't plan, click **Start Break** when you leave and **End Break** when you're back.
 Until then, the menu bar icon turns into the break's icon (a cup, unless you pick another under
-*Other Breaks* in Settings) and clock out moves later as the break goes on.
+*Other Breaks* on the Breaks page) and clock out moves later as the break goes on.
 
 The menu bar shows your clock-out time next to the icon. **Settings…** (⌘,) opens the Settings
 window. **General**: the days you work, what the menu bar shows (clock-out time, time left, time
-until your next break, or just the icon), and whether Shifty opens at login. **Breaks**: the lunch
-window, scheduled breaks, and break icons. **Clock Links**: the links Clock In and Clock Out open.
+until your next break, or just the icon), and whether Shifty opens at login. **Clock Links**: the
+links Clock In and Clock Out open. The lunch window, scheduled breaks, and break icons are on the
+[**Breaks** page](#timesheet-and-projects) of Shifty's window.
 
 Stay past clock out while you're clocked in, and Shifty counts the time over: **Time Left** (and
 **Time Until Break**, with no break left) reads `+25m`, and the popover shows how far over you
@@ -107,7 +108,7 @@ are, with the time past the end on the shift bar. **Clock-Out Time** keeps showi
 ### Scheduled breaks
 
 For a break at the same time on the same days, like a class on Tuesdays and Thursdays from 11 to
-2, add it under **Scheduled Breaks** in Settings: a name, the days, and the times. When a new day's
+2, add it under **Scheduled Breaks** on the Breaks page: a name, the days, and the times. When a new day's
 shift starts (the popover rolling over to today, the TUI's clock in, or `shifty in`), it goes on
 the shift as an ordinary break and pushes clock out later. To skip or move it for one day, edit or
 remove that break in the popover or on the timesheet. A break that would start after clock out
@@ -125,7 +126,7 @@ own icon, picked from the button beside its name; without one it uses the break 
 Some jobs require lunch within a window of work. In California, for example, a 30-minute meal
 break has to start before the end of the fifth hour. The lunch window is a break preset like a
 scheduled break, kept in the shared database, but it adds no break: it's what Shifty checks your
-breaks against. Turn on **Lunch window** in Settings and set
+breaks against. Turn on **Lunch window** on the Breaks page and set
 when it opens and closes, counted in time worked (3h and 5h by default), and how long a break has
 to be to count as lunch (30 min). Shorter breaks before lunch push the window later.
 
@@ -141,7 +142,7 @@ ring until you've had lunch: going on a break quiets them, and a break shorter t
 them back. The timesheet shows the window on each day
 and flags a lunch that started late or never happened.
 
-Lunch shows a fork and knife; pick another **Icon** for it in Settings, and the menu bar, popover,
+Lunch shows a fork and knife; pick another **Icon** for it on the Breaks page, and the menu bar, popover,
 alarms, and timesheet use it. With **Clock out for lunch** on (it is unless you turn it off),
 **Start Break** on the break that counts as lunch offers the [clock link](#alarms) as **Clock Out**
 does, and **End Lunch** offers the clock-in link as **Clock In** does, following the same
@@ -189,7 +190,7 @@ the `week_start` setting.
 ### Timesheet and projects
 
 **Open Timesheet…** in the popover (or the Dock icon while it's open) opens Shifty's window. Pick
-Timesheet or Projects in its sidebar (⌘1, ⌘2).
+Timesheet, Meetings, Breaks, or Projects in its sidebar (⌘1 to ⌘4).
 
 - **Timesheet**: a week of shifts and tracked time. The strip at the top shows each day's hours
   by project inside the time you were on shift; click a day to jump to it. A day's shift sits
@@ -202,12 +203,20 @@ Timesheet or Projects in its sidebar (⌘1, ⌘2).
     deletes included, can be undone (⌘Z) and redone (⇧⌘Z).
   - **Keyboard**: click a row to select it, then ↑/↓ moves between rows, Return edits its start
     time, Delete deletes it, ⌘C copies it, and Esc clears the selection.
-  - **Add** time, a forgotten shift, or a break with the toolbar's **+** (on the selected row's
+  - **Add** time, a meeting, a forgotten shift, or a break with the toolbar's **+** (on the selected row's
     day, else today) or the **+** that shows on a day's header when you point at it.
   - Click a day's header to open it or fold it down to its total (Option-click folds or opens
     every day); every day but today starts folded, and clicking a day in the strip opens it.
+  - **Meetings** show a camera beside their title, which is the row's note. Right-click a row
+    and choose **Mark as Meeting** or **Not a Meeting** to change which it is.
 - **Days you work**: pick them from the toolbar's calendar menu, or in Settings. Other days are
   hidden unless they have time on them.
+- **Meetings**: the week's meetings by day, with how long each day's ran, editable like the
+  timesheet's rows (the note is the title). **+** adds one you didn't log. Below them are the
+  [Teams](#teams-meetings) switches and the window titles Teams showed during your last call, each
+  with **Add Keyword** to link its name to a project.
+- **Breaks**: the lunch window, scheduled breaks, and the icon for other breaks. Without the
+  shared database (Shifty as a calculator only) they're in Settings instead.
 - **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
   its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
   project. The link button (or right-click) links a repo, folder, app, or keyword to it for
@@ -236,7 +245,7 @@ Shifty knows where you are by:
 - **Apps**: the app in front, for apps linked as a whole.
 - **Keywords**: words or phrases you give a project (**Add Keyword…** in the link menu, or
   `shifty keyword add`). A front window whose title has one, as a whole word in any case, is that
-  project's, whatever repo it's in. Name a Rex session or tab for the project, or give the project
+  project's (spaces and dashes inside it don't matter: `stand up` matches Standup and Stand-up), whatever repo it's in. Name a Rex session or tab for the project, or give the project
   the session's name. Reading titles needs the Accessibility permission.
 - **Rex tabs and sessions**: turn on **Follow Rex tabs and sessions** (Settings… → Auto-Switch →
   Rex) and list any remote hosts you connect to, by their names from `rex hosts`. Shifty then runs
@@ -256,17 +265,22 @@ running timer on one of them stays put; else the one linked first.
 
 ### Teams meetings
 
-When a Microsoft Teams call starts and one of Teams' window titles has another project's keyword,
-the banner asks whether to switch to it, from when the call began. It doesn't count down, since a
-meeting can name a project without being for it, and it works with Teams behind other windows.
-**Switch** or **Keep …** answer it, and Keep holds for the rest of the call. If you switched, the
-call's end asks whether to switch back. While a call is on, where you work switches nothing.
-Turn it off with **Offer to switch for Teams meetings** in Settings → Auto-Switch.
+A meeting is time worked on a project, kept as an entry of its own with the meeting's title as its
+note, not a break: it counts toward the shift and the project like other time. When a Microsoft
+Teams call starts, the banner asks whether to **Log Meeting**, from when the call began: on the
+project whose keyword is in one of Teams' window titles, else on the running timer's. It doesn't
+count down, since a meeting can name a project without being for it, and it works with Teams
+behind other windows. **Not Now** or **Keep …** hold for the rest of the call; turn on **Log them
+without asking** to log every call at once, with **Undo**. When the call ends, so does the meeting,
+and what ran before picks up again (or the timer stops, if none ran), with **Undo** to keep the
+meeting going. While a call is on, where you work switches nothing. Both switches are on the
+Meetings page and in Settings → Auto-Switch.
 
 A call is on while Teams has the microphone, which Core Audio tells without any permission, and
 for a minute after, in case muting lets go of it. Reading Teams' window titles needs the
 Accessibility permission. Shifty logs the titles it sees during a call (`meeting: Teams windows:`),
-to check what Teams puts in them.
+and the Meetings page shows the last call's, to check what Teams puts in them: a keyword has to be
+in one of them.
 
 ## CLI
 
@@ -312,6 +326,9 @@ sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
                            lunch, and time, with totals
 add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
                            Record time after the fact
+add <start> <end> [<project>[/<workspace>]] -m <title> [-d <day>]
+                           Record a meeting: worked time on the
+                           project, kept apart and titled
 add --shift <start> <end> [-d <day>]
                            Record a shift you forgot to clock
 add --break <start> <end> [-d <day>]
@@ -322,6 +339,10 @@ start [<project>[/<workspace>]] [-n <note>]
                            Track time. With no project, use the
                            project linked to the repo or folder
                            you're in, if any
+start [<project>[/<workspace>]] -m <title>
+                           Track a meeting until the next start
+                           or stop
+meetings [<day>] [--last]  The week's meetings, by day
 stop                       Stop tracking
 log [--week]               Time by project, today or the last 7 days
 projects                   List projects and their workspaces

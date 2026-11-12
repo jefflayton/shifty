@@ -2,13 +2,13 @@ import AppKit
 import ApplicationServices
 import CoreAudio
 
-/// Watches for a Microsoft Teams call and tells `AutoSwitchModel` which
-/// project it's for. A call is on while a Teams process takes sound from a
+/// Watches for a Microsoft Teams call and tells `AutoSwitchModel` when
+/// it's on and which project it's for. A call is on while a Teams process takes sound from a
 /// microphone, which Core Audio says without any permission. Which project
 /// comes from a keyword in one of Teams' window titles, even with Teams
 /// behind other windows; reading them needs the Accessibility permission
 /// auto-switch already asks for. Without it, a call is seen but names no
-/// project, so it offers nothing. A call lasts until Teams has let go of
+/// project, so it goes on the running timer's. A call lasts until Teams has let go of
 /// the microphone for `grace`, in case muting or changing devices lets go
 /// of it for a moment.
 @MainActor
@@ -60,6 +60,8 @@ final class MeetingWatcher {
       log("meeting: Teams windows:", current)
       logged = current
     }
+    // For the Meetings page: what a keyword could match in this call.
+    if !current.isEmpty, current != model.callTitles { model.callTitles = current }
     let ordered = Meetings.ordered(current, before: before)
     var seen = AutoSwitchModel.MeetingSeen(
       title: ordered.lazy.compactMap(Meetings.name(fromTitle:)).first, target: nil)

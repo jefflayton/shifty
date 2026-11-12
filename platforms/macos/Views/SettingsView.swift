@@ -24,7 +24,8 @@ enum SettingsTab: CaseIterable {
 }
 
 /// One tab of the Settings window: the days you work, the menu bar and
-/// alarms; breaks (the lunch window and scheduled ones); or the clock links.
+/// alarms; breaks (the lunch window and scheduled ones), when there's no
+/// main window for their page; or the clock links.
 struct SettingsPane: View {
   let tab: SettingsTab
   @Bindable var preferences: Preferences
@@ -121,62 +122,7 @@ struct SettingsPane: View {
   }
 
   @ViewBuilder private var breaks: some View {
-    Section {
-      Toggle("Lunch window", isOn: $preferences.lunch.isEnabled)
-      if preferences.lunch.isEnabled {
-        LunchSettings(rule: $preferences.lunch)
-      }
-    } header: {
-      Text("Lunch")
-    } footer: {
-      Text(
-        "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work. Add lunch alarms from the menu bar."
-      )
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-    }
-
-    if preferences.hasStore {
-      Section {
-        ForEach($preferences.scheduledBreaks) { $brk in
-          ScheduledBreakEditor(
-            brk: $brk,
-            restSymbol: preferences.breakSymbol,
-            // A break made today otherwise waits for tomorrow's shift.
-            addToday: shift.flatMap { shift in
-              shift.todayBreak(for: brk, now: Date()) == nil
-                ? nil : { shift.addToday(brk) }
-            }
-          ) {
-            let id = brk.id
-            preferences.scheduledBreaks.removeAll { $0.id == id }
-          }
-        }
-        Button("Add Scheduled Break") {
-          preferences.scheduledBreaks.append(ScheduledBreak(name: ""))
-        }
-      } header: {
-        Text("Scheduled Breaks")
-      } footer: {
-        Text(
-          "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later; Add to Today puts a new one on today's. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
-        )
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-
-    Section {
-      SymbolPicker("Break icon", symbol: $preferences.breakIcon, fallback: BreakIcon.rest)
-    } header: {
-      Text("Other Breaks")
-    } footer: {
-      Text(
-        "Shown for breaks you start from the menu bar, and scheduled breaks without an icon of their own."
-      )
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-    }
+    BreakSettings(preferences: preferences, shift: shift)
   }
 
   @ViewBuilder private var clockLinks: some View {
@@ -389,6 +335,73 @@ private struct LinkValue: View {
         .lineLimit(1)
         .truncationMode(.middle)
       Button("Change…", action: change)
+    }
+  }
+}
+
+/// Breaks: the lunch window, scheduled breaks, and the icon for others. On
+/// the main window's Breaks page, or in Settings without the store.
+struct BreakSettings: View {
+  @Bindable var preferences: Preferences
+  /// The menu bar's shift, for adding a scheduled break to it today.
+  var shift: ShiftModel? = nil
+
+  var body: some View {
+    Section {
+      Toggle("Lunch window", isOn: $preferences.lunch.isEnabled)
+      if preferences.lunch.isEnabled {
+        LunchSettings(rule: $preferences.lunch)
+      }
+    } header: {
+      Text("Lunch")
+    } footer: {
+      Text(
+        "Counted in time worked. In California, for example, a 30-minute meal break has to start before the end of the fifth hour of work. Add lunch alarms from the menu bar."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    if preferences.hasStore {
+      Section {
+        ForEach($preferences.scheduledBreaks) { $brk in
+          ScheduledBreakEditor(
+            brk: $brk,
+            restSymbol: preferences.breakSymbol,
+            // A break made today otherwise waits for tomorrow's shift.
+            addToday: shift.flatMap { shift in
+              shift.todayBreak(for: brk, now: Date()) == nil
+                ? nil : { shift.addToday(brk) }
+            }
+          ) {
+            let id = brk.id
+            preferences.scheduledBreaks.removeAll { $0.id == id }
+          }
+        }
+        Button("Add Scheduled Break") {
+          preferences.scheduledBreaks.append(ScheduledBreak(name: ""))
+        }
+      } header: {
+        Text("Scheduled Breaks")
+      } footer: {
+        Text(
+          "Breaks at set times on set days, like a class. Each goes on your shift when a new day's shift starts, and pushes clock out later; Add to Today puts a new one on today's. Move or delete one for the day in the menu bar or on the timesheet. Add break alarms from the menu bar."
+        )
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+
+    Section {
+      SymbolPicker("Break icon", symbol: $preferences.breakIcon, fallback: BreakIcon.rest)
+    } header: {
+      Text("Other Breaks")
+    } footer: {
+      Text(
+        "Shown for breaks you start from the menu bar, and scheduled breaks without an icon of their own."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
     }
   }
 }

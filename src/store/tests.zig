@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(6, stmt.int(0));
+    try testing.expectEqual(7, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -1012,6 +1012,57 @@ test "entries - add after the fact, edit, delete" {
     try testing.expectError(error.NotFound, s.restoreEntry(meeting, 16));
     day = try s.entriesBetween(a, 0, 24 * h);
     try testing.expectEqual(2, day.len);
+}
+
+test "entries - meetings are kept apart, worked time on their project" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+    const web = try s.createProject(.{ .name = "web" }, 0);
+
+    // A timer, then a call that started two minutes ago takes over from
+    // then, titled for the meeting.
+    const work = try s.startEntry(.{ .project_id = web, .source = .tui }, at(h));
+    const call = try s.startEntry(.{ .project_id = web, .source = .menubar, .note = "Stand up", .kind = .meeting }, at(2 * h));
+    var day = try s.entriesBetween(a, 0, 24 * h);
+    try testing.expectEqual(2, day.len);
+    try testing.expectEqual(.work, day[0].kind);
+    try testing.expectEqual(2 * h, day[0].out_ts.?);
+    try testing.expectEqual(.meeting, day[1].kind);
+    try testing.expectEqualStrings("Stand up", day[1].note.?);
+
+    // One added after the fact, and the list of them.
+    _ = try s.addEntry(.{ .project_id = web, .source = .manual, .note = "Planning", .kind = .meeting }, at(5 * h), 6 * h);
+    _ = try s.stopEntry(2 * h + 900);
+    var meetings = try s.meetingsBetween(a, 0, 24 * h);
+    try testing.expectEqual(2, meetings.len);
+    try testing.expect(meetings[0].id.eql(call));
+    try testing.expectEqualStrings("Planning", meetings[1].note.?);
+
+    // Marking time as a meeting, and back.
+    try s.setEntryKind(work, .meeting, 10);
+    meetings = try s.meetingsBetween(a, 0, 24 * h);
+    try testing.expectEqual(3, meetings.len);
+    try s.setEntryKind(work, .work, 11);
+    try s.setEntryKind(call, .work, 12);
+    meetings = try s.meetingsBetween(a, 0, 24 * h);
+    try testing.expectEqual(1, meetings.len);
+    try testing.expectError(error.NotFound, s.setEntryKind(.v7(io), .meeting, 13));
+
+    // Rows written without a kind, by a Shifty from before meetings, are
+    // work.
+    const old: core.Uuid = .v7(io);
+    try s.db.exec(
+        \\INSERT INTO entries (id, in_ts, utc_offset_secs, out_ts, source, created_ts, updated_ts)
+        \\VALUES (?, ?, 0, ?, 'cli', 0, 0)
+    , .{ store.sqlite.Blob{ .bytes = &old.bytes }, 8 * h, 9 * h });
+    day = try s.entriesBetween(a, 8 * h, 9 * h);
+    try testing.expectEqual(.work, day[0].kind);
+
+    // Only work and meetings.
+    try testing.expectError(error.Conflict, s.db.exec("UPDATE entries SET kind = 'lunch'", .{}));
 }
 
 test "entries - a running entry comes back running unless another runs" {

@@ -9,21 +9,20 @@ import Observation
 /// With no timer running but on shift (not on a break), it offers to start
 /// one the same way. Places nothing links to change nothing.
 ///
-/// A Teams meeting whose title has another project's keyword offers to
-/// switch to it too, from when the call began, but waits for you rather
+/// A Teams call offers to log it as a meeting, from when the call began:
+/// an entry of its own, titled for the call, on the project a keyword in
+/// its title names, else on the running timer's. It waits for you rather
 /// than counting down, since a meeting can name a project without being
-/// for it. If you switch, the call's end offers to switch back. While a
-/// call is on, where you work switches nothing.
+/// for it, unless `Preferences.meetingAutoLog` logs it at once. When the
+/// call ends, so does the meeting, and what ran before picks up again,
+/// with Undo. While a call is on, where you work switches nothing.
 @Observable final class AutoSwitchModel {
   /// What an offer is for.
   enum Kind: Equatable {
     /// Where you're working: it counts down, then switches.
     case place
-    /// A meeting for another project. It waits for you.
+    /// A call, to log as a meeting. It waits for you.
     case meeting
-    /// The meeting you switched for ended: back to what ran before. It
-    /// waits for you too.
-    case meetingOver
   }
 
   /// An offer to switch, or to start a timer: counting down to it, or
@@ -41,6 +40,10 @@ import Observation
     /// When it switches by itself; nil if it waits for you.
     var deadline: Date?
     var kind: Kind = .place
+    /// A meeting's title, for its entry's note.
+    var meeting: String? = nil
+    /// The meeting goes on the project already running.
+    var logsHere: Bool { from == name }
   }
 
   /// A Teams call going on, as the meeting watcher sees it.
@@ -65,7 +68,16 @@ import Observation
     var started: Bool = false
     var place: String
     var until: Date
+    /// The meeting logged, or (with `ended`) the one that just ended.
+    var meeting: String? = nil
+    /// The meeting ended with its call: `name` picked up again, or
+    /// nothing if `stopped`.
+    var ended: Bool = false
+    var stopped: Bool = false
   }
+
+  /// What a meeting is called when Teams' windows don't say.
+  static let untitled = "Teams meeting"
 
   /// Where you were last outside Shifty, linked or not.
   struct Seen: Equatable {
@@ -82,6 +94,9 @@ import Observation
   private(set) var switched: Switched?
   /// The Teams call going on, if any.
   private(set) var meeting: Meeting?
+  /// The last call's Teams window titles, as the meeting watcher read
+  /// them: what a keyword can match, for the Meetings page.
+  var callTitles: [String] = []
   /// Set by the focus watcher.
   var seen: Seen?
 
@@ -124,9 +139,15 @@ import Observation
   @ObservationIgnored private var undo: (() -> Void)?
   /// Projects this call has offered, so each is offered once a call.
   @ObservationIgnored private var offeredForMeeting: Set<ShiftStore.Target> = []
-  /// What ran before you switched for the call (nil if nothing did), and
-  /// what you switched to: to offer back when it ends.
-  @ObservationIgnored private var beforeMeeting: (target: ShiftStore.Target?, meeting: ShiftStore.Target)?
+  /// What ran before you logged the call as a meeting, and the project it
+  /// went on: to go back to when it ends.
+  private struct Before {
+    /// Whether a timer ran, and for what (nil: no project).
+    var running: Bool
+    var target: ShiftStore.Target?
+    var meeting: ShiftStore.Target
+  }
+  @ObservationIgnored private var beforeMeeting: Before?
   /// Runs when `offer` or `switched` changes, to show or hide them.
   @ObservationIgnored var didChange: (() -> Void)?
   /// When you clocked in, if you're on shift and not on a break: when a
@@ -163,8 +184,7 @@ import Observation
       candidate = (target, place, now)
       dropPlaceOffer()
     }
-    // A countdown takes over from an offer to go back after a meeting.
-    guard offer == nil || offer?.kind == .meetingOver, let candidate,
+    guard offer == nil, let candidate,
       now.timeIntervalSince(candidate.since) >= preferences.autoSwitchDelay
     else { return }
     set(
@@ -183,50 +203,65 @@ import Observation
   func observeMeeting(_ seen: MeetingSeen?, ended: Date? = nil, now: Date = Date()) {
     defer { tick(now: now) }
     let on = preferences.autoSwitch && preferences.meetingSwitch
-    guard on, let seen else { return endMeeting(at: min(ended ?? now, now), offerBack: on) }
+    guard on, let seen else { return endMeeting(at: min(ended ?? now, now), now: now) }
     if meeting == nil {
       meeting = Meeting(title: seen.title, target: seen.target, since: now)
       offeredForMeeting = []
       beforeMeeting = nil
       candidate = nil
-      // A place's countdown, or the last call's offer to go back.
+      // A place's countdown.
       if offer?.kind != .meeting { set(offer: nil) }
     } else if meeting?.title != seen.title || meeting?.target != seen.target {
       meeting?.title = seen.title
       meeting?.target = seen.target
     }
+    // Logged before Teams said what it's called: name it now.
+    if let title = seen.title, beforeMeeting != nil, tracking.running?.isMeeting == true,
+      tracking.running?.note == Self.untitled
+    {
+      tracking.retitleMeeting(title, now: now)
+    }
     guard let meeting, tracking.running != nil || onShiftSince() != nil,
-      let target = seen.target, target != tracking.runningTarget,
+      let target = seen.target ?? tracking.runningTarget,
+      !(tracking.running?.isMeeting == true && tracking.runningTarget == target),
       !offeredForMeeting.contains(target)
     else { return }
     offeredForMeeting.insert(target)
+    let title = seen.title ?? Self.untitled
     set(
       offer: Offer(
         target: target, name: name(of: target),
         from: tracking.running.map {
           tracking.label(project: $0.projectId, workspace: $0.workspaceId) ?? "No Project"
         },
-        place: seen.title ?? "a Teams meeting", arrived: meeting.since, deadline: nil,
-        kind: .meeting))
+        place: title, arrived: meeting.since, deadline: nil, kind: .meeting, meeting: title))
+    if preferences.meetingAutoLog { switchNow(now: now) }
   }
 
-  /// The call ended, at `end`: its offer goes, and if you switched for it,
-  /// it offers to switch back, from then.
-  private func endMeeting(at end: Date, offerBack: Bool) {
+  /// The call ended, at `end`: its offer goes, and if you logged it as a
+  /// meeting that still runs, the meeting ends then and what ran before
+  /// picks up again, with Undo.
+  private func endMeeting(at end: Date, now: Date) {
     guard let meeting else { return }
     self.meeting = nil
     offeredForMeeting = []
     let before = beforeMeeting
     beforeMeeting = nil
     if offer?.kind == .meeting { set(offer: nil) }
-    guard offerBack, let before, let back = before.target, back != before.meeting,
+    guard let before, tracking.running?.isMeeting == true,
       tracking.runningTarget == before.meeting
     else { return }
+    let title = tracking.running?.note ?? meeting.title ?? Self.untitled
+    guard
+      let undo = tracking.endMeeting(
+        at: end, resume: before.running, back: before.target, now: now)
+    else { return }
+    self.undo = undo
     set(
-      offer: Offer(
-        target: back, name: name(of: back), from: name(of: before.meeting),
-        place: meeting.title.map { "\($0) ended" } ?? "The meeting ended", arrived: end,
-        deadline: nil, kind: .meetingOver))
+      switched: Switched(
+        name: before.target.map { name(of: $0) } ?? "No Project", place: title,
+        until: now.addingTimeInterval(Self.undoSeconds), meeting: title, ended: true,
+        stopped: !before.running))
   }
 
   private func name(of target: ShiftStore.Target) -> String {
@@ -237,7 +272,11 @@ import Observation
   /// you've switched some other way, and drops a switch shown long enough.
   func tick(now: Date = Date()) {
     if let offer, let deadline = offer.deadline, now >= deadline { switchNow(now: now) }
-    if let offer, offer.kind != .place, offer.target == tracking.runningTarget { set(offer: nil) }
+    if let offer, offer.kind == .meeting, tracking.running?.isMeeting == true,
+      offer.target == tracking.runningTarget
+    {
+      set(offer: nil)
+    }
     if let switched, now >= switched.until { dismissSwitched() }
   }
 
@@ -245,9 +284,21 @@ import Observation
     guard let offer else { return }
     candidate = nil
     set(offer: nil)
-    if offer.kind == .meeting { beforeMeeting = (tracking.runningTarget, offer.target) }
     let undo: (() -> Void)?
-    if offer.starts {
+    if offer.kind == .meeting {
+      // What ran before the call, not a meeting logged for it already.
+      let before =
+        beforeMeeting
+        ?? Before(
+          running: tracking.running != nil, target: tracking.runningTarget, meeting: offer.target)
+      let since = offer.starts ? max(offer.arrived, onShiftSince() ?? offer.arrived) : offer.arrived
+      undo = tracking.startMeeting(
+        offer.target, title: offer.meeting ?? Self.untitled, since: since, now: now)
+      if undo != nil {
+        beforeMeeting = before
+        beforeMeeting?.meeting = offer.target
+      }
+    } else if offer.starts {
       // Not from before you clocked in.
       let since = max(offer.arrived, onShiftSince() ?? offer.arrived)
       undo = tracking.start(offer.target, since: since, now: now)
@@ -259,7 +310,7 @@ import Observation
     set(
       switched: Switched(
         name: offer.name, started: offer.starts, place: offer.place,
-        until: now.addingTimeInterval(Self.undoSeconds)))
+        until: now.addingTimeInterval(Self.undoSeconds), meeting: offer.meeting))
   }
 
   /// Keeps the current project, and doesn't offer this one again for a

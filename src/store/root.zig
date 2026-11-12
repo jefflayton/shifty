@@ -35,6 +35,10 @@ pub const Error = error{
 
 pub const Source = enum { manual, menubar, tui, cli, editor, calendar };
 
+/// What an entry's time is. A meeting is worked time on its project like
+/// any other, but kept apart so it can be listed; its note is its title.
+pub const EntryKind = enum { work, meeting };
+
 pub const Client = struct {
     id: Uuid,
     name: []const u8,
@@ -64,6 +68,7 @@ pub const Entry = struct {
     out_ts: ?i64,
     source: Source,
     note: ?[]const u8,
+    kind: EntryKind = .work,
 };
 
 pub const Shift = struct {
@@ -196,6 +201,7 @@ pub const NewEntry = struct {
     workspace_id: ?Uuid = null,
     source: Source,
     note: ?[]const u8 = null,
+    kind: EntryKind = .work,
 };
 
 const migrations = [_][:0]const u8{
@@ -205,6 +211,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0004_link_deletes.sql"),
     @embedFile("migrations/0005_break_icons.sql"),
     @embedFile("migrations/0006_shared_links.sql"),
+    @embedFile("migrations/0007_meetings.sql"),
 };
 
 pub const Store = struct {
@@ -475,13 +482,13 @@ pub const Store = struct {
         const new: Uuid = .v7(self.io);
         try self.db.exec(
             \\INSERT INTO entries (id, project_id, workspace_id, in_ts, utc_offset_secs, tz,
-            \\                     source, note, created_ts, updated_ts)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            \\                     source, note, kind, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         , .{
             blob(&new),         optBlob(&project_id), optBlob(&e.workspace_id),
             at.ts,              at.utc_offset_secs,   at.tz,
-            @tagName(e.source), e.note,               at.ts,
-            at.ts,
+            @tagName(e.source), e.note,               @tagName(e.kind),
+            at.ts,              at.ts,
         });
 
         try self.commit();
@@ -497,13 +504,13 @@ pub const Store = struct {
         const new: Uuid = .v7(self.io);
         try self.db.exec(
             \\INSERT INTO entries (id, project_id, workspace_id, in_ts, utc_offset_secs, tz, out_ts,
-            \\                     source, note, created_ts, updated_ts)
-            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?10, ?10)
+            \\                     source, note, kind, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?11, ?11)
         , .{
-            blob(&new),   optBlob(&project_id), optBlob(&e.workspace_id),
-            at.ts,        at.utc_offset_secs,   at.tz,
-            out_ts,       @tagName(e.source),   e.note,
-            self.nowTs(),
+            blob(&new),       optBlob(&project_id), optBlob(&e.workspace_id),
+            at.ts,            at.utc_offset_secs,   at.tz,
+            out_ts,           @tagName(e.source),   e.note,
+            @tagName(e.kind), self.nowTs(),
         });
         try self.commit();
         return new;
@@ -563,6 +570,15 @@ pub const Store = struct {
             \\UPDATE entries SET deleted_ts = NULL, updated_ts = ? WHERE id = ?
         , .{ now, blob(&entry_id) });
         try self.commit();
+    }
+
+    /// Makes an entry a meeting, or plain work again. A meeting's note is
+    /// its title.
+    pub fn setEntryKind(self: *Store, entry_id: Uuid, kind: EntryKind, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE entries SET kind = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
+        , .{ @tagName(kind), now, blob(&entry_id) });
+        if (self.db.changes() == 0) return error.NotFound;
     }
 
     /// Replaces an entry's note; null clears it.
@@ -638,9 +654,18 @@ pub const Store = struct {
         , .{ to, from });
     }
 
+    /// Meetings overlapping `[from, to)`, a running one included, oldest
+    /// first. Allocated in `arena`.
+    pub fn meetingsBetween(self: *Store, arena: Allocator, from: i64, to: i64) Error![]Entry {
+        return self.queryEntries(arena,
+            \\WHERE kind = 'meeting' AND deleted_ts IS NULL AND in_ts < ? AND (out_ts IS NULL OR out_ts > ?)
+            \\ORDER BY in_ts
+        , .{ to, from });
+    }
+
     fn queryEntries(self: *Store, arena: Allocator, comptime where: []const u8, values: anytype) Error![]Entry {
         var stmt = try self.db.prepare(
-            \\SELECT id, project_id, workspace_id, in_ts, utc_offset_secs, tz, out_ts, source, note
+            \\SELECT id, project_id, workspace_id, in_ts, utc_offset_secs, tz, out_ts, source, note, kind
             \\FROM entries
         ++ "\n" ++ where);
         defer stmt.deinit();
@@ -656,6 +681,7 @@ pub const Store = struct {
             .out_ts = stmt.optInt(6),
             .source = std.meta.stringToEnum(Source, stmt.bytes(7)) orelse return error.Corrupt,
             .note = try stmt.optText(arena, 8),
+            .kind = std.meta.stringToEnum(EntryKind, stmt.bytes(9)) orelse return error.Corrupt,
         });
         return out.items;
     }

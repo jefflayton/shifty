@@ -831,6 +831,61 @@ import Observation
   }
 }
 
+// MARK: Meetings
+
+extension TimesheetModel {
+  /// The week's meetings that start on `day`, oldest first.
+  func meetings(on day: Date) -> [ShiftStore.Entry] {
+    entries(on: day).filter(\.isMeeting)
+  }
+
+  /// The days shown with a meeting on them.
+  var meetingDays: [Date] { days.filter { !meetings(on: $0).isEmpty } }
+
+  /// How many meetings the week has, and how long they ran.
+  func meetingCount() -> Int { sheet.entries.filter(\.isMeeting).count }
+
+  func meetingTime(on day: Date? = nil, now: Date) -> TimeInterval {
+    let meetings = day.map { self.meetings(on: $0) } ?? sheet.entries.filter(\.isMeeting)
+    return meetings.reduce(0) { $0 + seconds(of: $1, now: now) }
+  }
+
+  /// Makes an entry a meeting, its note its title, or plain work again.
+  func setMeeting(_ entry: ShiftStore.Entry, _ meeting: Bool) {
+    guard latest(entry).isMeeting != meeting,
+      write({ try store.setMeeting(entry.id, meeting) }) != nil
+    else { return }
+    let action = meeting ? "Mark as Meeting" : "Not a Meeting"
+    registerUndo(action) { $0.setMeeting(entry, !meeting) }
+  }
+
+  /// Adds a half-hour meeting on `day`: after its last entry, or ending
+  /// now today. It goes on the project of the week's last meeting.
+  @discardableResult
+  func addMeeting(on day: Date, now: Date = Date()) -> UUID? {
+    let (start, _) = slot(on: day, now: now)
+    let end = start.addingTimeInterval(30 * 60)
+    let last = sheet.entries.last(where: \.isMeeting)
+    guard
+      let id = write({
+        try store.addMeeting(
+          project: last?.projectId, workspace: last?.workspaceId, start: start, end: end,
+          title: "Meeting")
+      })
+    else { return nil }
+    registerUndo("Add Meeting") { $0.deleteEntry(id, action: "Add Meeting") }
+    return id
+  }
+
+  /// Links `keyword` to `project`, so a call whose title has it logs
+  /// there.
+  func link(keyword: String, to project: UUID) {
+    let word = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !word.isEmpty else { return }
+    write { try store.link(keyword: word, to: .init(project: project)) }
+  }
+}
+
 /// Time spans as (start, end) pairs, for what's left of a shift once its
 /// breaks, or its tracked time, are taken out.
 enum Spans {

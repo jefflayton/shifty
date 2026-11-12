@@ -541,7 +541,9 @@ pub const Tracker = struct {
             p.put("● ", green);
             p.put(try names.label(a, e.project_id, e.workspace_id), ui.projectStyle(names, e.project_id, true));
             try p.print(.{}, "  {f}", .{fmt.dur(now.ts - e.in_ts)});
-            if (e.note) |n| try p.print(dim, "  {s}", .{n});
+            if (e.kind == .meeting) {
+                try p.print(cyan, "  Meeting: {s}", .{e.note orelse "untitled"});
+            } else if (e.note) |n| try p.print(dim, "  {s}", .{n});
         } else p.put("Not tracking", dim);
         p.nl(2);
 
@@ -695,7 +697,9 @@ fn drawToday(p: *Painter, snap: Snap, a: Allocator, bottom: u16) !void {
         if (e.out_ts) |out| try p.print(dim, "{f}", .{fmt.clock(out, e.utc_offset_secs)}) else p.put("     now", green);
         try p.print(.{}, "  {s: >7}  ", .{try p.fmt("{f}", .{fmt.dur(report.clipped(e, snap.from, now))})});
         p.put(try names.label(a, e.project_id, e.workspace_id), ui.projectStyle(names, e.project_id, false));
-        if (e.note) |n| try p.print(dim, "  {s}", .{n});
+        if (e.kind == .meeting) {
+            try p.print(cyan, "  Meeting: {s}", .{e.note orelse "untitled"});
+        } else if (e.note) |n| try p.print(dim, "  {s}", .{n});
         p.nl(1);
     }
 

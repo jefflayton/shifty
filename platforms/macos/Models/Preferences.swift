@@ -193,11 +193,19 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(autoSwitchCountdown, forKey: Self.autoSwitchCountdownKey) }
   }
 
-  /// Whether a Teams meeting whose title has a project's keyword brings up
-  /// an offer to switch to that project (and back, when it ends). It only
-  /// offers, never switches by itself. Kept on this Mac.
+  /// Whether a Teams call brings up an offer to log it as a meeting: on
+  /// the project a keyword in its title names, else the running timer's.
+  /// The meeting ends with the call, back to what ran before. Kept on this
+  /// Mac.
   var meetingSwitch: Bool {
     didSet { defaults.set(meetingSwitch, forKey: Self.meetingSwitchKey) }
+  }
+
+  /// Whether a call is logged as a meeting at once, with Undo, rather
+  /// than waiting for you. Off by default, since a call can name a project
+  /// without being for it. Kept on this Mac.
+  var meetingAutoLog: Bool {
+    didSet { defaults.set(meetingAutoLog, forKey: Self.meetingAutoLogKey) }
   }
 
   /// Whether Shifty runs Rex's `rex do` script (`RexFollow`) so auto
@@ -233,6 +241,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let autoSwitchDelayKey = "autoSwitch.delay"
   static let autoSwitchCountdownKey = "autoSwitch.countdown"
   static let meetingSwitchKey = "autoSwitch.meetings"
+  static let meetingAutoLogKey = "autoSwitch.meetings.auto"
   static let followRexKey = "autoSwitch.rex"
   static let rexHostsKey = "autoSwitch.rexHosts"
   static let workDaysSetting = "work_days"
@@ -269,6 +278,7 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     autoSwitchCountdown =
       defaults.object(forKey: Self.autoSwitchCountdownKey) as? TimeInterval ?? 10
     meetingSwitch = defaults.object(forKey: Self.meetingSwitchKey) as? Bool ?? true
+    meetingAutoLog = defaults.bool(forKey: Self.meetingAutoLogKey)
     followRex = defaults.bool(forKey: Self.followRexKey)
     rexHosts = defaults.string(forKey: Self.rexHostsKey) ?? ""
     breakIcon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)

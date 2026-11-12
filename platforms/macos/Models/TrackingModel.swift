@@ -66,11 +66,15 @@ import Observation
 
   /// Tracks `project` (and `workspace`) from now on. A running timer with
   /// no project gets this one, time so far included; one for another
-  /// project stops, so its time stays where it was, and a new one starts.
+  /// project, or a meeting, stops, so its time stays where it was, and a
+  /// new one starts.
   func choose(project: UUID?, workspace: UUID?, now: Date = Date()) {
     reload(now: now)
     if let running {
-      if running.projectId == project && running.workspaceId == workspace { return }
+      // Picking a meeting's own project goes back to work on it.
+      if running.projectId == project && running.workspaceId == workspace && !running.isMeeting {
+        return
+      }
       if running.projectId == nil {
         write {
           try store.editEntry(
@@ -137,6 +141,100 @@ import Observation
       })
     else { return nil }
     return { [weak self] in self?.write { try self?.store.deleteEntry(new) } }
+  }
+
+  /// Logs a meeting titled `title` for `target` from `since`, when the
+  /// call began (clamped to after the running entry started, and not past
+  /// `now`): the running entry ends there, even if it's for the same
+  /// project, and the meeting runs from then. An unassigned timer gets the
+  /// project for its time so far. A meeting logged since `since`, for this
+  /// call, moves to `target` instead. Returns what puts it back, or nil if
+  /// nothing changed: a meeting for `target` already runs.
+  func startMeeting(
+    _ target: ShiftStore.Target?, title: String, since: Date, now: Date = Date()
+  ) -> (() -> Void)? {
+    reload(now: now)
+    let old = running
+    if let old, old.isMeeting, runningTarget == target { return nil }
+    // A meeting logged for this call moves, whole, rather than splitting.
+    if let old, old.isMeeting, old.start >= since, let target {
+      let done: Void? = write {
+        try store.editEntry(
+          old.id, project: target.project, workspace: target.workspace, start: old.start,
+          end: nil, note: title)
+      }
+      guard done != nil else { return nil }
+      return { [weak self] in
+        self?.write {
+          try self?.store.editEntry(
+            old.id, project: old.projectId, workspace: old.workspaceId, start: old.start,
+            end: nil, note: old.note)
+        }
+      }
+    }
+    let at = old.map { min(now, max(since, $0.start.addingTimeInterval(1))) } ?? min(since, now)
+    guard
+      let new = write({ () throws -> UUID in
+        if let old, old.projectId == nil, let target {
+          try store.editEntry(
+            old.id, project: target.project, workspace: target.workspace, start: old.start,
+            end: nil, note: old.note)
+        }
+        return try store.startMeeting(
+          project: target?.project, workspace: target?.workspace, title: title, at: at)
+      })
+    else { return nil }
+    return { [weak self] in
+      self?.write {
+        guard let self else { return }
+        try self.store.deleteEntry(new)
+        guard let old else { return }
+        try self.store.editEntry(
+          old.id, project: old.projectId, workspace: old.workspaceId, start: old.start, end: nil,
+          note: old.note)
+      }
+    }
+  }
+
+  /// Ends the running meeting at `end` (clamped to after it started, and
+  /// not past `now`) and, with `resume`, starts a timer for `back` from
+  /// then: what ran before the call. Returns what puts it back, or nil if
+  /// no meeting runs.
+  func endMeeting(
+    at end: Date, resume: Bool, back: ShiftStore.Target?, now: Date = Date()
+  ) -> (() -> Void)? {
+    reload(now: now)
+    guard let meeting = running, meeting.isMeeting else { return nil }
+    let at = min(now, max(end, meeting.start.addingTimeInterval(1)))
+    guard
+      let new = write({ () throws -> UUID? in
+        guard resume else {
+          try store.stopEntry(now: at)
+          return nil
+        }
+        return try store.startEntry(project: back?.project, workspace: back?.workspace, now: at)
+      })
+    else { return nil }
+    return { [weak self] in
+      self?.write {
+        guard let self else { return }
+        if let new { try self.store.deleteEntry(new) }
+        try self.store.editEntry(
+          meeting.id, project: meeting.projectId, workspace: meeting.workspaceId,
+          start: meeting.start, end: nil, note: meeting.note)
+      }
+    }
+  }
+
+  /// Retitles the running meeting, once its title is known.
+  func retitleMeeting(_ title: String, now: Date = Date()) {
+    reload(now: now)
+    guard let meeting = running, meeting.isMeeting, meeting.note != title else { return }
+    write {
+      try store.editEntry(
+        meeting.id, project: meeting.projectId, workspace: meeting.workspaceId,
+        start: meeting.start, end: nil, note: title)
+    }
   }
 
   func stop(now: Date = Date()) {

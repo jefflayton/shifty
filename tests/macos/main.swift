@@ -1538,6 +1538,7 @@ do {
 
   let prefs = Preferences(defaults: testDefaults())
   check(prefs.meetingSwitch, "meetings offer by default")
+  check(!prefs.meetingAutoLog, "and ask first")
   prefs.autoSwitch = true
   prefs.autoSwitchDelay = 30
   let tracking = TrackingModel(store: store)
@@ -1548,16 +1549,57 @@ do {
   let toSitu = ShiftStore.Target(project: situ)
   typealias Seen = AutoSwitchModel.MeetingSeen
 
-  // A call that names no project: nothing.
+  // A call that names no project: it offers to log it on the running
+  // timer's.
   auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(10))
   check(auto.meeting != nil, "a call is on")
-  check(auto.offer == nil, "no project, no offer")
+  expectEqual(auto.offer?.kind, .meeting)
+  expectEqual(auto.offer?.target, toSitu, "on the running timer's project")
+  check(auto.offer?.logsHere == true, "where it's running")
+  expectEqual(auto.offer?.meeting, "Standup")
+  check(auto.offer?.deadline == nil, "it waits")
+  auto.keep(now: at(10, 1))
+  check(auto.offer == nil, "not now")
+  auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(10, 2))
+  check(auto.offer == nil, "once a call")
   auto.observeMeeting(nil, now: at(10, 15))
   check(auto.meeting == nil, "it ended")
+  expectEqual(tracking.runningTarget, toSitu, "nothing changed")
+  check(tracking.running?.isMeeting == false, "still work")
 
-  // A call for Shifty while Situ runs: it offers, and waits for you.
-  auto.observeMeeting(Seen(title: "Shifty sync", target: nil), now: at(11))
-  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(11, 1))
+  // Logged on the same project: the work stops when the call began, and
+  // the meeting ends with the call, back to work.
+  auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(10, 30))
+  auto.switchNow(now: at(10, 31))
+  tracking.reload(now: at(10, 31))
+  check(tracking.running?.isMeeting == true, "a meeting")
+  expectEqual(tracking.runningTarget, toSitu)
+  expectEqual(tracking.running?.note, "Standup", "titled for the call")
+  expectEqual(tracking.running?.start, at(10, 30), "from when the call began")
+  expectEqual(auto.switched?.meeting, "Standup", "it says so")
+  auto.dismissSwitched()
+  auto.observeMeeting(nil, now: at(10, 45))
+  tracking.reload(now: at(10, 46))
+  check(tracking.running?.isMeeting == false, "back to work")
+  expectEqual(tracking.runningTarget, toSitu)
+  expectEqual(tracking.running?.start, at(10, 45), "from when it ended")
+  check(auto.switched?.ended == true, "says it ended")
+  let logged = try! store.timesheet(DateInterval(start: at(0), end: at(23))).entries
+    .filter(\.isMeeting)
+  expectEqual(logged.count, 1, "one meeting")
+  expectEqual(logged.first?.end, at(10, 45))
+  // Undo keeps the meeting going; picking its project goes back to work.
+  auto.undoSwitch()
+  tracking.reload(now: at(10, 47))
+  check(tracking.running?.isMeeting == true, "undo picks the meeting up again")
+  tracking.choose(project: situ, workspace: nil, now: at(10, 50))
+  tracking.reload(now: at(10, 51))
+  check(tracking.running?.isMeeting == false, "work again")
+  expectEqual(tracking.running?.start, at(10, 50))
+
+  // A call for Shifty while Situ runs: it offers to log it there, and
+  // waits for you.
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(11))
   expectEqual(auto.offer?.kind, .meeting)
   expectEqual(auto.offer?.name, "Shifty")
   expectEqual(auto.offer?.from, "Situ")
@@ -1565,28 +1607,46 @@ do {
   expectEqual(auto.offer?.arrived, at(11), "from when the call began")
   check(auto.offer?.deadline == nil, "no countdown")
   auto.tick(now: at(11, 30))
-  expectEqual(tracking.runningTarget, toSitu, "it doesn't switch by itself")
+  expectEqual(tracking.runningTarget, toSitu, "it doesn't log by itself")
   // Where you work changes nothing while the call's on.
   auto.observe(toSitu, place: "situ", now: at(11, 31))
   auto.observe(toSitu, place: "situ", now: at(11, 40))
   expectEqual(auto.offer?.kind, .meeting, "still offered")
   auto.switchNow(now: at(11, 41))
-  expectEqual(tracking.runningTarget, toShifty, "switched")
+  expectEqual(tracking.runningTarget, toShifty, "on Shifty")
+  check(tracking.running?.isMeeting == true, "as a meeting")
   expectEqual(tracking.running?.start, at(11), "from when the call began")
   auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(11, 42))
   check(auto.offer == nil, "nothing more to offer")
   auto.dismissSwitched()
 
-  // It ends: back to Situ?
+  // It ends: back to Situ, by itself.
   auto.observeMeeting(nil, now: at(12))
-  expectEqual(auto.offer?.kind, .meetingOver)
-  expectEqual(auto.offer?.name, "Situ")
-  expectEqual(auto.offer?.from, "Shifty")
-  expectEqual(auto.offer?.place, "Shifty sync ended")
-  check(auto.offer?.deadline == nil, "this waits too")
-  auto.switchNow(now: at(12, 2))
   expectEqual(tracking.runningTarget, toSitu, "back")
+  check(tracking.running?.isMeeting == false, "as work")
   expectEqual(tracking.running?.start, at(12), "from when it ended")
+  expectEqual(auto.switched?.name, "Situ")
+  check(auto.switched?.ended == true, "says the meeting ended")
+  auto.dismissSwitched()
+
+  // Logged without asking, before Teams names it: named once it does,
+  // and moved, whole, to the project a keyword names.
+  prefs.meetingAutoLog = true
+  auto.observeMeeting(Seen(title: nil, target: nil), now: at(12, 30))
+  tracking.reload(now: at(12, 30))
+  check(tracking.running?.isMeeting == true, "logged without asking")
+  expectEqual(tracking.running?.note, AutoSwitchModel.untitled)
+  expectEqual(tracking.runningTarget, toSitu)
+  auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(12, 32))
+  tracking.reload(now: at(12, 32))
+  expectEqual(tracking.running?.note, "Shifty sync", "named")
+  expectEqual(tracking.runningTarget, toShifty, "moved to the project it names")
+  expectEqual(tracking.running?.start, at(12, 30), "whole")
+  auto.observeMeeting(nil, now: at(12, 50))
+  tracking.reload(now: at(12, 50))
+  expectEqual(tracking.runningTarget, toSitu, "back to what ran before the call")
+  check(tracking.running?.isMeeting == false, "as work")
+  prefs.meetingAutoLog = false
   auto.dismissSwitched()
 
   // Keep: not offered again that call, and the place's offers aren't held
@@ -1598,7 +1658,7 @@ do {
   auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(13, 2))
   check(auto.offer == nil, "once a call")
   auto.observeMeeting(nil, now: at(13, 30))
-  check(auto.offer == nil, "nothing to go back from")
+  check(auto.offer == nil && auto.switched == nil, "nothing logged, nothing to end")
   auto.observe(toShifty, place: "shifty", now: at(13, 31))
   auto.observe(toShifty, place: "shifty", now: at(13, 32))
   expectEqual(auto.offer?.kind, .place, "a place still offers")
@@ -1609,13 +1669,41 @@ do {
   auto.observe(toShifty, place: "shifty", now: at(14, 11))
   check(auto.offer?.kind == .place, "counting down")
   auto.observeMeeting(Seen(title: "Standup", target: nil), now: at(14, 11) + 2)
-  check(auto.offer == nil, "the call takes over")
+  expectEqual(auto.offer?.kind, .meeting, "the call takes over")
   auto.observeMeeting(nil, now: at(14, 30))
 
   // Off: nothing.
   prefs.meetingSwitch = false
   auto.observeMeeting(Seen(title: "Shifty sync", target: toShifty), now: at(15))
   check(auto.meeting == nil && auto.offer == nil, "off")
+}
+
+// MARK: Meetings on the timesheet
+
+do {
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let web = try! store.createProject(name: "Web")
+  let work = try! store.addEntry(project: web, workspace: nil, start: at(9), end: at(10))
+  let call = try! store.addMeeting(
+    project: web, workspace: nil, start: at(10), end: at(10, 30), title: "Stand up")
+  let sheet = TimesheetModel(store: store, calendar: cal, now: at(12))
+  sheet.reload()
+  expectEqual(sheet.meetingCount(), 1)
+  expectEqual(sheet.meetings(on: at(0)).map(\.id), [call])
+  expectEqual(sheet.meetings(on: at(0)).first?.note, "Stand up", "titled")
+  expectEqual(sheet.meetingDays, [cal.startOfDay(for: at(0))])
+  expectEqual(sheet.meetingTime(now: at(12)), 30 * 60)
+  expectEqual(sheet.total(now: at(12)), 90 * 60, "a meeting is time worked")
+  sheet.setMeeting(sheet.sheet.entries.first(where: { $0.id == work })!, true)
+  expectEqual(sheet.meetingCount(), 2, "marked as a meeting")
+  sheet.setMeeting(sheet.sheet.entries.first(where: { $0.id == work })!, false)
+  expectEqual(sheet.meetingCount(), 1, "and back")
+  let added = sheet.addMeeting(on: at(0), now: at(12))
+  let entry = sheet.sheet.entries.first { $0.id == added }
+  check(entry?.isMeeting == true, "added as a meeting")
+  expectEqual(entry?.projectId, web, "on the last meeting's project")
 }
 
 for name in ["shifty-tests", "shifty-tests-none"] {
