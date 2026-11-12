@@ -154,6 +154,16 @@ ShiftyResult shifty_timesheet_json(ShiftyStore *store, int64_t from, int64_t to,
                                    size_t *len);
 void shifty_free(char *ptr, size_t len);
 
+// How the week starting at local midnight `from` stands against the weekly
+// goal (the weekly_goal_secs setting), as UTF-8 JSON: {"goal_secs":72000,
+// "worked_secs":...,"left_secs":...,"over_secs":...,"at_clock_out_secs":...,
+// "meets_at":...}. at_clock_out_secs is what the week comes to once the open
+// shift reaches its clock out, and meets_at when the open shift reaches the
+// goal; both null off shift or for a week that isn't now, and meets_at null
+// once it's met. SHIFTY_NONE without a goal. Release with shifty_free.
+ShiftyResult shifty_week_goal_json(ShiftyStore *store, int64_t from, int64_t now, char **out,
+                                   size_t *len);
+
 // Time recorded after the fact. NULL ids leave it unassigned; a workspace
 // implies its project.
 ShiftyResult shifty_add_entry(ShiftyStore *store, const ShiftyId *project_id,

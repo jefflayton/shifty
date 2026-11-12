@@ -286,6 +286,75 @@ final class ShiftStore {
     try json(Timesheet()) { shifty_timesheet_json(handle, ts(range.start), ts(range.end), $0, $1) }
   }
 
+  /// How a week stands against the weekly goal.
+  struct WeekGoal: Decodable, Equatable {
+    var goalSecs: Int64
+    var workedSecs: Int64
+    var leftSecs: Int64
+    var overSecs: Int64
+    /// What the week comes to once the open shift reaches its clock out;
+    /// nil off shift, or for a week that isn't now.
+    var atClockOutSecs: Int64?
+    /// When the open shift reaches the goal; nil off shift, for a week that
+    /// isn't now, or once it's met.
+    var meetsAt: Int64?
+
+    var goal: TimeInterval { TimeInterval(goalSecs) }
+    var worked: TimeInterval { TimeInterval(workedSecs) }
+    var left: TimeInterval { TimeInterval(leftSecs) }
+    var over: TimeInterval { TimeInterval(overSecs) }
+    var isMet: Bool { workedSecs >= goalSecs }
+    var metAt: Date? { meetsAt.map(date) }
+    /// Still to work after today's clock out, 0 if the shift gets you there;
+    /// nil off shift.
+    var leftAfterClockOut: TimeInterval? {
+      atClockOutSecs.map { TimeInterval(max(0, goalSecs - $0)) }
+    }
+
+    /// "Goal met", "Met at 3:40 PM", "1h 30m after today", or "5h 30m
+    /// left", for the menu bar.
+    var detail: String {
+      if isMet { return "Goal met" }
+      if let after = leftAfterClockOut {
+        if after == 0, let at = metAt {
+          return "Met at \(at.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(TimesheetFormat.duration(after)) after today"
+      }
+      return "\(TimesheetFormat.duration(left)) left"
+    }
+
+    var helpText: String {
+      if isMet {
+        return over >= 60
+          ? "Weekly goal met, \(TimesheetFormat.duration(over)) over" : "Weekly goal met"
+      }
+      var text = "\(TimesheetFormat.duration(left)) left of your weekly goal"
+      if let after = leftAfterClockOut {
+        text +=
+          after == 0
+          ? ". Today's shift gets you there."
+          : ". After today's clock out, \(TimesheetFormat.duration(after)) is still to go."
+      }
+      return text
+    }
+  }
+
+  /// How the week starting at midnight `weekStart` stands against the
+  /// weekly goal, today's open shift included; nil without a goal.
+  func weekGoal(weekStart: Date, now: Date = Date()) throws -> WeekGoal? {
+    var ptr: UnsafeMutablePointer<CChar>?
+    var len = 0
+    let result = shifty_week_goal_json(handle, ts(weekStart), ts(now), &ptr, &len)
+    if result == SHIFTY_NONE { return nil }
+    try check(result)
+    defer { shifty_free(ptr, len) }
+    guard let ptr else { return nil }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(WeekGoal.self, from: Data(bytes: ptr, count: len))
+  }
+
   /// Time recorded after the fact. A workspace implies its project.
   func addEntry(
     project: UUID?, workspace: UUID?, start: Date, end: Date, note: String? = nil

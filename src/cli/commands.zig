@@ -37,6 +37,9 @@ pub const usage =
     \\                             clock link for lunch
     \\  sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
     \\                             lunch, and time, with totals
+    \\  goal [<hours>|off]         Show the weekly hours goal and what's
+    \\                             left of it, set it (20h, 20, 37:30),
+    \\                             or turn it off
     \\  add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
     \\                             Record time after the fact
     \\  add --shift <start> <end> [-d <day>]
@@ -89,7 +92,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { tui, status, in, out, @"break", sheet, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
+const Command = enum { tui, status, in, out, @"break", sheet, goal, add, start, stop, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -163,6 +166,7 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .out => try clockOut(&c, rest),
         .@"break" => try toggleBreak(&c, rest),
         .sheet => try timesheet(&c, rest),
+        .goal => try goal(&c, rest),
         .add => try add(&c, rest),
         .start => try start(&c, rest),
         .stop => try stop(&c, rest),
@@ -202,12 +206,53 @@ fn status(c: *Ctx, args: []const [:0]const u8) !void {
         }
         if (plan) |p| try lunchStatus(c, p, lunch.?, shift.utc_offset_secs);
     } else try c.out.writeAll("Off shift.\n");
+    try weekGoalStatus(c);
 
     if (try c.db.runningEntry(c.arena)) |e| {
         try c.out.print("Tracking {s} since {f} ({f})", .{ try label(c, e.project_id, e.workspace_id), clock(e.in_ts, e.utc_offset_secs), dur(now - e.in_ts) });
         if (e.note) |n| try c.out.print(": {s}", .{n});
         try c.out.writeAll(".\n");
     } else try c.out.writeAll("Not tracking.\n");
+}
+
+/// This week against the weekly goal, if there is one.
+fn weekGoalStatus(c: *Ctx) !void {
+    const first = sheet.weekStart(c.now.ts, c.now.utc_offset_secs, try sheet.weekStartDay(&c.db, c.arena));
+    const w: sheet.Week = try .load(&c.db, c.arena, sheet.weekDays(first, local.utcOffset));
+    const g = try w.goal(c.arena, c.now.ts) orelse return;
+    try c.out.print("This week: {f} of your {f} goal", .{ dur(g.worked), dur(g.secs) });
+    if (g.isMet()) {
+        try c.out.writeAll(", met");
+        if (g.over() >= 60) try c.out.print(" ({f} over)", .{dur(g.over())});
+        return c.out.writeAll(".\n");
+    }
+    try c.out.print(", {f} left", .{dur(g.left())});
+    if (g.leftAfterClockOut()) |after| {
+        if (after == 0) {
+            try c.out.print("; you'll reach it at {f}, by today's clock out", .{clock(g.meets_at.?, c.now.utc_offset_secs)});
+        } else try c.out.print("; {f} after today's clock out", .{dur(after)});
+    }
+    try c.out.writeAll(".\n");
+}
+
+/// `shifty goal`: show, set, or turn off the weekly hours goal.
+fn goal(c: *Ctx, args: []const [:0]const u8) !void {
+    if (args.len > 1) return c.fail("goal: unexpected argument '{s}'", .{args[1]});
+    if (args.len == 1) {
+        const arg = args[0];
+        if (eqlAny(arg, &.{ "off", "none", "clear" })) {
+            try c.db.setSetting(sheet.goal_setting, null, c.now.ts);
+            return c.out.writeAll("Weekly goal off.\n");
+        }
+        const secs = time.parseDuration(arg) catch return c.fail("invalid goal '{s}'; try 20h, 20, or 37:30", .{arg});
+        if (secs < 60) return c.fail("a goal needs at least a minute; `shifty goal off` turns it off", .{});
+        if (secs > sheet.max_goal_secs) return c.fail("a week has only {d} hours", .{@divExact(sheet.max_goal_secs, std.time.s_per_hour)});
+        try c.db.setSetting(sheet.goal_setting, try std.fmt.allocPrint(c.arena, "{d}", .{secs}), c.now.ts);
+        try c.out.print("Weekly goal set to {f}.\n", .{dur(secs)});
+        return weekGoalStatus(c);
+    }
+    if (try sheet.weeklyGoal(&c.db, c.arena) == null) return c.out.writeAll("No weekly goal. Set one with `shifty goal 20h`.\n");
+    try weekGoalStatus(c);
 }
 
 fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
@@ -409,6 +454,11 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     const s = try w.summary(a, null, now);
     try c.out.writeAll("\nWeek\n");
     try c.out.print("  {s: >7}  worked\n", .{try padDur(c, s.worked)});
+    if (try w.goal(a, now)) |g| {
+        if (g.isMet()) {
+            try c.out.print("  {s: >7}  goal, met\n", .{try padDur(c, g.secs)});
+        } else try c.out.print("  {s: >7}  goal, {f} left\n", .{ try padDur(c, g.secs), dur(g.left()) });
+    }
     if (s.over > 0) try c.out.print("  {s: >7}  over\n", .{try padDur(c, s.over)});
     try c.out.print("  {s: >7}  on break\n", .{try padDur(c, s.on_break)});
     try c.out.print("  {s: >7}  tracked\n", .{try padDur(c, s.tracked)});
@@ -1081,6 +1131,7 @@ test "isCommand" {
     try testing.expect(isCommand("tui"));
     try testing.expect(isCommand("start"));
     try testing.expect(isCommand("break"));
+    try testing.expect(isCommand("goal"));
     try testing.expect(!isCommand("-s"));
     try testing.expect(!isCommand("9am"));
 }

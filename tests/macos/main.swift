@@ -798,6 +798,49 @@ do {
   expectEqual(Preferences(defaults: local).snoozeLength, 15 * 60, "kept without a store")
 }
 
+do {
+  // Weekly goal: off until set, kept in the store as seconds (what
+  // `shifty goal` writes), picked up from elsewhere, and measured against
+  // the week with today's open shift.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let defaults = testDefaults()
+  let prefs = Preferences(defaults: defaults, store: store)
+  check(prefs.weeklyGoal == nil, "no goal by default")
+  check(try! store.weekGoal(weekStart: at(0, day: -3), now: at(12)) == nil, "nothing to measure")
+  prefs.weeklyGoal = 20 * 60 * 60
+  expectEqual(try! store.setting(Preferences.weeklyGoalSetting), "72000", "shared through the store")
+  expectEqual(Preferences(defaults: defaults, store: store).weeklyGoal, 20 * 60 * 60, "kept")
+  try! store.setSetting(Preferences.weeklyGoalSetting, "36000")
+  prefs.pull()
+  expectEqual(prefs.weeklyGoal, 10 * 60 * 60, "picked up from the TUI or CLI")
+  check(Preferences.goal(from: "0") == nil, "zero is no goal")
+  check(Preferences.goal(from: "20h") == nil, "seconds only, as stored")
+  expectEqual(Preferences.goal(from: "99999999"), 7 * 24 * 60 * 60, "at most a week")
+
+  // On a 4h shift since 9, three hours in, against the 10h goal.
+  _ = try! store.startShift(at: at(9), lengthSeconds: 4 * 60 * 60)
+  let goal = try! store.weekGoal(weekStart: at(0, day: -3), now: at(12))!
+  expectEqual(goal.worked, 3 * 60 * 60)
+  expectEqual(goal.left, 7 * 60 * 60)
+  expectEqual(goal.leftAfterClockOut, 6 * 60 * 60, "an hour of the shift to go")
+  expectEqual(goal.metAt, at(19), "seven more hours")
+  expectEqual(goal.detail, "6h after today")
+  prefs.weeklyGoal = 2 * 60 * 60
+  let met = try! store.weekGoal(weekStart: at(0, day: -3), now: at(12))!
+  check(met.isMet, "met")
+  expectEqual(met.over, 60 * 60)
+  check(met.metAt == nil, "nothing to wait for")
+  expectEqual(met.detail, "Goal met")
+  prefs.weeklyGoal = 3.5 * 60 * 60
+  let today = try! store.weekGoal(weekStart: at(0, day: -3), now: at(12))!
+  expectEqual(today.leftAfterClockOut, 0, "today's shift gets there")
+  expectEqual(today.metAt, at(12, 30))
+  prefs.weeklyGoal = nil
+  check(try! store.setting(Preferences.weeklyGoalSetting) == nil, "off clears it")
+}
+
 // MARK: Timesheet shifts
 
 do {

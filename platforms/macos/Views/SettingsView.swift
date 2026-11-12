@@ -64,6 +64,30 @@ struct SettingsPane: View {
     }
 
     Section {
+      Toggle(
+        "Weekly goal",
+        isOn: Binding(
+          get: { preferences.weeklyGoal != nil },
+          set: { preferences.weeklyGoal = $0 ? Preferences.defaultWeeklyGoal : nil }))
+      if preferences.weeklyGoal != nil {
+        DurationStepper(
+          "Hours a week",
+          value: Binding(
+            get: { preferences.weeklyGoal ?? Preferences.defaultWeeklyGoal },
+            set: { preferences.weeklyGoal = $0 }),
+          in: Preferences.weeklyGoalRange, step: 30 * 60)
+      }
+    } header: {
+      Text("Weekly Goal")
+    } footer: {
+      Text(
+        "The menu bar shows how much of it you've worked this week and when today's shift gets you there, and the timesheet shows what's left. Shared with the TUI and CLI (shifty goal)."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    Section {
       CommandLineToolRow(status: $tool)
     } header: {
       Text("Command Line")

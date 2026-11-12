@@ -130,6 +130,15 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { save(Self.workDaysSetting, Self.format(workDays)) }
   }
 
+  /// Hours to work each week, or nil for no goal. The menu bar and the
+  /// timesheet show the week against it. Shared through the store, like
+  /// `shifty goal`.
+  var weeklyGoal: TimeInterval? {
+    didSet {
+      if weeklyGoal != oldValue && !loading { save(Self.weeklyGoalSetting, Self.format(goal: weeklyGoal)) }
+    }
+  }
+
   /// When to take lunch. Off until it's turned on. With the store, it's the
   /// window break preset; without, a setting.
   var lunch: LunchRule {
@@ -229,6 +238,11 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
   static let snoozeSetting = "snooze_secs"
+  static let weeklyGoalSetting = "weekly_goal_secs"
+  /// What a goal starts at when it's turned on.
+  static let defaultWeeklyGoal: TimeInterval = 40 * 60 * 60
+  /// Half an hour to a whole week.
+  static let weeklyGoalRange: ClosedRange<TimeInterval> = (30 * 60)...(7 * 24 * 60 * 60)
   static let defaultSnooze: TimeInterval = 5 * 60
   /// One minute to an hour.
   static let snoozeRange: ClosedRange<TimeInterval> = 60...(60 * 60)
@@ -242,6 +256,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     lunch = LunchRule()
     snoozeLength = Self.load(Self.snoozeSetting, store: store, defaults: defaults)
       .flatMap(Self.snooze(from:)) ?? Self.defaultSnooze
+    weeklyGoal = Self.load(Self.weeklyGoalSetting, store: store, defaults: defaults)
+      .flatMap(Self.goal(from:))
     menuBarDisplay =
       defaults.string(forKey: Self.menuBarDisplayKey).flatMap(MenuBarDisplay.init) ?? .clockOut
     clockLinkMode =
@@ -289,6 +305,13 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     let snooze = Self.load(Self.snoozeSetting, store: store, defaults: defaults)
       .flatMap(Self.snooze(from:)) ?? Self.defaultSnooze
     if snooze != snoozeLength { snoozeLength = snooze }
+    let goal = Self.load(Self.weeklyGoalSetting, store: store, defaults: defaults)
+      .flatMap(Self.goal(from:))
+    if goal != weeklyGoal {
+      loading = true
+      weeklyGoal = goal
+      loading = false
+    }
     let inLink = Self.load(Self.clockInLinkSetting, store: store, defaults: defaults)
       .flatMap(Self.link(from:))
     if inLink != separateClockInLink {
@@ -403,6 +426,18 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static func snooze(from text: String) -> TimeInterval? {
     guard let secs = Int(text.trimmingCharacters(in: .whitespaces)) else { return nil }
     return min(max(TimeInterval(secs), snoozeRange.lowerBound), snoozeRange.upperBound)
+  }
+
+  /// Whole seconds, or nil for no goal.
+  static func format(goal: TimeInterval?) -> String? {
+    goal.map { String(Int($0.rounded())) }
+  }
+
+  /// A weekly goal in seconds, up to a week; nil unless it's a positive
+  /// number, as the CLI reads it.
+  static func goal(from text: String) -> TimeInterval? {
+    guard let secs = Int(text.trimmingCharacters(in: .whitespaces)), secs > 0 else { return nil }
+    return min(TimeInterval(secs), weeklyGoalRange.upperBound)
   }
 
   static func format(_ rule: LunchRule) -> String? {

@@ -270,6 +270,8 @@ pub const Week = struct {
     /// ISO weekdays you work: bit 0 is Monday.
     work_days: u7,
     lunch: ?Lunch,
+    /// The weekly goal, if one is set.
+    goal_secs: ?i64 = null,
 
     /// Allocated in `arena`.
     pub fn load(db: *Store, arena: Allocator, days: [8]i64) store.Error!Week {
@@ -283,6 +285,7 @@ pub const Week = struct {
             .names = try .load(db, arena),
             .work_days = try workDays(db, arena),
             .lunch = try Lunch.load(db, arena),
+            .goal_secs = try weeklyGoal(db, arena),
         };
     }
 
@@ -413,6 +416,27 @@ pub const Week = struct {
         return l.planFor(arena, s.shift, s.breaks, now);
     }
 
+    /// How the week stands against the weekly goal; null without one. For
+    /// the week that holds `now`, also where today's open shift leaves it.
+    pub fn goal(w: Week, arena: Allocator, now: i64) Allocator.Error!?Goal {
+        const secs = w.goal_secs orelse return null;
+        var g: Goal = .{ .secs = secs, .worked = (try w.summary(arena, null, now)).worked };
+        if (now < w.days[0] or now >= w.days[7]) return g;
+        for (w.shifts) |s| {
+            if (s.shift.out_ts != null) continue;
+            const done = try worked(arena, s.shift, s.breaks, now);
+            g.at_clock_out = g.worked + @max(0, s.shift.target_secs - done);
+            if (g.left() > 0) {
+                // The same shift, as long as it takes to reach the goal.
+                var longer = s.shift;
+                longer.target_secs = done + g.left();
+                g.meets_at = try clockOut(arena, longer, s.breaks, w.lunch, now);
+            }
+            break;
+        }
+        return g;
+    }
+
     /// When `s` is due to end: an ended shift's clock out; the open one's
     /// expected, lunch to come included.
     pub fn expectedEnd(w: Week, arena: Allocator, s: SheetShift, now: i64) Allocator.Error!i64 {
@@ -501,6 +525,58 @@ pub fn parseWorkDays(text: []const u8) ?u7 {
 pub fn isoWeekday(local_ts: i64) u3 {
     // 1 January 1970 was a Thursday, ISO weekday 4.
     return @intCast(@mod(@divFloor(local_ts, s_per_day) + 3, 7) + 1);
+}
+
+// ── Weekly goal ─────────────────────────────────────────────────────────────
+
+/// The setting for hours to work each week, in seconds. Unset is no goal.
+pub const goal_setting = "weekly_goal_secs";
+/// A week has no more hours than this.
+pub const max_goal_secs = 7 * s_per_day;
+
+/// How a week stands against the weekly goal.
+pub const Goal = struct {
+    secs: i64,
+    /// Worked this week so far.
+    worked: i64,
+    /// What the week comes to once the open shift reaches its clock out;
+    /// null off shift, or for another week.
+    at_clock_out: ?i64 = null,
+    /// When the open shift brings the week to the goal, breaks and lunch to
+    /// come counted; null off shift, for another week, or once it's met.
+    meets_at: ?i64 = null,
+
+    pub fn left(g: Goal) i64 {
+        return @max(0, g.secs - g.worked);
+    }
+
+    pub fn over(g: Goal) i64 {
+        return @max(0, g.worked - g.secs);
+    }
+
+    pub fn isMet(g: Goal) bool {
+        return g.worked >= g.secs;
+    }
+
+    /// Still to work after today's clock out, 0 if the shift gets you
+    /// there; null off shift.
+    pub fn leftAfterClockOut(g: Goal) ?i64 {
+        const at = g.at_clock_out orelse return null;
+        return @max(0, g.secs - at);
+    }
+};
+
+/// The weekly goal, or null for none.
+pub fn weeklyGoal(db: *Store, arena: Allocator) store.Error!?i64 {
+    const text = try db.setting(arena, goal_setting) orelse return null;
+    return parseGoal(text);
+}
+
+/// Seconds, up to a week's worth; null unless it's a positive number.
+pub fn parseGoal(text: []const u8) ?i64 {
+    const secs = std.fmt.parseInt(i64, std.mem.trim(u8, text, " "), 10) catch return null;
+    if (secs <= 0) return null;
+    return @min(secs, max_goal_secs);
 }
 
 /// The `week_start` setting, as an ISO weekday: the day the timesheet's
@@ -742,4 +818,63 @@ test "Week - days, rows, summary, slots" {
     // Halfway through the shift, to the quarter hour.
     const bs = try w.breakSlot(a, w.shifts[0], now);
     try testing.expectEqual(in + 4 * h + 15 * 60, bs.start);
+}
+
+test "parseGoal" {
+    try testing.expectEqual(@as(?i64, 20 * h), parseGoal("72000"));
+    try testing.expectEqual(@as(?i64, null), parseGoal("0"));
+    try testing.expectEqual(@as(?i64, null), parseGoal("-5"));
+    try testing.expectEqual(@as(?i64, null), parseGoal("20h"));
+    try testing.expectEqual(@as(?i64, max_goal_secs), parseGoal("999999999"));
+}
+
+test "Week - weekly goal" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var db: Store = try .open(testing.io, ":memory:");
+    defer db.deinit();
+
+    const off = -6 * h;
+    const days = weekDays(tue - 2 * s_per_day, fixedOffset);
+    // Monday: 5 hours done.
+    const mon = tue - s_per_day + 9 * h;
+    const done = try db.addShift(.{ .ts = mon, .utc_offset_secs = off, .tz = null }, mon + 5 * h);
+    try db.editShift(done, .{ .target_secs = 5 * h }, mon);
+
+    // No goal set: nothing to show.
+    const none: Week = try .load(&db, a, days);
+    try testing.expectEqual(null, try none.goal(a, tue));
+
+    try db.setSetting(goal_setting, "72000", mon); // 20h
+
+    // Tuesday: on a 4h shift since 9, two hours in, a break at 12 to come.
+    const in = tue + 9 * h;
+    const now = in + 2 * h;
+    const id = try db.startShift(4 * h, .{ .ts = in, .utc_offset_secs = off, .tz = null });
+    _ = try db.addBreak(id, in + 3 * h, in + 3 * h + 30 * 60, in);
+    const w: Week = try .load(&db, a, days);
+    const g = (try w.goal(a, now)).?;
+    try testing.expectEqual(20 * h, g.secs);
+    try testing.expectEqual(7 * h, g.worked);
+    try testing.expectEqual(13 * h, g.left());
+    try testing.expectEqual(0, g.over());
+    // Clock out brings the week to 9h, 11h short.
+    try testing.expectEqual(9 * h, g.at_clock_out.?);
+    try testing.expectEqual(11 * h, g.leftAfterClockOut().?);
+    // 13 more hours, past the half-hour break.
+    try testing.expectEqual(now + 13 * h + 30 * 60, g.meets_at.?);
+
+    // Next week: no forecast for a week that isn't now.
+    const later = (try w.goal(a, days[7] + h)).?;
+    try testing.expectEqual(null, later.at_clock_out);
+    try testing.expectEqual(null, later.meets_at);
+
+    // A goal the week has passed.
+    try db.setSetting(goal_setting, "21600", mon); // 6h
+    const met = (try (try Week.load(&db, a, days)).goal(a, now)).?;
+    try testing.expect(met.isMet());
+    try testing.expectEqual(h, met.over());
+    try testing.expectEqual(null, met.meets_at);
+    try testing.expectEqual(0, met.leftAfterClockOut().?);
 }
