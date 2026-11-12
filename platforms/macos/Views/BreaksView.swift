@@ -128,22 +128,10 @@ private struct BreakDay: View {
     let shifts = model.shifts(on: day)
     let (title, detail) = DaySection.title(day, now: now)
     Section {
-      ForEach(shifts) { shift in
-        let lunch = model.lunch(of: shift, now: now)
-        ForEach(shift.breaks) { brk in
-          let t = model.times(of: brk)
-          let (name, symbol) = describe(start: t.start, end: t.end, lunch: lunch)
-          BreakRow(name: name, symbol: symbol, start: t.start, end: t.end, now: now)
-        }
-        if let lunch, let note = LunchNote(lunch.status(now: now), plan: lunch) {
-          note
-        } else if shift.breaks.isEmpty {
-          Text("No breaks").foregroundStyle(.secondary)
-        }
-      }
+      ForEach(shifts) { shift in rows(of: shift) }
       // One-offs that no shift has: still to come, or a day you didn't work.
       ForEach(waiting(shifts)) { brk in
-        BreakRow(
+        BreakLine(
           name: brk.name, symbol: BreakIcon.symbol(brk.icon, or: preferences.breakSymbol),
           start: brk.start, end: brk.end, now: now,
           note: brk.end > now ? "Planned" : "Not on a shift")
@@ -160,6 +148,23 @@ private struct BreakDay: View {
         }
       }
     }
+  }
+
+  /// A shift's breaks, then how lunch went if that's worth saying.
+  @ViewBuilder private func rows(of shift: ShiftStore.SheetShift) -> some View {
+    let lunch = model.lunch(of: shift, now: now)
+    ForEach(shift.breaks) { brk in line(for: brk, lunch: lunch) }
+    if let lunch, let note = LunchNote(lunch.status(now: now), plan: lunch) {
+      note
+    } else if shift.breaks.isEmpty {
+      Text("No breaks").foregroundStyle(.secondary)
+    }
+  }
+
+  private func line(for brk: ShiftStore.SheetBreak, lunch: LunchPlan?) -> BreakLine {
+    let t = model.times(of: brk)
+    let (name, symbol) = describe(start: t.start, end: t.end, lunch: lunch)
+    return BreakLine(name: name, symbol: symbol, start: t.start, end: t.end, now: now)
   }
 
   /// This day's one-offs that aren't on one of its shifts.
@@ -188,7 +193,7 @@ private struct BreakDay: View {
 }
 
 /// A break: its icon and name, its times, and how long it ran.
-private struct BreakRow: View {
+private struct BreakLine: View {
   let name: String
   let symbol: String
   let start: Date
