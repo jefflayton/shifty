@@ -168,17 +168,21 @@ struct OrganizationFilter: View {
   var body: some View {
     let orgs = model.sheet.organizations
     if orgs.count > 1 {
-      Picker(selection: $model.organizationFilter) {
-        Text("All Organizations").tag(UUID?.none)
-        Divider()
-        ForEach(orgs) { org in
-          Text(org.isPersonal ? "\(org.name) (personal)" : org.name).tag(UUID?.some(org.id))
+      // A menu like the days menu beside it, so the toolbar gives it the
+      // same button and padding; a menu-style Picker draws it cramped.
+      Menu {
+        Picker("Organization", selection: $model.organizationFilter) {
+          Text("All Organizations").tag(UUID?.none)
+          Divider()
+          ForEach(orgs) { org in
+            Text(org.isPersonal ? "\(org.name) (personal)" : org.name).tag(UUID?.some(org.id))
+          }
         }
+        .pickerStyle(.inline)
+        .labelsHidden()
       } label: {
         Label(model.filteredOrganization?.name ?? "All Organizations", systemImage: "building.2")
       }
-      .pickerStyle(.menu)
-      .fixedSize()
       .help("Show one organization's time, or all of it")
     }
   }

@@ -34,6 +34,9 @@ struct SettingsPane: View {
   var shift: ShiftModel? = nil
   @State private var tool = CommandLineTool.status
 
+  /// Each tab's size: the window's, less its toolbar.
+  static let size = CGSize(width: 520, height: 480)
+
   var body: some View {
     Form {
       switch tab {
@@ -44,12 +47,10 @@ struct SettingsPane: View {
       }
     }
     .formStyle(.grouped)
-    .scrollDisabled(tab != .breaks)
-    .frame(width: 520)
-    // Breaks grow with each scheduled one, so that tab scrolls; the others
-    // are as tall as what's in them.
-    .frame(height: tab == .breaks ? 560 : nil)
-    .fixedSize(horizontal: false, vertical: tab != .breaks)
+    // Every tab is one size, and scrolls when what's in it runs longer, so
+    // the window never outgrows the screen as settings are added.
+    .scrollBounceBehavior(.basedOnSize)
+    .frame(width: Self.size.width, height: Self.size.height)
     // While the window resizes to another tab, stay at its top.
     .frame(maxHeight: .infinity, alignment: .top)
   }
