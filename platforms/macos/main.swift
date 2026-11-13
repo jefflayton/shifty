@@ -42,6 +42,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   }
   /// Moves the timer to the project linked to where you work.
   lazy var autoSwitch = tracking.map { AutoSwitchModel(tracking: $0, preferences: preferences) }
+  /// Tracks your own projects off the clock, by themselves.
+  lazy var personal = tracking.map { PersonalTracker(tracking: $0, preferences: preferences) }
   private var focusWatcher: FocusWatcher?
   /// Runs Rex's script so auto switch follows its tabs and sessions.
   private var rexWatcher: RexWatcher?
@@ -82,7 +84,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return model.clockInTime
       }
       switchBanner = banner
-      focusWatcher = FocusWatcher(store: store, model: autoSwitch)
+      personal?.isClockedIn = { [weak self] in self?.model.isClockedIn ?? false }
+      autoSwitch.yields = { [weak self] in self?.personal?.hasTimer ?? false }
+      focusWatcher = FocusWatcher(store: store, model: autoSwitch, personal: personal)
       focusWatcher?.start()
       rexWatcher = RexWatcher()
       followRex()

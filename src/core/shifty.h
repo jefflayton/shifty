@@ -164,9 +164,10 @@ ShiftyResult shifty_set_setting(ShiftyStore *store, const char *key, const char 
 // ── Timesheet ───────────────────────────────────────────────────────────────
 
 // The entries and shifts (with their breaks) overlapping [from, to) plus every
-// active client, project, and workspace, as UTF-8 JSON: {"entries":[...],
-// "shifts":[...],"clients":[...],"projects":[...],"workspaces":[...]}. Ids
-// are UUID strings. Release with shifty_free.
+// active client, project, workspace, and organization, as UTF-8 JSON:
+// {"entries":[...],"shifts":[...],"clients":[...],"projects":[...],
+// "workspaces":[...],"organizations":[...]}. Ids are UUID strings. Release
+// with shifty_free.
 ShiftyResult shifty_timesheet_json(ShiftyStore *store, int64_t from, int64_t to, char **out,
                                    size_t *len);
 void shifty_free(char *ptr, size_t len);
@@ -204,9 +205,12 @@ ShiftyResult shifty_delete_entry(ShiftyStore *store, ShiftyId entry_id, int64_t 
 // Brings back a deleted entry as it was. SHIFTY_NOT_FOUND unless it's deleted;
 // SHIFTY_CONFLICT if it was running and another entry runs now.
 ShiftyResult shifty_restore_entry(ShiftyStore *store, ShiftyId entry_id, int64_t now);
+// Creates a project in `organization_id`, or the default organization (the
+// first shift one) when it's NULL. SHIFTY_NOT_FOUND for an organization
+// that's gone.
 ShiftyResult shifty_create_project(ShiftyStore *store, const char *name,
-                                   const ShiftyId *client_id, const char *color, int64_t now,
-                                   ShiftyId *out);
+                                   const ShiftyId *client_id, const char *color,
+                                   const ShiftyId *organization_id, int64_t now, ShiftyId *out);
 
 // Starts tracking now: stops the running entry and ends a break in progress.
 // NULL ids leave it unassigned; a workspace implies its project.
@@ -223,9 +227,10 @@ ShiftyResult shifty_stop_entry(ShiftyStore *store, int64_t now);
 
 // ── Projects ────────────────────────────────────────────────────────────────
 
-// Every active project, client, and workspace, plus each project's usage, as
-// UTF-8 JSON: {"projects":[...],"clients":[...],"workspaces":[...],"usage":
-// [{"project_id","entries","seconds","last_ts"}]}. A running entry counts up
+// Every active project, client, workspace, and organization, plus each
+// project's usage, as UTF-8 JSON: {"projects":[...],"clients":[...],
+// "workspaces":[...],"organizations":[...],"usage":[{"project_id","entries",
+// "seconds","last_ts"}]}. A running entry counts up
 // to `now`. Release with shifty_free.
 ShiftyResult shifty_projects_json(ShiftyStore *store, int64_t now, char **out, size_t *len);
 // Replaces a project's name, client, and color ('#rrggbb', or NULL for none).
@@ -233,6 +238,31 @@ ShiftyResult shifty_edit_project(ShiftyStore *store, ShiftyId project_id, const 
                                  const ShiftyId *client_id, const char *color, int64_t now);
 // Deletes a project and its workspaces. Its time stays, unassigned.
 ShiftyResult shifty_delete_project(ShiftyStore *store, ShiftyId project_id, int64_t now);
+// Moves a project, and its time, to another organization.
+ShiftyResult shifty_move_project(ShiftyStore *store, ShiftyId project_id,
+                                 ShiftyId organization_id, int64_t now);
+
+// ── Organizations ───────────────────────────────────────────────────────────
+// Who the time is for, above projects: a company you work for, or yourself.
+// "tracking" is "shift" (on the clock: every shift organization shares the
+// one shift, its breaks, and the weekly goal) or "auto" (no shift: time
+// tracks itself from where you work, and is never worked time). A project's
+// "organization_id" names its organization.
+
+// Every active organization, oldest first, as UTF-8 JSON: [{"id","name",
+// "tracking","color"}]. Release with shifty_free.
+ShiftyResult shifty_organizations_json(ShiftyStore *store, char **out, size_t *len);
+// `tracking` is 0 for the shift, 1 for tracking itself. SHIFTY_MISMATCH for
+// any other.
+ShiftyResult shifty_create_organization(ShiftyStore *store, const char *name, int32_t tracking,
+                                        const char *color, int64_t now, ShiftyId *out);
+ShiftyResult shifty_edit_organization(ShiftyStore *store, ShiftyId organization_id,
+                                      const char *name, int32_t tracking, const char *color,
+                                      int64_t now);
+// Deletes an organization, moving its projects (and their time) to `move_to`.
+// SHIFTY_CONFLICT to move them onto itself.
+ShiftyResult shifty_delete_organization(ShiftyStore *store, ShiftyId organization_id,
+                                        ShiftyId move_to, int64_t now);
 
 // ── Places and links ────────────────────────────────────────────────────────
 // Where you're working, and the project it's linked to (src/integrations).

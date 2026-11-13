@@ -36,6 +36,22 @@ struct AutoSwitchSettings: View {
     }
 
     Section {
+      Toggle("Track your own projects by themselves", isOn: $preferences.personalTracking)
+      Picker("Stop after idle for", selection: $preferences.personalIdle) {
+        ForEach(Preferences.personalIdles, id: \.self) { Text(Self.seconds($0)).tag($0) }
+      }
+      .disabled(!preferences.personalTracking)
+    } header: {
+      Text("Personal Projects")
+    } footer: {
+      Text(
+        "Projects in an organization that tracks itself, like Personal, need no clocking in. Off the clock, staying in a repo, folder, app, or keyword linked to one starts its timer, from when you got there, and moving to another moves it. It stops when you go idle (at when you last touched a key or the mouse), when the Mac sleeps or locks, when you clock in, or when you stay in a project on the shift. This time is personal: it never counts as worked, or toward the weekly goal. Set an organization's tracking in the Projects window."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    Section {
       Picker("Shell", selection: $shell) {
         ForEach(HookShell.allCases) { Text($0.label).tag($0) }
       }

@@ -8,6 +8,7 @@ import Observation
   private(set) var running: ShiftStore.Entry?
   private(set) var projects: [ShiftStore.Project] = []
   private(set) var workspaces: [ShiftStore.Workspace] = []
+  private(set) var organizations: [ShiftStore.Organization] = []
 
   @ObservationIgnored let store: ShiftStore
   /// Runs after a change here: starting a timer ends a break, which the
@@ -25,6 +26,7 @@ import Observation
       if fresh != running { running = fresh }
       if sheet.projects != projects { projects = sheet.projects }
       if sheet.workspaces != workspaces { workspaces = sheet.workspaces }
+      if sheet.organizations != organizations { organizations = sheet.organizations }
     } catch {
       log("tracking reload:", error)
     }
@@ -49,6 +51,13 @@ import Observation
 
   func project(_ id: UUID) -> ShiftStore.Project? { projects.first { $0.id == id } }
   func rank(of project: UUID) -> Int? { projects.rank(of: project) }
+
+  /// Whether time on `project` is personal: its organization has no shift.
+  /// Unassigned time is work.
+  func isPersonal(_ project: UUID?) -> Bool {
+    guard let project, let org = self.project(project)?.organizationId else { return false }
+    return organizations.first { $0.id == org }?.tracking == .auto
+  }
 
   func workspaces(of project: UUID) -> [ShiftStore.Workspace] {
     workspaces.filter { $0.projectId == project }

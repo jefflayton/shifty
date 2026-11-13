@@ -80,18 +80,24 @@ struct TrackingMenu: View {
         // Says what picking does, since it differs by state.
         Text(running == nil ? "Start Tracking" : "Assign This Timer To")
       }
-      ForEach(tracking.projects) { project in
-        let workspaces = tracking.workspaces(of: project.id)
-        if workspaces.isEmpty {
-          item(project.name, project: project.id, workspace: nil)
-        } else {
-          Menu(project.name) {
-            item(project.name, project: project.id, workspace: nil)
-            Divider()
-            ForEach(workspaces) { ws in
-              item(ws.name, project: project.id, workspace: ws.id)
+      ForEach(ProjectGroup.of(tracking.projects, in: tracking.organizations)) { group in
+        Section {
+          ForEach(group.projects) { project in
+            let workspaces = tracking.workspaces(of: project.id)
+            if workspaces.isEmpty {
+              item(project.name, project: project.id, workspace: nil)
+            } else {
+              Menu(project.name) {
+                item(project.name, project: project.id, workspace: nil)
+                Divider()
+                ForEach(workspaces) { ws in
+                  item(ws.name, project: project.id, workspace: ws.id)
+                }
+              }
             }
           }
+        } header: {
+          if let title = group.title { Text(title) }
         }
       }
       if running == nil {

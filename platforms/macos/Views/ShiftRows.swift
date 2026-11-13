@@ -260,7 +260,7 @@ struct DayTimeline: View {
   private static let height: CGFloat = 32
 
   var body: some View {
-    let shifts = model.shifts(on: day)
+    let shifts = model.shownShifts(on: day)
     let entries = model.entries(on: day)
     let lunches = shifts.compactMap { model.lunch(of: $0, now: now) }
     let ends = shifts.map { model.expectedEnd(of: $0, now: now) }

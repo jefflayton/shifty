@@ -80,7 +80,7 @@ struct TimesheetView: View {
         }
       }
       .navigationTitle(WeekTitle.range(model.week))
-      .navigationSubtitle("\(TimesheetFormat.duration(model.total(now: now))) tracked")
+      .navigationSubtitle(subtitle(now: now))
       .toolbar { toolbar(now: now) }
       .inspector(isPresented: $showsTotals) {
         WeekTotals(model: model, now: now)
@@ -115,6 +115,9 @@ struct TimesheetView: View {
       }
     }
     ToolbarItem(placement: .primaryAction) {
+      OrganizationFilter(model: model)
+    }
+    ToolbarItem(placement: .primaryAction) {
       WorkDaysMenu(model: model)
     }
     ToolbarItem(placement: .primaryAction) {
@@ -130,6 +133,15 @@ struct TimesheetView: View {
 }
 
 extension TimesheetView {
+  /// "6h 30m tracked", with personal time apart: it's never worked.
+  fileprivate func subtitle(now: Date) -> String {
+    let personal = model.personal(now: now)
+    let tracked = "\(TimesheetFormat.duration(model.total(now: now))) tracked"
+    guard personal > 0 else { return tracked }
+    if model.hidesShifts { return "\(TimesheetFormat.duration(personal)) personal" }
+    return "\(tracked), \(TimesheetFormat.duration(personal)) personal"
+  }
+
   /// Where the toolbar's + adds: the selected row's day, else today if
   /// it's this week, else the first day shown.
   fileprivate func addDay(now: Date) -> Date {
@@ -145,6 +157,37 @@ enum WeekTitle {
     let last = week.end.addingTimeInterval(-1)
     return "\(week.start.formatted(.dateTime.month(.abbreviated).day())) – "
       + last.formatted(.dateTime.month(.abbreviated).day())
+  }
+}
+
+/// Whose time the timesheet shows: every organization's, or one. Shows only
+/// with more than one.
+struct OrganizationFilter: View {
+  @Bindable var model: TimesheetModel
+
+  var body: some View {
+    let orgs = model.sheet.organizations
+    if orgs.count > 1 {
+      // A menu like the days menu beside it, so the toolbar gives it the
+      // same button and padding; a menu-style Picker draws it cramped.
+      Menu {
+        Picker("Organization", selection: $model.organizationFilter) {
+          Text("All Organizations").tag(UUID?.none)
+          Divider()
+          ForEach(orgs) { org in
+            Text(org.isPersonal ? "\(org.name) (personal)" : org.name).tag(UUID?.some(org.id))
+          }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+      } label: {
+        Label(model.filteredOrganization?.name ?? "All Organizations", systemImage: "building.2")
+          // The toolbar shows only icons unless told otherwise, and the
+          // name is what says whose time this is.
+          .labelStyle(.titleAndIcon)
+      }
+      .help("Show one organization's time, or all of it")
+    }
   }
 }
 
@@ -302,7 +345,7 @@ struct DaySection: View {
 
   var body: some View {
     let rows = model.rows(on: day)
-    let shifts = model.shifts(on: day)
+    let shifts = model.shownShifts(on: day)
     let empty = rows.isEmpty && shifts.isEmpty
     let collapsed = model.isCollapsed(day)
     let (title, detail) = Self.title(day, now: now)
@@ -582,18 +625,26 @@ struct ProjectPicker: View {
     Menu {
       Button("No Project") { model.setProject(entry, project: nil, workspace: nil) }
       if !model.sheet.projects.isEmpty { Divider() }
-      ForEach(model.sheet.projects) { project in
-        let workspaces = model.workspaces(of: project.id)
-        if workspaces.isEmpty {
-          Button(project.name) { model.setProject(entry, project: project.id, workspace: nil) }
-        } else {
-          Menu(project.name) {
-            Button(project.name) { model.setProject(entry, project: project.id, workspace: nil) }
-            Divider()
-            ForEach(workspaces) { ws in
-              Button(ws.name) { model.setProject(entry, project: project.id, workspace: ws.id) }
+      ForEach(ProjectGroup.of(model.sheet.projects, in: model.sheet.organizations)) { group in
+        Section {
+          ForEach(group.projects) { project in
+            let workspaces = model.workspaces(of: project.id)
+            if workspaces.isEmpty {
+              Button(project.name) { model.setProject(entry, project: project.id, workspace: nil) }
+            } else {
+              Menu(project.name) {
+                Button(project.name) {
+                  model.setProject(entry, project: project.id, workspace: nil)
+                }
+                Divider()
+                ForEach(workspaces) { ws in
+                  Button(ws.name) { model.setProject(entry, project: project.id, workspace: ws.id) }
+                }
+              }
             }
           }
+        } header: {
+          if let title = group.title { Text(title) }
         }
       }
       Divider()
@@ -624,11 +675,13 @@ struct WeekTotals: View {
     let total = model.total(now: now)
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
+        // An organization with no shift has only personal time.
+        let personalOnly = model.hidesShifts
         VStack(alignment: .leading, spacing: 0) {
-          Text("Tracked")
+          Text(personalOnly ? "Personal" : "Tracked")
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
-          Text(TimesheetFormat.duration(total))
+          Text(TimesheetFormat.duration(personalOnly ? model.personal(now: now) : total))
             .font(.system(size: 28, weight: .semibold, design: .rounded))
             .monospacedDigit()
             .contentTransition(.numericText())
@@ -636,7 +689,7 @@ struct WeekTotals: View {
         .accessibilityElement(children: .combine)
 
         let worked = model.worked(now: now)
-        if let goal = model.weeklyGoal {
+        if let goal = model.weeklyGoal, !model.hidesShifts {
           TotalsList(title: "Weekly Goal") {
             ProgressView(value: min(worked, goal), total: goal)
               .tint(worked >= goal ? .green : .accentColor)
@@ -663,17 +716,14 @@ struct WeekTotals: View {
         }
 
         let byProject = model.totalsByProject(now: now)
-        TotalsList(title: "Projects") {
-          if byProject.isEmpty {
-            Text("Time you add shows up here by project.")
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          ForEach(byProject, id: \.project) { row in
-            TotalRow(
-              color: ProjectColor.color(row.project, in: model),
-              name: model.label(project: row.project, workspace: nil) ?? "No project",
-              secondary: row.project == nil, seconds: row.seconds, of: total)
+        if !personalOnly {
+          TotalsList(title: "Projects") {
+            if byProject.isEmpty {
+              Text("Time you add shows up here by project.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            ProjectTotals(model: model, rows: byProject, of: total)
           }
         }
 
@@ -687,9 +737,65 @@ struct WeekTotals: View {
             }
           }
         }
+
+        let personal = model.personal(now: now)
+        let byPersonal = model.personalByProject(now: now)
+        if !byPersonal.isEmpty {
+          TotalsList(title: "Personal") {
+            FigureRow(name: "Not worked", seconds: personal)
+              .help("Time on organizations that track themselves: never on the clock")
+            ProjectTotals(model: model, rows: byPersonal, of: personal)
+          }
+        }
       }
       .padding(.horizontal, 18)
       .padding(.vertical, 20)
+    }
+  }
+}
+
+/// The week's time by project, under each project's organization while
+/// every organization shows and more than one has time.
+struct ProjectTotals: View {
+  let model: TimesheetModel
+  let rows: [(project: UUID?, seconds: TimeInterval)]
+  /// What each row's bar is a share of.
+  let total: TimeInterval
+
+  init(
+    model: TimesheetModel, rows: [(project: UUID?, seconds: TimeInterval)], of total: TimeInterval
+  ) {
+    self.model = model
+    self.rows = rows
+    self.total = total
+  }
+
+  var body: some View {
+    let groups = model.byOrganization(rows)
+    let grouped = groups.contains { $0.organization != nil }
+    ForEach(groups) { group in
+      VStack(alignment: .leading, spacing: 12) {
+        if let org = group.organization {
+          HStack(alignment: .firstTextBaseline) {
+            Text(org.name)
+              .font(.callout.weight(.semibold))
+            Spacer()
+            Text(TimesheetFormat.duration(group.seconds))
+              .font(.system(.callout, design: .rounded).weight(.semibold))
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+          .padding(.top, 4)
+          .accessibilityElement(children: .combine)
+        }
+        ForEach(group.projects, id: \.project) { row in
+          TotalRow(
+            color: ProjectColor.color(row.project, in: model),
+            name: model.label(project: row.project, workspace: nil) ?? "No project",
+            secondary: row.project == nil, seconds: row.seconds, of: total)
+        }
+        .padding(.leading, grouped && group.organization != nil ? 10 : 0)
+      }
     }
   }
 }

@@ -32,6 +32,8 @@ import Observation
   var selection: Item?
   /// The row whose start time should take the keyboard, as Return asks.
   var editRequest: Item?
+  /// The organization whose time the timesheet shows; nil for all.
+  var organizationFilter: UUID?
 
   /// An entry's, shift's, or break's start and end as typed. Kept out of
   /// the store until the end comes after the start.
@@ -112,7 +114,7 @@ import Observation
     preferences?.isWorkDay(day, calendar: calendar) ?? true
   }
 
-  func hasTime(on day: Date) -> Bool { !entries(on: day).isEmpty || !shifts(on: day).isEmpty }
+  func hasTime(on day: Date) -> Bool { !entries(on: day).isEmpty || !shownShifts(on: day).isEmpty }
 
   func reload() {
     do {
@@ -154,7 +156,7 @@ import Observation
 
   /// A day's entries and its shifts' breaks, in the order they started.
   func rows(on day: Date) -> [Row] {
-    let breaks = shifts(on: day).flatMap { shift in shift.breaks.map { Row.brk($0, shift: shift) } }
+    let breaks = shownShifts(on: day).flatMap { shift in shift.breaks.map { Row.brk($0, shift: shift) } }
     return (entries(on: day).map(Row.entry) + breaks).sorted { $0.start < $1.start }
   }
 
@@ -250,11 +252,60 @@ import Observation
 
   // MARK: Reading
 
-  /// The entries that start on `day`, oldest first. One that started before
-  /// the week shows on its first day.
+  /// The entries that start on `day`, oldest first, of the organization
+  /// shown. One that started before the week shows on its first day.
   func entries(on day: Date) -> [ShiftStore.Entry] {
-    sheet.entries.filter { calendar.isDate(max($0.start, weekStart), inSameDayAs: day) }
+    sheet.entries.filter {
+      self.isShown($0) && calendar.isDate(max($0.start, weekStart), inSameDayAs: day)
+    }
   }
+
+  // MARK: Organizations
+
+  func organization(_ id: UUID) -> ShiftStore.Organization? {
+    sheet.organizations.first { $0.id == id }
+  }
+
+  /// The organization a project belongs to; nil for unassigned time.
+  func organizationOf(project: UUID?) -> ShiftStore.Organization? {
+    guard let project, let p = self.project(project), let org = p.organizationId else { return nil }
+    return organization(org)
+  }
+
+  /// Whether an entry is personal time: its organization has no shift, so
+  /// it tracks itself and never counts as worked.
+  func isPersonal(_ entry: ShiftStore.Entry) -> Bool {
+    organizationOf(project: entry.projectId)?.tracking == .auto
+  }
+
+  /// The organization shown, if it's still there.
+  var filteredOrganization: ShiftStore.Organization? {
+    organizationFilter.flatMap { self.organization($0) }
+  }
+
+  /// Whether the organization shown has no shift, so no shifts show.
+  var hidesShifts: Bool { filteredOrganization?.tracking == .auto }
+
+  /// Whether `entry` shows: it's the shown organization's, or every one
+  /// shows. Unassigned time is on the clock, so it shows under shift
+  /// organizations.
+  func isShown(_ entry: ShiftStore.Entry) -> Bool {
+    guard let shown = filteredOrganization else { return true }
+    if let org = organizationOf(project: entry.projectId) { return org.id == shown.id }
+    return entry.projectId == nil && shown.tracking == .shift
+  }
+
+  /// The week's entries that show.
+  var shownEntries: [ShiftStore.Entry] { sheet.entries.filter { self.isShown($0) } }
+
+  /// The shifts clocked in on `day` that show: none for an organization
+  /// with no shift.
+  func shownShifts(on day: Date) -> [ShiftStore.SheetShift] {
+    hidesShifts ? [] : shifts(on: day)
+  }
+
+  /// The week's shifts that show.
+  var shownShifts: [ShiftStore.SheetShift] { hidesShifts ? [] : sheet.shifts }
 
   /// An entry's start and end as shown: its draft if it's being edited. A
   /// running entry has no end.
@@ -308,7 +359,7 @@ import Observation
 
   /// Time worked this week past each shift's length.
   func over(now: Date) -> TimeInterval {
-    sheet.shifts.reduce(0) { $0 + over($1, now: now) }
+    shownShifts.reduce(0) { $0 + over($1, now: now) }
   }
 
   /// Time on break during a shift.
@@ -316,23 +367,24 @@ import Observation
     max(0, (shift.end ?? now).timeIntervalSince(shift.start) - worked(shift, now: now))
   }
 
-  /// Time worked on a shift that no entry covers.
+  /// Time worked on a shift that no work entry covers, whichever
+  /// organization shows. Personal time on the clock isn't work tracked.
   func untracked(_ shift: ShiftStore.SheetShift, now: Date) -> TimeInterval {
-    let tracked = sheet.entries.map { ($0.start, $0.end ?? now) }
+    let tracked = sheet.entries.filter { !self.isPersonal($0) }.map { ($0.start, $0.end ?? now) }
     return Spans.total(Spans.subtract(work(of: shift, now: now), tracked))
   }
 
   func worked(on day: Date, now: Date) -> TimeInterval {
-    shifts(on: day).reduce(0) { $0 + worked($1, now: now) }
+    shownShifts(on: day).reduce(0) { $0 + worked($1, now: now) }
   }
 
-  /// Time worked this week, on every shift.
+  /// Time worked this week, on every shift shown.
   func worked(now: Date) -> TimeInterval {
-    sheet.shifts.reduce(0) { $0 + worked($1, now: now) }
+    shownShifts.reduce(0) { $0 + worked($1, now: now) }
   }
 
   func untracked(now: Date) -> TimeInterval {
-    sheet.shifts.reduce(0) { $0 + untracked($1, now: now) }
+    shownShifts.reduce(0) { $0 + untracked($1, now: now) }
   }
 
   func onBreak(now: Date) -> TimeInterval {
@@ -355,18 +407,88 @@ import Observation
     return max(0, end.timeIntervalSince(max(entry.start, weekStart)))
   }
 
+  /// Time tracked on `day`, personal time too.
   func total(on day: Date, now: Date) -> TimeInterval {
     entries(on: day).reduce(0) { $0 + seconds(of: $1, now: now) }
   }
 
+  /// Work tracked this week: personal time isn't in it.
   func total(now: Date) -> TimeInterval {
-    sheet.entries.reduce(0) { $0 + seconds(of: $1, now: now) }
+    shownEntries.filter { !self.isPersonal($0) }.reduce(0) { $0 + seconds(of: $1, now: now) }
   }
 
-  /// Time per project this week, most first. nil is unassigned.
+  /// Personal time this week: on organizations with no shift, never worked.
+  func personal(now: Date) -> TimeInterval {
+    shownEntries.filter { self.isPersonal($0) }.reduce(0) { $0 + seconds(of: $1, now: now) }
+  }
+
+  /// Work time per project this week, most first. nil is unassigned.
   func totalsByProject(now: Date) -> [(project: UUID?, seconds: TimeInterval)] {
+    byProject(shownEntries.filter { !self.isPersonal($0) }, now: now)
+  }
+
+  /// Personal time per project this week, most first.
+  func personalByProject(now: Date) -> [(project: UUID?, seconds: TimeInterval)] {
+    byProject(shownEntries.filter { self.isPersonal($0) }, now: now)
+  }
+
+  /// One organization's share of a list of project totals.
+  struct OrganizationTotals: Identifiable {
+    /// Nil for time on no project, or when the list isn't grouped.
+    var organization: ShiftStore.Organization?
+    var seconds: TimeInterval
+    var projects: [(project: UUID?, seconds: TimeInterval)]
+
+    var id: UUID? { organization?.id }
+  }
+
+  /// `rows` (from `totalsByProject` or `personalByProject`) grouped by
+  /// their projects' organizations, most time first, with time on no
+  /// project last. It groups only while every organization shows and more
+  /// than one has time; otherwise it's one group with no organization.
+  func byOrganization(_ rows: [(project: UUID?, seconds: TimeInterval)])
+    -> [OrganizationTotals]
+  {
+    let all: TimeInterval = rows.reduce(0) { $0 + $1.seconds }
+    let whole = [OrganizationTotals(organization: nil, seconds: all, projects: rows)]
+    guard organizationFilter == nil else { return whole }
+    var groups: [OrganizationTotals] = []
+    var loose: [(project: UUID?, seconds: TimeInterval)] = []
+    for row in rows {
+      guard let org = organizationOf(project: row.project) else {
+        loose.append(row)
+        continue
+      }
+      if let i = groups.firstIndex(where: { $0.organization?.id == org.id }) {
+        groups[i].seconds += row.seconds
+        groups[i].projects.append(row)
+      } else {
+        groups.append(OrganizationTotals(organization: org, seconds: row.seconds, projects: [row]))
+      }
+    }
+    guard groups.count > 1 else { return whole }
+    // Rows come most first, so each group's are too; ties keep the
+    // organizations' own order.
+    let order = sheet.organizations.map(\.id)
+    func rank(_ group: OrganizationTotals) -> Int {
+      group.organization.flatMap { order.firstIndex(of: $0.id) } ?? order.count
+    }
+    groups.sort { a, b in
+      if a.seconds != b.seconds { return a.seconds > b.seconds }
+      return rank(a) < rank(b)
+    }
+    if !loose.isEmpty {
+      let rest: TimeInterval = loose.reduce(0) { $0 + $1.seconds }
+      groups.append(OrganizationTotals(organization: nil, seconds: rest, projects: loose))
+    }
+    return groups
+  }
+
+  private func byProject(_ entries: [ShiftStore.Entry], now: Date)
+    -> [(project: UUID?, seconds: TimeInterval)]
+  {
     var totals: [UUID?: TimeInterval] = [:]
-    for e in sheet.entries { totals[e.projectId, default: 0] += seconds(of: e, now: now) }
+    for e in entries { totals[e.projectId, default: 0] += seconds(of: e, now: now) }
     // Ties by id, so equal rows don't swap places between redraws.
     return totals.map { ($0.key, $0.value) }.sorted {
       $0.seconds != $1.seconds
@@ -374,11 +496,11 @@ import Observation
     }
   }
 
-  /// Time per client this week, most first. nil is projects with no client
-  /// and unassigned time.
+  /// Work time per client this week, most first. nil is projects with no
+  /// client and unassigned time.
   func totalsByClient(now: Date) -> [(client: UUID?, seconds: TimeInterval)] {
     var totals: [UUID?: TimeInterval] = [:]
-    for e in sheet.entries {
+    for e in shownEntries where !isPersonal(e) {
       totals[e.projectId.flatMap { project($0)?.clientId }, default: 0] += seconds(of: e, now: now)
     }
     return totals.map { ($0.key, $0.value) }.sorted {
@@ -387,12 +509,12 @@ import Observation
     }
   }
 
-  /// Time per project on `day`, in the order of `totalsByProject`, so a
-  /// project stacks in the same place every day.
+  /// Time per project on `day`, personal time too, in the week's order,
+  /// so a project stacks in the same place every day.
   func totalsByProject(on day: Date, now: Date) -> [(project: UUID?, seconds: TimeInterval)] {
     var totals: [UUID?: TimeInterval] = [:]
     for e in entries(on: day) { totals[e.projectId, default: 0] += seconds(of: e, now: now) }
-    return totalsByProject(now: now).compactMap { row in
+    return byProject(shownEntries, now: now).compactMap { row in
       totals[row.project].map { (row.project, $0) }
     }
   }

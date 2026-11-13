@@ -44,11 +44,33 @@ pub const Client = struct {
     name: []const u8,
 };
 
+/// How an organization's time is tracked.
+pub const Tracking = enum {
+    /// On the clock: every shift organization shares the one shift, its
+    /// breaks, its length, and the weekly goal.
+    shift,
+    /// No shift: time tracks itself from where you work, and never counts
+    /// as worked time. Your own projects.
+    auto,
+};
+
+/// Who the time is for: a company you work for, or yourself. Every project
+/// belongs to one. Each will be its own account in a synced Shifty.
+pub const Organization = struct {
+    id: Uuid,
+    name: []const u8,
+    tracking: Tracking,
+    color: ?[]const u8,
+};
+
 pub const Project = struct {
     id: Uuid,
     client_id: ?Uuid,
     name: []const u8,
     color: ?[]const u8,
+    /// Null only on a row SQLite added the column to and nothing filled;
+    /// read as the first shift organization.
+    organization_id: ?Uuid = null,
 };
 
 pub const Workspace = struct {
@@ -210,6 +232,15 @@ pub const NewProject = struct {
     name: []const u8,
     client_id: ?Uuid = null,
     color: ?[]const u8 = null,
+    /// The first shift organization when null. `editProject` leaves a
+    /// project's organization alone; `moveProject` changes it.
+    organization_id: ?Uuid = null,
+};
+
+pub const NewOrganization = struct {
+    name: []const u8,
+    tracking: Tracking = .shift,
+    color: ?[]const u8 = null,
 };
 
 pub const NewEntry = struct {
@@ -230,6 +261,7 @@ const migrations = [_][:0]const u8{
     @embedFile("migrations/0006_shared_links.sql"),
     @embedFile("migrations/0007_meetings.sql"),
     @embedFile("migrations/0008_break_days.sql"),
+    @embedFile("migrations/0009_organizations.sql"),
 };
 
 pub const Store = struct {
@@ -327,7 +359,96 @@ pub const Store = struct {
         return try self.oneId("SELECT replica_id FROM meta WHERE id = 1", .{}) orelse error.Corrupt;
     }
 
-    // ── Organization ──────────────────────────────────────────────────────
+    // ── Organizations ─────────────────────────────────────────────────────
+
+    pub fn createOrganization(self: *Store, o: NewOrganization, now: i64) Error!Uuid {
+        const new: Uuid = .v7(self.io);
+        try self.db.exec(
+            \\INSERT INTO organizations (id, name, tracking, color, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?5)
+        , .{ blob(&new), o.name, @tagName(o.tracking), o.color, now });
+        return new;
+    }
+
+    /// Organizations not archived or deleted, oldest first. Allocated in
+    /// `arena`.
+    pub fn organizations(self: *Store, arena: Allocator) Error![]Organization {
+        var stmt = try self.db.prepare(
+            \\SELECT id, name, tracking, color FROM organizations
+            \\WHERE archived_ts IS NULL AND deleted_ts IS NULL
+            \\ORDER BY rowid
+        );
+        defer stmt.deinit();
+        var out: std.ArrayList(Organization) = .empty;
+        while (try stmt.step()) try out.append(arena, .{
+            .id = try id(stmt, 0),
+            .name = try stmt.text(arena, 1),
+            .tracking = std.meta.stringToEnum(Tracking, stmt.bytes(2)) orelse return error.Corrupt,
+            .color = try stmt.optText(arena, 3),
+        });
+        return out.items;
+    }
+
+    /// Renames an organization, changes how it tracks, or its color.
+    pub fn editOrganization(self: *Store, org_id: Uuid, edit: NewOrganization, now: i64) Error!void {
+        try self.db.exec(
+            \\UPDATE organizations SET name = ?, tracking = ?, color = ?, updated_ts = ?
+            \\WHERE id = ? AND deleted_ts IS NULL
+        , .{ edit.name, @tagName(edit.tracking), edit.color, now, blob(&org_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+    }
+
+    /// Deletes an organization, moving its projects (and their time) to
+    /// `move_to`. `Conflict` for the last one, or to move them to itself.
+    pub fn deleteOrganization(self: *Store, org_id: Uuid, move_to: Uuid, now: i64) Error!void {
+        if (org_id.eql(move_to)) return error.Conflict;
+        try self.begin();
+        errdefer self.rollback();
+        _ = try self.oneInt(
+            \\SELECT 1 FROM organizations WHERE id = ? AND deleted_ts IS NULL
+        , .{blob(&move_to)}) orelse return error.NotFound;
+        // Projects with none are the default organization's.
+        const was_default = if (try self.defaultOrgId()) |d| d.eql(org_id) else false;
+        try self.db.exec(
+            \\UPDATE organizations SET deleted_ts = ?, updated_ts = ?1 WHERE id = ? AND deleted_ts IS NULL
+        , .{ now, blob(&org_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.db.exec(
+            \\UPDATE projects SET organization_id = ?, updated_ts = ?
+            \\WHERE (organization_id = ? OR (? AND organization_id IS NULL)) AND deleted_ts IS NULL
+        , .{ blob(&move_to), now, blob(&org_id), was_default });
+        try self.commit();
+    }
+
+    /// The organization a new project goes to when none is given, and that a
+    /// project without one belongs to: the first shift organization, else
+    /// the first. Null only with none at all.
+    pub fn defaultOrganization(self: *Store) Error!?Uuid {
+        return self.defaultOrgId();
+    }
+
+    fn defaultOrgId(self: *Store) Error!?Uuid {
+        return self.oneId(
+            \\SELECT id FROM organizations WHERE archived_ts IS NULL AND deleted_ts IS NULL
+            \\ORDER BY tracking <> 'shift', rowid LIMIT 1
+        , .{});
+    }
+
+    /// Moves a project to another organization, with all its time.
+    pub fn moveProject(self: *Store, project_id: Uuid, org_id: Uuid, now: i64) Error!void {
+        try self.begin();
+        errdefer self.rollback();
+        _ = try self.oneInt(
+            \\SELECT 1 FROM organizations WHERE id = ? AND deleted_ts IS NULL
+        , .{blob(&org_id)}) orelse return error.NotFound;
+        try self.db.exec(
+            \\UPDATE projects SET organization_id = ?, updated_ts = ? WHERE id = ? AND deleted_ts IS NULL
+        , .{ blob(&org_id), now, blob(&project_id) });
+        if (self.db.changes() == 0) return error.NotFound;
+        try self.commit();
+    }
+
+    // ── Clients, projects, workspaces ─────────────────────────────────────
 
     pub fn createClient(self: *Store, name: []const u8, now: i64) Error!Uuid {
         const new: Uuid = .v7(self.io);
@@ -353,29 +474,43 @@ pub const Store = struct {
         return out.items;
     }
 
+    /// Creates a project in `p.organization_id`, else the default
+    /// organization (see `defaultOrganization`). `NotFound` for an
+    /// organization that's gone.
     pub fn createProject(self: *Store, p: NewProject, now: i64) Error!Uuid {
+        const org = if (p.organization_id) |o| o else try self.defaultOrgId();
+        if (p.organization_id) |o| {
+            _ = try self.oneInt(
+                \\SELECT 1 FROM organizations WHERE id = ? AND deleted_ts IS NULL
+            , .{blob(&o)}) orelse return error.NotFound;
+        }
         const new: Uuid = .v7(self.io);
         try self.db.exec(
-            \\INSERT INTO projects (id, client_id, name, color, created_ts, updated_ts)
-            \\VALUES (?, ?, ?, ?, ?, ?)
-        , .{ blob(&new), optBlob(&p.client_id), p.name, p.color, now, now });
+            \\INSERT INTO projects (id, client_id, name, color, organization_id, created_ts, updated_ts)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        , .{ blob(&new), optBlob(&p.client_id), p.name, p.color, optBlob(&org), now, now });
         return new;
     }
 
-    /// Projects not archived or deleted, by name. Allocated in `arena`.
+    /// Projects not archived or deleted, by name, each with its
+    /// organization (the default one for a project without). Allocated in
+    /// `arena`.
     pub fn projects(self: *Store, arena: Allocator) Error![]Project {
+        const fallback = try self.defaultOrgId();
         var stmt = try self.db.prepare(
-            \\SELECT id, client_id, name, color FROM projects
+            \\SELECT id, client_id, name, color, coalesce(organization_id, ?) FROM projects
             \\WHERE archived_ts IS NULL AND deleted_ts IS NULL
             \\ORDER BY name COLLATE NOCASE
         );
         defer stmt.deinit();
+        try stmt.bindAll(.{optBlob(&fallback)});
         var out: std.ArrayList(Project) = .empty;
         while (try stmt.step()) try out.append(arena, .{
             .id = try id(stmt, 0),
             .client_id = try optId(stmt, 1),
             .name = try stmt.text(arena, 2),
             .color = try stmt.optText(arena, 3),
+            .organization_id = try optId(stmt, 4),
         });
         return out.items;
     }
@@ -426,7 +561,7 @@ pub const Store = struct {
     }
 
     /// Renames a project, moves it to another client, or changes its color
-    /// (`#rrggbb`; null for none).
+    /// (`#rrggbb`; null for none). Its organization stays (`moveProject`).
     pub fn editProject(self: *Store, project_id: Uuid, edit: NewProject, now: i64) Error!void {
         try self.db.exec(
             \\UPDATE projects SET name = ?, client_id = ?, color = ?, updated_ts = ?

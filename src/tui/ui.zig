@@ -31,6 +31,22 @@ pub fn projectStyle(names: report.Names, project_id: ?core.Uuid, strong: bool) v
     return style;
 }
 
+/// Time on organizations with no shift, by project, under its own heading:
+/// it's never worked time. Nothing when there's none.
+pub fn drawPersonal(p: *Painter, names: report.Names, t: report.Totals, a: Allocator) Allocator.Error!void {
+    if (t.personal_by_project.len == 0) return;
+    p.nl(1);
+    p.put("Personal, not worked", .{ .bold = true });
+    try p.right(try p.fmt("{f}", .{core.fmt.dur(t.personal)}), .{ .bold = true });
+    p.nl(1);
+    for (t.personal_by_project) |pt| {
+        try p.print(.{}, "  {s: >7}  ", .{try p.fmt("{f}", .{core.fmt.dur(pt.secs)})});
+        p.put(try names.label(a, pt.id, null), projectStyle(names, pt.id, false));
+        if (names.organizationOf(pt.id)) |o| try p.print(dim, "  {s}", .{o.name});
+        p.nl(1);
+    }
+}
+
 /// Writes styled text into a surface line by line, clipped to a column of
 /// `width` cells starting at `left`.
 pub const Painter = struct {
