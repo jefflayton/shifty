@@ -9,22 +9,28 @@ import Darwin
 /// Rex session or tab named for it; with "Follow Rex tabs" on, the tab
 /// and session the Rex script last heard (`RexFollow`) stand in for Rex's
 /// title. Reading windows needs the Accessibility permission. Shifty's own windows don't count. It looks for
-/// a Teams call too, with `MeetingWatcher`.
+/// a Teams call too, with `MeetingWatcher`, and tells `PersonalTracker`
+/// too, with how long you've been idle, and when the Mac sleeps or locks.
 @MainActor
 final class FocusWatcher {
   private let store: ShiftStore
   private let model: AutoSwitchModel
   private let meetings: MeetingWatcher
+  /// Your own projects, tracking themselves.
+  private let personal: PersonalTracker?
   private var timer: Timer?
   private var observer: NSObjectProtocol?
+  /// Sleep, screen sleep, and lock, which stop personal time.
+  private var pauseObservers: [(NotificationCenter, NSObjectProtocol)] = []
   /// Which app owns each shell; shells don't change hands.
   private var owners: [Int32: String?] = [:]
   /// Repo and folder tops seen, by name, to read an editor's title by.
   private var roots: [String: String] = [:]
 
-  init(store: ShiftStore, model: AutoSwitchModel) {
+  init(store: ShiftStore, model: AutoSwitchModel, personal: PersonalTracker? = nil) {
     self.store = store
     self.model = model
+    self.personal = personal
     meetings = MeetingWatcher(store: store, model: model)
   }
 
@@ -41,6 +47,19 @@ final class FocusWatcher {
     ) { [weak self] _ in
       MainActor.assumeIsolated { self?.check() }
     }
+    let workspace = NSWorkspace.shared.notificationCenter
+    let pauses: [(NotificationCenter, Notification.Name)] = [
+      (workspace, NSWorkspace.willSleepNotification),
+      (workspace, NSWorkspace.screensDidSleepNotification),
+      (workspace, NSWorkspace.sessionDidResignActiveNotification),
+      (DistributedNotificationCenter.default(), Notification.Name("com.apple.screenIsLocked")),
+    ]
+    for (center, name) in pauses {
+      let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated { self?.pause() }
+      }
+      pauseObservers.append((center, token))
+    }
     check()
   }
 
@@ -49,20 +68,41 @@ final class FocusWatcher {
     timer = nil
     if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     observer = nil
+    for (center, token) in pauseObservers { center.removeObserver(token) }
+    pauseObservers = []
+  }
+
+  /// The Mac sleeps or locks: personal time stops.
+  private func pause() {
+    guard let personal, model.preferences.personalTracking else { return }
+    model.tracking.reload()
+    personal.pause()
+  }
+
+  /// Seconds since a key, the mouse, or the trackpad was last touched.
+  static func idleSeconds() -> TimeInterval {
+    guard let any = CGEventType(rawValue: ~0) else { return 0 }
+    return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
   }
 
   /// Looks again, now.
   func check(now: Date = Date()) {
     let tracking = model.tracking
-    guard model.preferences.autoSwitch else {
+    let prefs = model.preferences
+    let tracksPersonal = personal != nil && prefs.personalTracking
+    guard prefs.autoSwitch || tracksPersonal else {
       meetings.check(now: now)
       return model.observe(nil, place: "", now: now)
     }
     tracking.reload(now: now)
     meetings.check(now: now)
+    let idle = tracksPersonal ? Self.idleSeconds() : 0
     guard let app = NSWorkspace.shared.frontmostApplication,
       app.processIdentifier != ProcessInfo.processInfo.processIdentifier
-    else { return model.tick(now: now) }
+    else {
+      personal?.observe(nil, idle: idle, now: now)
+      return model.tick(now: now)
+    }
     let bundle = app.bundleIdentifier
     let window = Self.focusedWindow(app)
     let windowTitle = window.flatMap { Self.attribute($0, kAXTitleAttribute) as? String }
@@ -79,6 +119,7 @@ final class FocusWatcher {
       place = try store.place(dir: dir, app: bundle, title: title)
     } catch {
       log("auto-switch place:", error)
+      personal?.observe(nil, idle: idle, now: now)
       return model.tick(now: now)
     }
     if let top = place.root ?? place.folder {
@@ -87,6 +128,9 @@ final class FocusWatcher {
     let name = Self.name(of: place, dir: dir, title: title, appName: app.localizedName)
     let seen = AutoSwitchModel.Seen(name: name, dir: dir, app: bundle, title: title, place: place)
     if seen != model.seen { model.seen = seen }
+    // Personal tracking first: it decides whether auto-switch has the
+    // timer.
+    personal?.observe(place.target, idle: idle, now: now)
     model.observe(place.target, place: name, now: now)
   }
 

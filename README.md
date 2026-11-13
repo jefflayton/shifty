@@ -233,10 +233,37 @@ Timesheet, Meetings, Breaks, or Projects in its sidebar (⌘1 to ⌘4).
   [one-off breaks](#one-off-breaks) still to come, then the lunch window, scheduled breaks, and the
   icon for other breaks. It shares the timesheet's week (⌘← and ⌘→). Without the shared database
   (Shifty as a calculator only) the settings are in Settings instead.
-- **Projects**: add one with the toolbar's **+** (⌘N), rename a project by editing its name, click
+- **Projects**: grouped by [organization](#organizations-and-personal-projects). Add one with the toolbar's **+** (⌘N), or from an organization's menu, rename a project by editing its name, click
   its color to pick another, and delete it from the trash button, its right-click menu, or Delete. Deleting a project keeps its time, with no
   project. The link button (or right-click) links a repo, folder, app, or keyword to it for
-  auto-switch.
+  auto-switch, and **Move To** moves it, with its time, to another organization.
+
+### Organizations and personal projects
+
+Organizations sit above projects: who the time is for. Shifty starts with two, **Work** (every
+project you had goes here) and **Personal**. Add one per company you work for with the Projects
+window's **New Organization** button or `shifty org add`; new projects go to the first one on the
+shift unless you pick another.
+
+An organization tracks one of two ways:
+
+- **On the shift**: every such organization shares the one shift. Two companies you clock in and
+  out for once, with one lunch, one 8-hour day, and one weekly goal, still keep their own projects,
+  and the timesheet's inspector and `shifty sheet` total the week by organization.
+- **Tracks itself** (personal): no shift and no clocking in. Off the clock, stay a while (the
+  auto-switch delay, 30 seconds by default) in a repo, folder, app, or keyword linked to one of
+  its projects and its timer starts, from when you got there; move to another of its projects and
+  the timer moves. It stops when you go idle (5 minutes by default, at when you last touched a key
+  or the mouse), when the Mac sleeps or locks, when you clock in, or when you stay in a project
+  on the shift. Places nothing links, like a browser, keep it running. This time is personal: it
+  never counts as worked, toward the day's length, or toward the weekly goal, and it's totaled on
+  its own. Turn it off, or change the idle time, in **Settings… → Auto-Switch → Personal
+  Projects**. It doesn't need auto-switch turned on.
+
+The timesheet's toolbar picks one organization's time, or all of it (`shifty sheet --org` and
+`shifty log --org` do the same). Deleting an organization moves its projects and their time to
+another. Each organization is meant to become its own account once Shifty syncs, several signed in
+at once.
 
 ### Auto-switch
 
@@ -347,8 +374,10 @@ break unplan <start> [-d <day>]
                            Drop the one-off break starting then
 breaks [<day>] [--last]    The week's breaks by day, lunch marked,
                            and the one-off breaks still to come
-sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
-                           lunch, and time, with totals
+sheet [<day>] [--last] [--org <name>]
+                           The week's timesheet: shifts, breaks,
+                           lunch, and time, with totals. --org
+                           shows one organization's
 add <start> <end> [<project>[/<workspace>]] [-n <note>] [-d <day>]
                            Record time after the fact
 add <start> <end> [<project>[/<workspace>]] -m <title> [-d <day>]
@@ -369,9 +398,26 @@ start [<project>[/<workspace>]] -m <title>
                            or stop
 meetings [<day>] [--last]  The week's meetings, by day
 stop                       Stop tracking
-log [--week]               Time by project, today or the last 7 days
-projects                   List projects and their workspaces
-project add <name> [--client <name>] [--color <#rrggbb>]
+log [--week] [--org <name>]
+                           Time by project, today or the last 7
+                           days, personal time apart
+orgs                       List organizations: who the time is for
+org add <name> [--auto] [--color <#rrggbb>]
+                           Add one. It's on the shift you share
+                           with the others, or with --auto it has
+                           none: the menu bar tracks its projects
+                           from the window you're in, and its time
+                           is personal, never worked
+org rename <name> <new name>
+org tracking <name> <shift|auto>
+org color <name> <#rrggbb|none>
+org delete <name> [--to <org>]
+                           Its projects and their time move to
+                           <org> (default: the first on the shift)
+projects                   List projects by organization, and
+                           their workspaces
+project add <name> [--org <name>] [--client <name>] [--color <#rrggbb>]
+project move <name> <org>  Move a project, with its time
 project rename <name> <new name>
 project color <name> <#rrggbb|none>
 project delete <name>     Its time stays, unassigned

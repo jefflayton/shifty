@@ -487,6 +487,7 @@ const Timesheet = struct {
     clients: []const store.Client,
     projects: []const store.Project,
     workspaces: []const store.Workspace,
+    organizations: []const store.Organization,
 };
 
 /// A shift on the timesheet, with its breaks. `out_ts` is null while on it.
@@ -522,6 +523,7 @@ export fn shifty_timesheet_json(h: *Handle, from: i64, to: i64, out: *?[*]u8, le
         .clients = names.clients,
         .projects = names.projects,
         .workspaces = names.workspaces,
+        .organizations = names.organizations,
     };
     const json = std.json.Stringify.valueAlloc(gpa, sheet, .{}) catch return .no_memory;
     out.* = json.ptr;
@@ -628,9 +630,66 @@ export fn shifty_restore_entry(h: *Handle, entry_id: Id, now: i64) Result {
     return .ok;
 }
 
-export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*const Id, color: ?[*:0]const u8, now: i64, out: *Id) Result {
-    const new = h.store.createProject(.{ .name = std.mem.span(name), .client_id = optId(client_id), .color = optStr(color) }, now) catch |e| return result(e);
+/// Creates a project in `organization_id`, or the default organization
+/// (the first shift one) when it's null.
+export fn shifty_create_project(h: *Handle, name: [*:0]const u8, client_id: ?*const Id, color: ?[*:0]const u8, organization_id: ?*const Id, now: i64, out: *Id) Result {
+    const new = h.store.createProject(.{
+        .name = std.mem.span(name),
+        .client_id = optId(client_id),
+        .color = optStr(color),
+        .organization_id = optId(organization_id),
+    }, now) catch |e| return result(e);
     out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+/// Moves a project, and its time, to another organization.
+export fn shifty_move_project(h: *Handle, project_id: Id, organization_id: Id, now: i64) Result {
+    h.store.moveProject(id(project_id), id(organization_id), now) catch |e| return result(e);
+    return .ok;
+}
+
+// ── Organizations ───────────────────────────────────────────────────────────
+
+fn tracking(t: i32) ?store.Tracking {
+    return switch (t) {
+        0 => .shift,
+        1 => .auto,
+        else => null,
+    };
+}
+
+/// Writes every active organization, oldest first, as UTF-8 JSON into a new
+/// buffer; release it with `shifty_free`.
+export fn shifty_organizations_json(h: *Handle, out: *?[*]u8, len: *usize) Result {
+    out.* = null;
+    len.* = 0;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const orgs = h.store.organizations(arena.allocator()) catch |e| return result(e);
+    const json = std.json.Stringify.valueAlloc(gpa, orgs, .{}) catch return .no_memory;
+    out.* = json.ptr;
+    len.* = json.len;
+    return .ok;
+}
+
+/// `tracking` is 0 for the shift, 1 for tracking itself (no shift).
+export fn shifty_create_organization(h: *Handle, name: [*:0]const u8, tracking_kind: i32, color: ?[*:0]const u8, now: i64, out: *Id) Result {
+    const t = tracking(tracking_kind) orelse return .mismatch;
+    const new = h.store.createOrganization(.{ .name = std.mem.span(name), .tracking = t, .color = optStr(color) }, now) catch |e| return result(e);
+    out.* = .{ .bytes = new.bytes };
+    return .ok;
+}
+
+export fn shifty_edit_organization(h: *Handle, organization_id: Id, name: [*:0]const u8, tracking_kind: i32, color: ?[*:0]const u8, now: i64) Result {
+    const t = tracking(tracking_kind) orelse return .mismatch;
+    h.store.editOrganization(id(organization_id), .{ .name = std.mem.span(name), .tracking = t, .color = optStr(color) }, now) catch |e| return result(e);
+    return .ok;
+}
+
+/// Deletes an organization, moving its projects to `move_to`.
+export fn shifty_delete_organization(h: *Handle, organization_id: Id, move_to: Id, now: i64) Result {
+    h.store.deleteOrganization(id(organization_id), id(move_to), now) catch |e| return result(e);
     return .ok;
 }
 
@@ -679,6 +738,7 @@ const Projects = struct {
     clients: []const store.Client,
     workspaces: []const store.Workspace,
     usage: []const Store.ProjectUsage,
+    organizations: []const store.Organization,
 };
 
 /// Writes every active project, client, and workspace, and each project's
@@ -695,6 +755,7 @@ export fn shifty_projects_json(h: *Handle, now: i64, out: *?[*]u8, len: *usize) 
         .clients = names.clients,
         .workspaces = names.workspaces,
         .usage = h.store.projectUsage(a, now) catch |e| return result(e),
+        .organizations = names.organizations,
     };
     const json = std.json.Stringify.valueAlloc(gpa, value, .{}) catch return .no_memory;
     out.* = json.ptr;
@@ -756,7 +817,7 @@ test "C API - timesheet JSON and entry edits" {
     const s = h.?;
 
     var web: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, "#ff8800", 0, &web));
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, "#ff8800", null, 0, &web));
     var e: Id = undefined;
     try testing.expectEqual(Result.ok, shifty_add_entry(s, &web, null, 3600, 7200, "standup", &e));
     try testing.expectEqual(Result.conflict, shifty_add_entry(s, null, null, 7200, 3600, null, &e));
@@ -862,7 +923,7 @@ test "C API - manage projects" {
     const s = h.?;
 
     var web: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, null, 0, &web));
     var e: Id = undefined;
     try testing.expectEqual(Result.ok, shifty_add_entry(s, &web, null, 3600, 7200, null, &e));
     try testing.expectEqual(Result.ok, shifty_edit_project(s, web, "Website", null, "#3b82f6", 1));
@@ -896,7 +957,7 @@ test "C API - start and stop tracking" {
     const s = h.?;
 
     var web: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, null, 0, &web));
     var first: Id = undefined;
     try testing.expectEqual(Result.ok, shifty_start_entry(s, null, null, null, 1000, &first));
     var second: Id = undefined;
@@ -920,7 +981,7 @@ test "C API - meetings" {
     const s = h.?;
 
     var web: Id = undefined;
-    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, 0, &web));
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, null, 0, &web));
     var work: Id = undefined;
     try testing.expectEqual(Result.ok, shifty_start_entry(s, &web, null, null, 1000, &work));
     // The call began at 1500; it's noticed later.
@@ -1030,4 +1091,45 @@ test "C API - break presets" {
 
     try testing.expectEqual(Result.ok, shifty_delete_break_preset(s, class.id, 1));
     try testing.expectEqual(Result.not_found, shifty_delete_break_preset(s, class.id, 1));
+}
+
+test "C API - organizations, projects in them" {
+    var h: ?*Handle = null;
+    try testing.expectEqual(Result.ok, shifty_store_open(":memory:", &h));
+    defer shifty_store_close(h);
+    const s = h.?;
+
+    var acme: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_organization(s, "Acme", 0, null, 0, &acme));
+    try testing.expectEqual(Result.mismatch, shifty_create_organization(s, "Bad", 7, null, 0, &acme));
+    var web: Id = undefined;
+    try testing.expectEqual(Result.ok, shifty_create_project(s, "web", null, null, &acme, 0, &web));
+    try testing.expectEqual(Result.ok, shifty_edit_organization(s, acme, "Acme Inc", 1, "#123456", 1));
+
+    var ptr: ?[*]u8 = null;
+    var len: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_organizations_json(s, &ptr, &len));
+    const orgs = ptr.?[0..len];
+    defer shifty_free(ptr, len);
+    try testing.expect(std.mem.indexOf(u8, orgs, "\"name\":\"Work\",\"tracking\":\"shift\"") != null);
+    try testing.expect(std.mem.indexOf(u8, orgs, "\"name\":\"Acme Inc\",\"tracking\":\"auto\",\"color\":\"#123456\"") != null);
+
+    var pp: ?[*]u8 = null;
+    var plen: usize = 0;
+    try testing.expectEqual(Result.ok, shifty_projects_json(s, 0, &pp, &plen));
+    defer shifty_free(pp, plen);
+    const acme_str = (core.Uuid{ .bytes = acme.bytes }).toStr();
+    const want = "\"organization_id\":\"" ++ acme_str ++ "\"";
+    try testing.expect(std.mem.indexOf(u8, pp.?[0..plen], want) != null);
+    try testing.expect(std.mem.indexOf(u8, pp.?[0..plen], "\"organizations\":[") != null);
+
+    // Deleting moves its projects back to Work.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const work = (try s.store.organizations(arena.allocator()))[0].id;
+    try testing.expectEqual(Result.conflict, shifty_delete_organization(s, acme, acme, 2));
+    try testing.expectEqual(Result.ok, shifty_delete_organization(s, acme, .{ .bytes = work.bytes }, 2));
+    try testing.expect((try s.store.projects(arena.allocator()))[0].organization_id.?.eql(work));
+    try testing.expectEqual(Result.ok, shifty_move_project(s, web, .{ .bytes = work.bytes }, 3));
+    try testing.expectEqual(Result.not_found, shifty_move_project(s, web, acme, 3));
 }

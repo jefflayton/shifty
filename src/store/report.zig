@@ -10,11 +10,13 @@ const Uuid = core.Uuid;
 const store = @import("root.zig");
 const Store = store.Store;
 
-/// Every active client, project, and workspace, for turning ids into names.
+/// Every active organization, client, project, and workspace, for turning
+/// ids into names.
 pub const Names = struct {
     clients: []const store.Client,
     projects: []const store.Project,
     workspaces: []const store.Workspace,
+    organizations: []const store.Organization = &.{},
 
     /// Allocated in `arena`.
     pub fn load(db: *Store, arena: Allocator) store.Error!Names {
@@ -22,7 +24,42 @@ pub const Names = struct {
             .clients = try db.clients(arena),
             .projects = try db.projects(arena),
             .workspaces = try db.allWorkspaces(arena),
+            .organizations = try db.organizations(arena),
         };
+    }
+
+    pub fn organization(n: Names, id: Uuid) ?store.Organization {
+        return find(store.Organization, n.organizations, id);
+    }
+
+    /// The organization a project belongs to; none for unassigned time.
+    pub fn organizationOf(n: Names, project_id: ?Uuid) ?store.Organization {
+        const p = n.project(project_id orelse return null) orelse return null;
+        return n.organization(p.organization_id orelse return null);
+    }
+
+    /// Whether time on `project_id` tracks itself and isn't work: its
+    /// organization has no shift. Unassigned time is work.
+    pub fn isPersonal(n: Names, project_id: ?Uuid) bool {
+        const o = n.organizationOf(project_id) orelse return false;
+        return o.tracking == .auto;
+    }
+
+    /// Whether time on `project_id` shows under organization `org`, or under
+    /// every one (null). Unassigned time shows under shift organizations,
+    /// since it's time on the clock no project has.
+    pub fn inOrganization(n: Names, project_id: ?Uuid, org: ?Uuid) bool {
+        const want = org orelse return true;
+        if (n.organizationOf(project_id)) |o| return o.id.eql(want);
+        const o = n.organization(want) orelse return false;
+        return project_id == null and o.tracking == .shift;
+    }
+
+    /// The entries that show under `org` (null: all). Allocated in `arena`.
+    pub fn only(n: Names, arena: Allocator, entries: []const store.Entry, org: ?Uuid) Allocator.Error![]store.Entry {
+        var out: std.ArrayList(store.Entry) = .empty;
+        for (entries) |e| if (n.inOrganization(e.project_id, org)) try out.append(arena, e);
+        return out.items;
     }
 
     pub fn project(n: Names, id: Uuid) ?store.Project {
@@ -70,31 +107,56 @@ pub const Total = struct {
 };
 
 pub const Totals = struct {
+    /// Work: time on shift organizations' projects, and unassigned.
     by_project: []Total,
     by_client: []Total,
     /// Whether any time went to a project with a client; if not, a by-client
     /// breakdown says nothing.
     any_client: bool,
+    /// All work time; personal time isn't in it.
     total: i64,
+    /// Work time per organization; null is unassigned.
+    by_organization: []Total = &.{},
+    /// Time on projects of organizations with no shift, which tracks itself
+    /// and never counts as work, per project.
+    personal_by_project: []Total = &.{},
+    personal: i64 = 0,
 };
 
-/// Time per project and per client in `[from, now]`, in order of first
-/// appearance. Allocated in `arena`.
+/// Time per project, client, and organization in `[from, now]`, in order
+/// of first appearance, with personal time apart. Allocated in `arena`.
 pub fn totals(arena: Allocator, names: Names, entries: []const store.Entry, from: i64, now: i64) Allocator.Error!Totals {
     var by_project: std.ArrayList(Total) = .empty;
     var by_client: std.ArrayList(Total) = .empty;
+    var by_org: std.ArrayList(Total) = .empty;
+    var personal_by_project: std.ArrayList(Total) = .empty;
     var any_client = false;
     var total: i64 = 0;
+    var personal: i64 = 0;
 
     for (entries) |e| {
         const secs = clipped(e, from, now);
+        if (names.isPersonal(e.project_id)) {
+            personal += secs;
+            try add(arena, &personal_by_project, e.project_id, secs);
+            continue;
+        }
         total += secs;
         try add(arena, &by_project, e.project_id, secs);
         const cl = names.clientOf(e.project_id);
         any_client = any_client or cl != null;
         try add(arena, &by_client, if (cl) |c| c.id else null, secs);
+        try add(arena, &by_org, if (names.organizationOf(e.project_id)) |o| o.id else null, secs);
     }
-    return .{ .by_project = by_project.items, .by_client = by_client.items, .any_client = any_client, .total = total };
+    return .{
+        .by_project = by_project.items,
+        .by_client = by_client.items,
+        .any_client = any_client,
+        .total = total,
+        .by_organization = by_org.items,
+        .personal_by_project = personal_by_project.items,
+        .personal = personal,
+    };
 }
 
 fn add(arena: Allocator, list: *std.ArrayList(Total), id: ?Uuid, secs: i64) Allocator.Error!void {
@@ -156,4 +218,57 @@ test "totals - by project and client, clipped to the range" {
     try testing.expectEqual(200, t.by_client[0].secs);
     try testing.expectEqual(null, t.by_client[1].id);
     try testing.expectEqual(200, t.by_client[1].secs);
+    try testing.expectEqual(0, t.personal);
+}
+
+test "totals - personal time apart, and by organization" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var db: Store = try .open(testing.io, ":memory:");
+    defer db.deinit();
+
+    const orgs = try db.organizations(a);
+    try testing.expectEqual(2, orgs.len);
+    const work = orgs[0].id;
+    const personal = orgs[1].id;
+    try testing.expectEqual(store.Tracking.auto, orgs[1].tracking);
+    const other = try db.createOrganization(.{ .name = "Other Co" }, 0);
+
+    const web = try db.createProject(.{ .name = "web" }, 0);
+    const side = try db.createProject(.{ .name = "side", .organization_id = personal }, 0);
+    const theirs = try db.createProject(.{ .name = "theirs", .organization_id = other }, 0);
+
+    const at = struct {
+        fn f(ts: i64) core.local.Stamp {
+            return .{ .ts = ts, .utc_offset_secs = 0, .tz = null };
+        }
+    }.f;
+    _ = try db.addEntry(.{ .project_id = web, .source = .cli }, at(0), 100);
+    _ = try db.addEntry(.{ .project_id = side, .source = .cli }, at(100), 400);
+    _ = try db.addEntry(.{ .project_id = theirs, .source = .cli }, at(400), 450);
+    _ = try db.addEntry(.{ .source = .cli }, at(450), 460);
+
+    const names: Names = try .load(&db, a);
+    try testing.expect(names.isPersonal(side));
+    try testing.expect(!names.isPersonal(web));
+    try testing.expect(!names.isPersonal(null));
+    try testing.expect(names.organizationOf(web).?.id.eql(work));
+
+    const entries = try db.entriesBetween(a, 0, 1000);
+    const t = try totals(a, names, entries, 0, 1000);
+    try testing.expectEqual(160, t.total);
+    try testing.expectEqual(300, t.personal);
+    try testing.expectEqual(3, t.by_project.len);
+    try testing.expectEqual(1, t.personal_by_project.len);
+    try testing.expect(t.personal_by_project[0].id.?.eql(side));
+    try testing.expectEqual(3, t.by_organization.len);
+    try testing.expect(t.by_organization[0].id.?.eql(work));
+    try testing.expectEqual(null, t.by_organization[2].id);
+
+    // Filtered: unassigned time shows under shift organizations only.
+    try testing.expectEqual(2, (try names.only(a, entries, work)).len);
+    try testing.expectEqual(2, (try names.only(a, entries, other)).len);
+    try testing.expectEqual(1, (try names.only(a, entries, personal)).len);
+    try testing.expectEqual(4, (try names.only(a, entries, null)).len);
 }

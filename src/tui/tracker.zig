@@ -684,6 +684,7 @@ fn drawToday(p: *Painter, snap: Snap, a: Allocator, bottom: u16) !void {
     // The totals sections below the entries.
     var totals_rows: usize = 2 + t.by_project.len;
     if (t.any_client) totals_rows += 2 + t.by_client.len;
+    if (t.personal_by_project.len > 0) totals_rows += 2 + t.personal_by_project.len;
     const room = @as(usize, bottom -| p.row) -| totals_rows -| 1;
     const shown = @min(snap.today.len, @max(room, 1));
     const hidden = snap.today.len - shown;
@@ -700,6 +701,7 @@ fn drawToday(p: *Painter, snap: Snap, a: Allocator, bottom: u16) !void {
         if (e.kind == .meeting) {
             try p.print(cyan, "  Meeting: {s}", .{e.note orelse "untitled"});
         } else if (e.note) |n| try p.print(dim, "  {s}", .{n});
+        if (names.isPersonal(e.project_id)) try p.print(dim, "  {s}", .{names.organizationOf(e.project_id).?.name});
         p.nl(1);
     }
 
@@ -722,4 +724,5 @@ fn drawToday(p: *Painter, snap: Snap, a: Allocator, bottom: u16) !void {
             p.nl(1);
         }
     }
+    try ui.drawPersonal(p, names, t, a);
 }

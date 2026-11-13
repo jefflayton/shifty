@@ -44,8 +44,10 @@ pub const usage =
     \\                             Drop the one-off break starting then
     \\  breaks [<day>] [--last]    The week's breaks by day, lunch marked,
     \\                             and the one-off breaks still to come
-    \\  sheet [<day>] [--last]     The week's timesheet: shifts, breaks,
-    \\                             lunch, and time, with totals
+    \\  sheet [<day>] [--last] [--org <name>]
+    \\                             The week's timesheet: shifts, breaks,
+    \\                             lunch, and time, with totals. --org
+    \\                             shows one organization's
     \\  goal [<hours>|off]         Show the weekly hours goal and what's
     \\                             left of it, set it (20h, 20, 37:30),
     \\                             or turn it off
@@ -69,9 +71,26 @@ pub const usage =
     \\                             or stop
     \\  meetings [<day>] [--last]  The week's meetings, by day
     \\  stop                       Stop tracking
-    \\  log [--week]               Time by project, today or the last 7 days
-    \\  projects                   List projects and their workspaces
-    \\  project add <name> [--client <name>] [--color <#rrggbb>]
+    \\  log [--week] [--org <name>]
+    \\                             Time by project, today or the last 7
+    \\                             days, personal time apart
+    \\  orgs                       List organizations: who the time is for
+    \\  org add <name> [--auto] [--color <#rrggbb>]
+    \\                             Add one. It's on the shift you share
+    \\                             with the others, or with --auto it has
+    \\                             none: the menu bar tracks its projects
+    \\                             from the window you're in, and its time
+    \\                             is personal, never worked
+    \\  org rename <name> <new name>
+    \\  org tracking <name> <shift|auto>
+    \\  org color <name> <#rrggbb|none>
+    \\  org delete <name> [--to <org>]
+    \\                             Its projects and their time move to
+    \\                             <org> (default: the first on the shift)
+    \\  projects                   List projects by organization, and
+    \\                             their workspaces
+    \\  project add <name> [--org <name>] [--client <name>] [--color <#rrggbb>]
+    \\  project move <name> <org>  Move a project, with its time
     \\  project rename <name> <new name>
     \\  project color <name> <#rrggbb|none>
     \\  project delete <name>     Its time stays, unassigned
@@ -108,7 +127,7 @@ pub const usage =
     \\
 ;
 
-const Command = enum { tui, status, in, out, @"break", breaks, sheet, goal, add, start, stop, meetings, log, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
+const Command = enum { tui, status, in, out, @"break", breaks, sheet, goal, add, start, stop, meetings, log, orgs, org, projects, project, workspace, clients, client, link, unlink, keyword, keywords, hook, here, rex };
 
 pub fn isCommand(arg: []const u8) bool {
     return std.meta.stringToEnum(Command, arg) != null;
@@ -189,6 +208,8 @@ pub fn run(init: std.process.Init, out: *Io.Writer, err: *Io.Writer, args: []con
         .stop => try stop(&c, rest),
         .meetings => try meetings(&c, rest),
         .log => try log(&c, rest),
+        .orgs => try listOrganizations(&c, rest),
+        .org => try organization(&c, rest),
         .projects => try listProjects(&c, rest),
         .project => try project(&c, rest),
         .workspace => try workspace(&c, rest),
@@ -573,10 +594,13 @@ fn onlyOpen(c: *Ctx, comptime cmd: []const u8, args: []const [:0]const u8) !bool
 fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     var day: ?i64 = null;
     var last = false;
+    var org: ?store.Organization = null;
     var it: Args = .{ .c = c, .cmd = "sheet", .list = args };
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--last")) {
             last = true;
+        } else if (std.mem.eql(u8, arg, "--org")) {
+            org = try namedOrganization(c, try c.db.organizations(c.arena), try it.value(arg));
         } else if (day == null and arg[0] != '-') {
             day = try parseDay(c, arg);
         } else return it.unexpected(arg);
@@ -584,12 +608,16 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     var ref = (day orelse fmt.dayStart(c.now.ts, c.now.utc_offset_secs)) + std.time.s_per_day / 2;
     if (last) ref -= 7 * std.time.s_per_day;
     const first = sheet.weekStart(ref, local.utcOffset(ref), try sheet.weekStartDay(&c.db, c.arena));
-    const w: sheet.Week = try .load(&c.db, c.arena, sheet.weekDays(first, local.utcOffset));
+    const w: sheet.Week = try .loadFor(&c.db, c.arena, sheet.weekDays(first, local.utcOffset), if (org) |o| o.id else null);
     const now = c.now.ts;
     const this_week = now >= w.days[0] and now < w.days[7];
     const a = c.arena;
+    // An organization with no shift: only its own time, none of it worked.
+    const off_shift = if (org) |o| o.tracking == .auto else false;
 
-    try c.out.print("Week of {f}{s}\n", .{ fmt.date(w.days[0], local.utcOffset(w.days[0])), if (this_week) " (this week)" else "" });
+    try c.out.print("Week of {f}{s}", .{ fmt.date(w.days[0], local.utcOffset(w.days[0])), if (this_week) " (this week)" else "" });
+    if (org) |o| try c.out.print(", {s}", .{o.name});
+    try c.out.writeAll("\n");
     var any = false;
     for (0..7) |d| {
         const is_today = this_week and w.dayOf(now) == d;
@@ -602,6 +630,8 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
             const secs = if (sum.worked > 0) sum.worked else sum.tracked;
             try c.out.print("{s}{s: >7}", .{ try spaces(a, 44 -| head.len), try padDur(c, secs) });
             if (sum.over > 0) try c.out.print("  +{f}", .{dur(sum.over)});
+        } else if (sum.personal > 0) {
+            try c.out.print("{s}{s: >7}  personal", .{ try spaces(a, 44 -| head.len), try padDur(c, sum.personal) });
         }
         try c.out.writeAll("\n");
         if (!w.hasTime(d)) {
@@ -630,6 +660,7 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
                 try printSpan(c, @max(e.in_ts, w.days[0]), e.out_ts, e.utc_offset_secs);
                 try c.out.print("  {s: >7}  {s}", .{ try padDur(c, w.seconds(e, now)), try w.names.label(a, e.project_id, e.workspace_id) });
                 try printNote(c, e);
+                if (org == null and w.names.isPersonal(e.project_id)) try c.out.print("  ({s})", .{w.names.organizationOf(e.project_id).?.name});
                 try c.out.writeAll("\n");
             },
             .brk => |b| {
@@ -642,7 +673,12 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     if (!any) return c.out.writeAll("\nNothing this week.\n");
 
     const s = try w.summary(a, null, now);
+    const t = try w.totals(a, now);
     try c.out.writeAll("\nWeek\n");
+    if (off_shift) {
+        try c.out.print("  {s: >7}  personal, not worked\n", .{try padDur(c, s.personal)});
+        return printPersonal(c, w.names, t);
+    }
     try c.out.print("  {s: >7}  worked\n", .{try padDur(c, s.worked)});
     if (try w.goal(a, now)) |g| {
         if (g.isMet()) {
@@ -653,8 +689,8 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
     try c.out.print("  {s: >7}  on break\n", .{try padDur(c, s.on_break)});
     try c.out.print("  {s: >7}  tracked\n", .{try padDur(c, s.tracked)});
     try c.out.print("  {s: >7}  untracked\n", .{try padDur(c, s.untracked)});
+    if (s.personal > 0) try c.out.print("  {s: >7}  personal, not worked\n", .{try padDur(c, s.personal)});
 
-    const t = try w.totals(a, now);
     if (t.by_project.len > 0) {
         try c.out.writeAll("\nBy project\n");
         for (t.by_project) |pt| {
@@ -669,6 +705,29 @@ fn timesheet(c: *Ctx, args: []const [:0]const u8) !void {
             const name = if (ct.id) |cid| w.names.client(cid).?.name else "(no client)";
             try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, ct.secs), name });
         }
+    }
+    if (org == null) try printByOrganization(c, w.names, t);
+    try printPersonal(c, w.names, t);
+}
+
+/// Work time per organization, when it went to more than one.
+fn printByOrganization(c: *Ctx, names: Names, t: store.report.Totals) !void {
+    if (t.by_organization.len < 2) return;
+    try c.out.writeAll("\nBy organization\n");
+    for (t.by_organization) |ot| {
+        const name = if (ot.id) |oid| (if (names.organization(oid)) |o| o.name else "(deleted)") else "(unassigned)";
+        try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, ot.secs), name });
+    }
+}
+
+/// Time on organizations with no shift, by project. It's never worked time.
+fn printPersonal(c: *Ctx, names: Names, t: store.report.Totals) !void {
+    if (t.personal_by_project.len == 0) return;
+    try c.out.writeAll("\nPersonal, not worked\n");
+    for (t.personal_by_project) |pt| {
+        try c.out.print("  {s: >7}  {s}", .{ try padDur(c, pt.secs), try names.label(c.arena, pt.id, null) });
+        if (names.organizationOf(pt.id)) |o| try c.out.print("  ({s})", .{o.name});
+        try c.out.writeAll("\n");
     }
 }
 
@@ -946,18 +1005,23 @@ fn meetings(c: *Ctx, args: []const [:0]const u8) !void {
 
 fn log(c: *Ctx, args: []const [:0]const u8) !void {
     var days: i64 = 1;
+    var org: ?store.Organization = null;
     var it: Args = .{ .c = c, .cmd = "log", .list = args };
     while (it.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--week")) days = 7 else return it.unexpected(arg);
+        if (std.mem.eql(u8, arg, "--week")) {
+            days = 7;
+        } else if (std.mem.eql(u8, arg, "--org")) {
+            org = try namedOrganization(c, try c.db.organizations(c.arena), try it.value(arg));
+        } else return it.unexpected(arg);
     }
 
     const now = c.now.ts;
     const today = fmt.dayStart(now, c.now.utc_offset_secs);
     const from = today - (days - 1) * std.time.s_per_day;
-    const entries = try c.db.entriesBetween(c.arena, from, now + 1);
+    const names: Names = try .load(&c.db, c.arena);
+    const entries = try names.only(c.arena, try c.db.entriesBetween(c.arena, from, now + 1), if (org) |o| o.id else null);
     if (entries.len == 0) return c.out.writeAll(if (days == 1) "Nothing tracked today.\n" else "Nothing tracked this week.\n");
 
-    const names: Names = try .load(&c.db, c.arena);
     var day: ?i64 = null;
     for (entries) |e| {
         const in_ts = @max(e.in_ts, from);
@@ -970,11 +1034,12 @@ fn log(c: *Ctx, args: []const [:0]const u8) !void {
         if (e.out_ts) |out| try c.out.print("{f}", .{clock(out, e.utc_offset_secs)}) else try c.out.writeAll("     now");
         try c.out.print("  {s: >7}  {s}", .{ try padDur(c, store.report.clipped(e, from, now)), try names.label(c.arena, e.project_id, e.workspace_id) });
         try printNote(c, e);
+        if (org == null and names.isPersonal(e.project_id)) try c.out.print("  ({s})", .{names.organizationOf(e.project_id).?.name});
         try c.out.writeAll("\n");
     }
 
     const totals = try store.report.totals(c.arena, names, entries, from, now);
-    try c.out.writeAll("\nBy project\n");
+    if (totals.by_project.len > 0) try c.out.writeAll("\nBy project\n");
     for (totals.by_project) |t| {
         try c.out.print("  {s: >7}  {s}", .{ try padDur(c, t.secs), try names.label(c.arena, t.id, null) });
         if (names.clientOf(t.id)) |cl| try c.out.print("  ({s})", .{cl.name});
@@ -987,36 +1052,183 @@ fn log(c: *Ctx, args: []const [:0]const u8) !void {
             try c.out.print("  {s: >7}  {s}\n", .{ try padDur(c, t.secs), name });
         }
     }
-    try c.out.print("\n  {s: >7}  total\n", .{try padDur(c, totals.total)});
+    if (org == null) try printByOrganization(c, names, totals);
+    try printPersonal(c, names, totals);
+    try c.out.writeAll("\n");
+    if (totals.by_project.len > 0) try c.out.print("  {s: >7}  total\n", .{try padDur(c, totals.total)});
+    if (totals.personal > 0) try c.out.print("  {s: >7}  personal, not worked\n", .{try padDur(c, totals.personal)});
 }
 
 // ── Organization ────────────────────────────────────────────────────────────
+
+fn listOrganizations(c: *Ctx, args: []const [:0]const u8) !void {
+    try noArgs(c, "orgs", args);
+    const orgs = try c.db.organizations(c.arena);
+    const projects = try c.db.projects(c.arena);
+    const default = try c.db.defaultOrganization();
+    for (orgs) |o| {
+        var count: usize = 0;
+        for (projects) |p| if (p.organization_id != null and p.organization_id.?.eql(o.id)) {
+            count += 1;
+        };
+        try c.out.print("{s}  {s}, {d} project{s}", .{
+            o.name,
+            switch (o.tracking) {
+                .shift => "on the shift",
+                .auto => "tracks itself, personal",
+            },
+            count,
+            if (count == 1) "" else "s",
+        });
+        if (default != null and default.?.eql(o.id)) try c.out.writeAll("; new projects go here");
+        try c.out.writeAll("\n");
+    }
+}
+
+const org_usage =
+    \\usage: shifty org add <name> [--auto] [--color <#rrggbb>]
+    \\       shifty org rename <name> <new name>
+    \\       shifty org tracking <name> <shift|auto>
+    \\       shifty org color <name> <#rrggbb|none>
+    \\       shifty org delete <name> [--to <org>]
+;
+
+fn organization(c: *Ctx, args: []const [:0]const u8) !void {
+    const Sub = enum { add, rename, tracking, color, delete };
+    const sub = if (args.len > 0) std.meta.stringToEnum(Sub, args[0]) else null;
+    const orgs = try c.db.organizations(c.arena);
+    switch (sub orelse return c.fail(org_usage, .{})) {
+        .add => {
+            var name: ?[]const u8 = null;
+            var tracking: store.Tracking = .shift;
+            var color: ?[]const u8 = null;
+            var it: Args = .{ .c = c, .cmd = "org add", .list = args[1..] };
+            while (it.next()) |arg| {
+                if (std.mem.eql(u8, arg, "--auto")) {
+                    tracking = .auto;
+                } else if (std.mem.eql(u8, arg, "--color")) {
+                    color = try it.value(arg);
+                    if (!isColor(color.?)) return c.fail("invalid color '{s}'; use #rrggbb", .{color.?});
+                } else if (name == null and arg[0] != '-') {
+                    name = arg;
+                } else return it.unexpected(arg);
+            }
+            const n = try validName(c, name orelse return c.fail("org add needs a name", .{}));
+            if (try findByName(c, store.Organization, orgs, n, "organization") != null)
+                return c.fail("there's already an organization named '{s}'", .{n});
+            _ = try c.db.createOrganization(.{ .name = n, .tracking = tracking, .color = color }, c.now.ts);
+            try c.out.print("Added organization {s}, {s}.\n", .{ n, switch (tracking) {
+                .shift => "on the shift",
+                .auto => "tracking itself; its time is personal",
+            } });
+        },
+        .rename => {
+            if (args.len != 3) return c.fail("usage: shifty org rename <name> <new name>", .{});
+            const o = try namedOrganization(c, orgs, args[1]);
+            const n = try validName(c, args[2]);
+            if (try findByName(c, store.Organization, orgs, n, "organization")) |other| {
+                if (!other.id.eql(o.id)) return c.fail("there's already an organization named '{s}'", .{other.name});
+            }
+            try c.db.editOrganization(o.id, .{ .name = n, .tracking = o.tracking, .color = o.color }, c.now.ts);
+            try c.out.print("Renamed {s} to {s}.\n", .{ o.name, n });
+        },
+        .tracking => {
+            if (args.len != 3) return c.fail("usage: shifty org tracking <name> <shift|auto>", .{});
+            const o = try namedOrganization(c, orgs, args[1]);
+            const tracking = std.meta.stringToEnum(store.Tracking, args[2]) orelse
+                return c.fail("tracking is shift or auto, not '{s}'", .{args[2]});
+            try c.db.editOrganization(o.id, .{ .name = o.name, .tracking = tracking, .color = o.color }, c.now.ts);
+            try c.out.print("{s} {s}.\n", .{ o.name, switch (tracking) {
+                .shift => "is on the shift; its time is worked time",
+                .auto => "tracks itself now; its time is personal, not worked",
+            } });
+        },
+        .color => {
+            if (args.len != 3) return c.fail("usage: shifty org color <name> <#rrggbb|none>", .{});
+            const o = try namedOrganization(c, orgs, args[1]);
+            const color: ?[]const u8 = if (std.mem.eql(u8, args[2], "none")) null else args[2];
+            if (color) |v| if (!isColor(v)) return c.fail("invalid color '{s}'; use #rrggbb or none", .{v});
+            try c.db.editOrganization(o.id, .{ .name = o.name, .tracking = o.tracking, .color = color }, c.now.ts);
+            if (color) |v|
+                try c.out.print("{s} is now {s}.\n", .{ o.name, v })
+            else
+                try c.out.print("{s} is back to its default color.\n", .{o.name});
+        },
+        .delete => {
+            var name: ?[]const u8 = null;
+            var to_name: ?[]const u8 = null;
+            var it: Args = .{ .c = c, .cmd = "org delete", .list = args[1..] };
+            while (it.next()) |arg| {
+                if (std.mem.eql(u8, arg, "--to")) {
+                    to_name = try it.value(arg);
+                } else if (name == null and arg[0] != '-') {
+                    name = arg;
+                } else return it.unexpected(arg);
+            }
+            const o = try namedOrganization(c, orgs, name orelse return c.fail("org delete needs a name", .{}));
+            if (orgs.len == 1) return c.fail("{s} is the only organization; add another to move its projects to", .{o.name});
+            const to = if (to_name) |tn| try namedOrganization(c, orgs, tn) else otherOrganization(orgs, o.id);
+            if (to.id.eql(o.id)) return c.fail("can't move {s}'s projects to itself", .{o.name});
+            try c.db.deleteOrganization(o.id, to.id, c.now.ts);
+            try c.out.print("Deleted {s}. Its projects and their time are in {s} now.\n", .{ o.name, to.name });
+        },
+    }
+}
+
+fn namedOrganization(c: *Ctx, orgs: []const store.Organization, name: []const u8) !store.Organization {
+    return try findByName(c, store.Organization, orgs, name, "organization") orelse
+        return c.fail("no organization named '{s}'; `shifty orgs` lists them", .{name});
+}
+
+/// Where a deleted organization's projects go: the first other one on the
+/// shift, else the first other.
+fn otherOrganization(orgs: []const store.Organization, not: Uuid) store.Organization {
+    for (orgs) |o| if (!o.id.eql(not) and o.tracking == .shift) return o;
+    for (orgs) |o| if (!o.id.eql(not)) return o;
+    unreachable;
+}
 
 fn listProjects(c: *Ctx, args: []const [:0]const u8) !void {
     try noArgs(c, "projects", args);
     const projects = try c.db.projects(c.arena);
     if (projects.len == 0) return c.out.writeAll("No projects yet; `shifty project add <name>`.\n");
     const clients = try c.db.clients(c.arena);
-    for (projects) |p| {
-        try c.out.print("{s}", .{p.name});
-        if (p.client_id) |cid| if (findById(store.Client, clients, cid)) |cl| try c.out.print("  ({s})", .{cl.name});
-        try c.out.writeAll("\n");
-        for (try c.db.workspaces(c.arena, p.id)) |w| try c.out.print("  /{s}\n", .{w.name});
+    const orgs = try c.db.organizations(c.arena);
+    for (orgs, 0..) |o, i| {
+        try c.out.print("{s}{s}{s}\n", .{ if (i == 0) "" else "\n", o.name, if (o.tracking == .auto) "  (tracks itself, personal)" else "" });
+        var any = false;
+        for (projects) |p| {
+            if (p.organization_id == null or !p.organization_id.?.eql(o.id)) continue;
+            any = true;
+            try c.out.print("  {s}", .{p.name});
+            if (p.client_id) |cid| if (findById(store.Client, clients, cid)) |cl| try c.out.print("  ({s})", .{cl.name});
+            try c.out.writeAll("\n");
+            for (try c.db.workspaces(c.arena, p.id)) |w| try c.out.print("    /{s}\n", .{w.name});
+        }
+        if (!any) try c.out.writeAll("  No projects; `shifty project move <name> <org>`.\n");
     }
 }
 
 const project_usage =
-    \\usage: shifty project add <name> [--client <name>] [--color <#rrggbb>]
+    \\usage: shifty project add <name> [--org <name>] [--client <name>] [--color <#rrggbb>]
     \\       shifty project rename <name> <new name>
     \\       shifty project color <name> <#rrggbb|none>
+    \\       shifty project move <name> <org>
     \\       shifty project delete <name>
 ;
 
 fn project(c: *Ctx, args: []const [:0]const u8) !void {
-    const Sub = enum { add, rename, color, delete };
+    const Sub = enum { add, rename, color, move, delete };
     const sub = if (args.len > 0) std.meta.stringToEnum(Sub, args[0]) else null;
     switch (sub orelse return c.fail(project_usage, .{})) {
         .add => try addProject(c, args),
+        .move => {
+            if (args.len != 3) return c.fail("usage: shifty project move <name> <org>", .{});
+            const p = try namedProject(c, try c.db.projects(c.arena), args[1]);
+            const o = try namedOrganization(c, try c.db.organizations(c.arena), args[2]);
+            try c.db.moveProject(p.id, o.id, c.now.ts);
+            try c.out.print("Moved {s} to {s}{s}.\n", .{ p.name, o.name, if (o.tracking == .auto) "; its time is personal now, not worked" else "" });
+        },
         .rename => {
             if (args.len != 3) return c.fail("usage: shifty project rename <name> <new name>", .{});
             const projects = try c.db.projects(c.arena);
@@ -1056,11 +1268,14 @@ fn namedProject(c: *Ctx, projects: []const store.Project, name: []const u8) !sto
 fn addProject(c: *Ctx, args: []const [:0]const u8) !void {
     var name: ?[]const u8 = null;
     var client_name: ?[]const u8 = null;
+    var org_name: ?[]const u8 = null;
     var color: ?[]const u8 = null;
     var it: Args = .{ .c = c, .cmd = "project add", .list = args[1..] };
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--client")) {
             client_name = try it.value(arg);
+        } else if (std.mem.eql(u8, arg, "--org")) {
+            org_name = try it.value(arg);
         } else if (std.mem.eql(u8, arg, "--color")) {
             color = try it.value(arg);
             if (!isColor(color.?)) return c.fail("invalid color '{s}'; use #rrggbb", .{color.?});
@@ -1078,9 +1293,10 @@ fn addProject(c: *Ctx, args: []const [:0]const u8) !void {
     }
     if (try findByName(c, store.Project, try c.db.projects(c.arena), n, "project") != null)
         return c.fail("there's already a project named '{s}'", .{n});
+    const org: ?store.Organization = if (org_name) |on| try namedOrganization(c, try c.db.organizations(c.arena), on) else null;
 
-    _ = try c.db.createProject(.{ .name = n, .client_id = client_id, .color = color }, c.now.ts);
-    try c.out.print("Added project {s}.\n", .{n});
+    _ = try c.db.createProject(.{ .name = n, .client_id = client_id, .color = color, .organization_id = if (org) |o| o.id else null }, c.now.ts);
+    if (org) |o| try c.out.print("Added project {s} to {s}.\n", .{ n, o.name }) else try c.out.print("Added project {s}.\n", .{n});
 }
 
 fn workspace(c: *Ctx, args: []const [:0]const u8) !void {

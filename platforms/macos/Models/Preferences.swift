@@ -221,6 +221,23 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     didSet { defaults.set(rexHosts, forKey: Self.rexHostsKey) }
   }
 
+  /// Whether your own projects track themselves: off the clock, staying in
+  /// a project of an organization with no shift (a personal one) starts its
+  /// timer, from when you got there, and moves it as you go between them.
+  /// It stops when you go idle, the Mac sleeps or locks, you clock in, or
+  /// you work in a project on the shift. Kept on this Mac.
+  var personalTracking: Bool {
+    didSet { defaults.set(personalTracking, forKey: Self.personalTrackingKey) }
+  }
+
+  /// How long without a key or the mouse stops personal time, at when you
+  /// last touched them.
+  var personalIdle: TimeInterval {
+    didSet { defaults.set(personalIdle, forKey: Self.personalIdleKey) }
+  }
+
+  static let personalIdles: [TimeInterval] = [120, 300, 600, 900, 1800]
+
   static let autoSwitchDelays: [TimeInterval] = [10, 30, 60, 120, 300]
   static let autoSwitchCountdowns: [TimeInterval] = [5, 10, 15, 30]
 
@@ -244,6 +261,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
   static let meetingAutoLogKey = "autoSwitch.meetings.auto"
   static let followRexKey = "autoSwitch.rex"
   static let rexHostsKey = "autoSwitch.rexHosts"
+  static let personalTrackingKey = "personal.tracking"
+  static let personalIdleKey = "personal.idle"
   static let workDaysSetting = "work_days"
   static let lunchSetting = "lunch"
   static let snoozeSetting = "snooze_secs"
@@ -281,6 +300,8 @@ enum MenuBarDisplay: String, CaseIterable, Identifiable {
     meetingAutoLog = defaults.bool(forKey: Self.meetingAutoLogKey)
     followRex = defaults.bool(forKey: Self.followRexKey)
     rexHosts = defaults.string(forKey: Self.rexHostsKey) ?? ""
+    personalTracking = defaults.object(forKey: Self.personalTrackingKey) as? Bool ?? true
+    personalIdle = defaults.object(forKey: Self.personalIdleKey) as? TimeInterval ?? 300
     breakIcon = Self.load(Self.breakIconSetting, store: store, defaults: defaults)
       .flatMap { $0.isEmpty ? nil : $0 }
 

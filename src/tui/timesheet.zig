@@ -932,6 +932,7 @@ pub const Timesheet = struct {
         p.put(" worked", dim);
         if (s.over > 0) try p.print(yellow, "  +{f}", .{fmt.dur(s.over)});
         try p.print(dim, "  ·  {f} tracked  ·  {f} untracked  ·  {f} on break", .{ fmt.dur(s.tracked), fmt.dur(s.untracked), fmt.dur(s.on_break) });
+        if (s.personal > 0) try p.print(dim, "  ·  {f} personal", .{fmt.dur(s.personal)});
         if (try w.goal(a, now)) |g| {
             p.nl(1);
             try p.print(dim, "Goal {f}", .{fmt.dur(g.secs)});
@@ -1152,8 +1153,10 @@ fn drawTotals(p: *Painter, w: sheet.Week, a: Allocator, now: i64) !void {
         .{ "On break", s.on_break },
         .{ "Tracked", s.tracked },
         .{ "Untracked", s.untracked },
+        .{ "Personal, not worked", s.personal },
     };
     for (rows) |r| {
+        if (r[1] == 0 and r[0][0] == 'P') continue;
         try p.print(.{}, "  {s: >7}  ", .{try p.fmt("{f}", .{fmt.dur(r[1])})});
         p.put(r[0], dim);
         p.nl(1);
@@ -1182,6 +1185,17 @@ fn drawTotals(p: *Painter, w: sheet.Week, a: Allocator, now: i64) !void {
             p.nl(1);
         }
     }
+    if (t.by_organization.len > 1) {
+        p.nl(1);
+        p.put("By organization", bold);
+        p.nl(1);
+        for (t.by_organization) |ot| {
+            try p.print(.{}, "  {s: >7}  ", .{try p.fmt("{f}", .{fmt.dur(ot.secs)})});
+            if (ot.id) |id| p.put(if (w.names.organization(id)) |o| o.name else "(deleted)", .{}) else p.put("(unassigned)", dim);
+            p.nl(1);
+        }
+    }
+    try ui.drawPersonal(p, w.names, t, a);
 }
 
 const help = [_][2][]const u8{

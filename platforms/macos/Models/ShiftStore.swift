@@ -264,6 +264,7 @@ final class ShiftStore {
     var clients: [Client] = []
     var projects: [Project] = []
     var workspaces: [Workspace] = []
+    var organizations: [Organization] = []
   }
 
   struct Entry: Decodable, Equatable, Identifiable {
@@ -318,6 +319,31 @@ final class ShiftStore {
     var clientId: UUID?
     var name: String
     var color: String?
+    /// Its organization; the core always sets it.
+    var organizationId: UUID? = nil
+  }
+
+  /// How an organization's time is tracked.
+  enum Tracking: String, Decodable, CaseIterable {
+    /// On the clock: every shift organization shares the one shift, its
+    /// breaks, and the weekly goal.
+    case shift
+    /// No shift: its time tracks itself from where you work, and it's
+    /// personal time, never worked.
+    case auto
+
+    var code: Int32 { self == .shift ? 0 : 1 }
+  }
+
+  /// Who the time is for, above projects: a company you work for, or
+  /// yourself.
+  struct Organization: Decodable, Equatable, Identifiable {
+    var id: UUID
+    var name: String
+    var tracking: Tracking
+    var color: String?
+
+    var isPersonal: Bool { tracking == .auto }
   }
 
   struct Workspace: Decodable, Equatable, Identifiable {
@@ -488,12 +514,15 @@ final class ShiftStore {
     try check(shifty_delete_entry(handle, ShiftyId(id), ts(now)))
   }
 
-  func createProject(name: String, client: UUID? = nil, color: String? = nil, now: Date = Date())
-    throws -> UUID
-  {
+  /// Creates a project in `organization`, or the default one (the first on
+  /// the shift) when it's nil.
+  func createProject(
+    name: String, client: UUID? = nil, color: String? = nil, organization: UUID? = nil,
+    now: Date = Date()
+  ) throws -> UUID {
     var out = ShiftyId()
-    try withIds(client, nil) { c, _ in
-      try check(shifty_create_project(handle, name, c, color, ts(now), &out))
+    try withIds(client, organization) { c, o in
+      try check(shifty_create_project(handle, name, c, color, o, ts(now), &out))
     }
     return UUID(out)
   }
@@ -504,6 +533,7 @@ final class ShiftStore {
     var projects: [Project] = []
     var clients: [Client] = []
     var workspaces: [Workspace] = []
+    var organizations: [Organization] = []
     var usage: [Usage] = []
   }
 
@@ -536,6 +566,39 @@ final class ShiftStore {
   /// Deletes a project and its workspaces. Its time stays, unassigned.
   func deleteProject(_ id: UUID, now: Date = Date()) throws {
     try check(shifty_delete_project(handle, ShiftyId(id), ts(now)))
+  }
+
+  /// Moves a project, and its time, to another organization.
+  func moveProject(_ id: UUID, to organization: UUID, now: Date = Date()) throws {
+    try check(shifty_move_project(handle, ShiftyId(id), ShiftyId(organization), ts(now)))
+  }
+
+  // MARK: Organizations
+
+  /// Every active organization, oldest first.
+  func organizations() throws -> [Organization] {
+    try json([Organization]()) { shifty_organizations_json(handle, $0, $1) }
+  }
+
+  func createOrganization(
+    name: String, tracking: Tracking = .shift, color: String? = nil, now: Date = Date()
+  ) throws -> UUID {
+    var out = ShiftyId()
+    try check(shifty_create_organization(handle, name, tracking.code, color, ts(now), &out))
+    return UUID(out)
+  }
+
+  /// Replaces an organization's name, how it tracks, and its color.
+  func editOrganization(
+    _ id: UUID, name: String, tracking: Tracking, color: String?, now: Date = Date()
+  ) throws {
+    try check(shifty_edit_organization(handle, ShiftyId(id), name, tracking.code, color, ts(now)))
+  }
+
+  /// Deletes an organization, moving its projects and their time to
+  /// `moveTo`. Throws `SHIFTY_CONFLICT` to move them onto itself.
+  func deleteOrganization(_ id: UUID, moveTo: UUID, now: Date = Date()) throws {
+    try check(shifty_delete_organization(handle, ShiftyId(id), ShiftyId(moveTo), ts(now)))
   }
 
   // MARK: Places and links

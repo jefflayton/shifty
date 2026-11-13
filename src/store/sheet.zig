@@ -264,9 +264,16 @@ pub const Row = union(enum) {
 pub const Week = struct {
     /// Local midnight starting each day, then the one after the last.
     days: [8]i64,
+    /// The shared shifts; none when showing an organization with no shift.
     shifts: []SheetShift,
+    /// The entries shown: the organization's, or all.
     entries: []store.Entry,
     names: report.Names,
+    /// The organization shown; null for all.
+    organization: ?Uuid = null,
+    /// Every work entry, whatever's shown: what a shift's untracked time
+    /// is counted against. Personal time on shift isn't work tracked.
+    work_entries: []store.Entry = &.{},
     /// ISO weekdays you work: bit 0 is Monday.
     work_days: u7,
     lunch: ?Lunch,
@@ -275,14 +282,30 @@ pub const Week = struct {
 
     /// Allocated in `arena`.
     pub fn load(db: *Store, arena: Allocator, days: [8]i64) store.Error!Week {
-        const shifts = try db.shiftsBetween(arena, days[0], days[7]);
+        return loadFor(db, arena, days, null);
+    }
+
+    /// The week for one organization (null: all): its entries, and the
+    /// shifts if it's on them. Allocated in `arena`.
+    pub fn loadFor(db: *Store, arena: Allocator, days: [8]i64, organization: ?Uuid) store.Error!Week {
+        const names: report.Names = try .load(db, arena);
+        const on_shift = if (organization) |o|
+            (if (names.organization(o)) |org| org.tracking == .shift else false)
+        else
+            true;
+        const shifts = if (on_shift) try db.shiftsBetween(arena, days[0], days[7]) else &.{};
         const sheet_shifts = try arena.alloc(SheetShift, shifts.len);
         for (shifts, sheet_shifts) |s, *out| out.* = .{ .shift = s, .breaks = try db.breaks(arena, s.id) };
+        const all = try db.entriesBetween(arena, days[0], days[7]);
+        var work_entries: std.ArrayList(store.Entry) = .empty;
+        for (all) |e| if (!names.isPersonal(e.project_id)) try work_entries.append(arena, e);
         return .{
             .days = days,
             .shifts = sheet_shifts,
-            .entries = try db.entriesBetween(arena, days[0], days[7]),
-            .names = try .load(db, arena),
+            .entries = try names.only(arena, all, organization),
+            .names = names,
+            .organization = organization,
+            .work_entries = work_entries.items,
             .work_days = try workDays(db, arena),
             .lunch = try Lunch.load(db, arena),
             .goal_secs = try weeklyGoal(db, arena),
@@ -368,30 +391,50 @@ pub const Week = struct {
         return @max(0, end - @max(e.in_ts, w.days[0]));
     }
 
-    /// Time tracked on `day`, or the whole week with null.
+    /// Work time tracked on `day`, or the whole week with null. Personal
+    /// time isn't work (see `personal`).
     pub fn tracked(w: Week, day: ?usize, now: i64) i64 {
+        return w.trackedWhere(day, now, false);
+    }
+
+    /// Personal time on `day`, or the whole week with null: time on
+    /// organizations with no shift.
+    pub fn personal(w: Week, day: ?usize, now: i64) i64 {
+        return w.trackedWhere(day, now, true);
+    }
+
+    fn trackedWhere(w: Week, day: ?usize, now: i64, personal_time: bool) i64 {
         var sum: i64 = 0;
         for (w.entries) |e| {
             if (day) |d| if (w.dayOf(e.in_ts) != d) continue;
+            if (w.names.isPersonal(e.project_id) != personal_time) continue;
             sum += w.seconds(e, now);
         }
         return sum;
+    }
+
+    /// Whether `e` is personal time, not work.
+    pub fn isPersonal(w: Week, e: store.Entry) bool {
+        return w.names.isPersonal(e.project_id);
     }
 
     pub const Summary = struct {
         worked: i64 = 0,
         over: i64 = 0,
         on_break: i64 = 0,
-        /// Worked time no entry covers.
+        /// Worked time no work entry covers.
         untracked: i64 = 0,
+        /// Work time tracked.
         tracked: i64 = 0,
+        /// Time on organizations with no shift; never worked time.
+        personal: i64 = 0,
     };
 
     /// Totals for `day`'s shifts, or the whole week's with null.
     pub fn summary(w: Week, arena: Allocator, day: ?usize, now: i64) Allocator.Error!Summary {
-        var s: Summary = .{ .tracked = w.tracked(day, now) };
-        const cuts = try arena.alloc(Span, w.entries.len);
-        for (w.entries, cuts) |e, *c| c.* = .{ .start = e.in_ts, .end = e.out_ts orelse now };
+        var s: Summary = .{ .tracked = w.tracked(day, now), .personal = w.personal(day, now) };
+        const cuts = try arena.alloc(Span, w.work_entries.len);
+        for (w.work_entries, cuts) |e, *c| c.* = .{ .start = e.in_ts, .end = e.out_ts orelse now };
         for (w.shifts) |sh| {
             if (day) |d| if (w.dayOf(sh.shift.in_ts) != d) continue;
             const spans = try work(arena, sh.shift, sh.breaks, now);
@@ -877,4 +920,67 @@ test "Week - weekly goal" {
     try testing.expectEqual(h, met.over());
     try testing.expectEqual(null, met.meets_at);
     try testing.expectEqual(0, met.leftAfterClockOut().?);
+}
+
+test "Week - personal time apart, and one organization at a time" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var db: Store = try .open(testing.io, ":memory:");
+    defer db.deinit();
+
+    const off = -6 * h;
+    const days = weekDays(tue - 2 * s_per_day, fixedOffset);
+    const in = tue + 9 * h;
+    const stamp = struct {
+        fn f(ts: i64) core.local.Stamp {
+            return .{ .ts = ts, .utc_offset_secs = -6 * h, .tz = null };
+        }
+    }.f;
+    _ = off;
+    const orgs = try db.organizations(a);
+    const work_org = orgs[0].id;
+    const personal_org = orgs[1].id;
+    const acme = try db.createOrganization(.{ .name = "Acme" }, in);
+
+    // A 9 to 5 shift: two hours on web, one on Acme's api, and half an hour
+    // of a side project on the clock; an evening of the side project.
+    _ = try db.addShift(stamp(in), in + 8 * h);
+    const web = try db.createProject(.{ .name = "web" }, in);
+    const api = try db.createProject(.{ .name = "api", .organization_id = acme }, in);
+    const side = try db.createProject(.{ .name = "side", .organization_id = personal_org }, in);
+    _ = try db.addEntry(.{ .project_id = web, .source = .cli }, stamp(in), in + 2 * h);
+    _ = try db.addEntry(.{ .project_id = api, .source = .cli }, stamp(in + 2 * h), in + 3 * h);
+    _ = try db.addEntry(.{ .project_id = side, .source = .cli }, stamp(in + 3 * h), in + 3 * h + 30 * 60);
+    _ = try db.addEntry(.{ .project_id = side, .source = .cli }, stamp(in + 11 * h), in + 13 * h);
+
+    const now = in + 14 * h;
+    const all: Week = try .load(&db, a, days);
+    const s = try all.summary(a, null, now);
+    try testing.expectEqual(8 * h, s.worked);
+    try testing.expectEqual(3 * h, s.tracked);
+    try testing.expectEqual(2 * h + 30 * 60, s.personal);
+    // Personal time on the clock isn't work tracked.
+    try testing.expectEqual(5 * h, s.untracked);
+    const t = try all.totals(a, now);
+    try testing.expectEqual(3 * h, t.total);
+    try testing.expectEqual(2 * h + 30 * 60, t.personal);
+
+    // One shift organization: its entries, and the shared shift.
+    const mine: Week = try .loadFor(&db, a, days, work_org);
+    try testing.expectEqual(1, mine.shifts.len);
+    try testing.expectEqual(1, mine.entries.len);
+    const ms = try mine.summary(a, null, now);
+    try testing.expectEqual(2 * h, ms.tracked);
+    try testing.expectEqual(5 * h, ms.untracked);
+    try testing.expectEqual(1, (try Week.loadFor(&db, a, days, acme)).entries.len);
+
+    // Personal: no shift, its time alone.
+    const own: Week = try .loadFor(&db, a, days, personal_org);
+    try testing.expectEqual(0, own.shifts.len);
+    try testing.expectEqual(2, own.entries.len);
+    const os = try own.summary(a, null, now);
+    try testing.expectEqual(0, os.worked);
+    try testing.expectEqual(0, os.tracked);
+    try testing.expectEqual(2 * h + 30 * 60, os.personal);
 }

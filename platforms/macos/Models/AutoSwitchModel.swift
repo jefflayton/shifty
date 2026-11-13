@@ -153,6 +153,9 @@ import Observation
   /// When you clocked in, if you're on shift and not on a break: when a
   /// timer can start with none running.
   @ObservationIgnored var onShiftSince: () -> Date? = { nil }
+  /// Whether personal tracking has the timer (your own project's, off the
+  /// clock): it moves and stops it, so where you work offers nothing.
+  @ObservationIgnored var yields: () -> Bool = { false }
 
   init(tracking: TrackingModel, preferences: Preferences) {
     self.tracking = tracking
@@ -163,7 +166,8 @@ import Observation
   /// (nil): that changes nothing.
   func observe(_ target: ShiftStore.Target?, place: String, now: Date = Date()) {
     defer { tick(now: now) }
-    guard preferences.autoSwitch, tracking.running != nil || onShiftSince() != nil else {
+    guard preferences.autoSwitch, !yields(), tracking.running != nil || onShiftSince() != nil
+    else {
       candidate = nil
       set(offer: nil)
       return

@@ -2025,5 +2025,136 @@ do {
   check(m.breaks.isEmpty, "and the menu bar")
 }
 
+// MARK: Organizations and personal tracking
+
+do {
+  let store = try! ShiftStore(path: tempStorePath())
+  let orgs = try! store.organizations()
+  expectEqual(orgs.map(\.name), ["Work", "Personal"], "Work and Personal to start")
+  expectEqual(orgs.map(\.tracking), [.shift, .auto])
+  let work = orgs[0].id
+  let own = orgs[1].id
+  let api = try! store.createProject(name: "api")
+  let side = try! store.createProject(name: "side", organization: own)
+  let listed = try! store.projects(now: at(12))
+  expectEqual(listed.organizations.count, 2, "projects come with organizations")
+  expectEqual(listed.projects.first { $0.id == api }?.organizationId, work, "new projects go to Work")
+  expectEqual(listed.projects.first { $0.id == side }?.organizationId, own)
+
+  // The Projects window: by organization, moved, added, deleted.
+  let p = ProjectsModel(store: store)
+  p.reload(now: at(12))
+  expectEqual(p.projects(in: p.organizations[0]).map(\.name), ["api"])
+  expectEqual(p.projects(in: p.organizations[1]).map(\.name), ["side"])
+  let acme = p.createOrganization(named: "Acme", tracking: .shift)!
+  check(p.createOrganization(named: "acme", tracking: .shift) == nil, "the name's taken")
+  check(p.createOrganization(named: "  ", tracking: .auto) == nil, "a blank name")
+  p.clearError()
+  p.move(p.project(api)!, to: p.organization(acme)!)
+  expectEqual(p.organizationOf(p.project(api)!)?.name, "Acme", "moved")
+  check(p.rename(p.organization(acme)!, to: "Acme Co"), "renamed")
+  expectEqual(p.successor(of: p.organization(acme)!)?.name, "Work", "the first other on the shift")
+  p.delete(p.organization(acme)!)
+  expectEqual(p.organizations.map(\.name), ["Work", "Personal"], "deleted")
+  expectEqual(p.organizationOf(p.project(api)!)?.name, "Work", "its project went to Work")
+  check(p.error == nil, "no errors: \(p.error ?? "")")
+  let groups = ProjectGroup.of(p.projects, in: p.organizations)
+  expectEqual(groups.map(\.title), ["Work", "Personal"], "menus by organization")
+  expectEqual(groups.map { $0.projects.map(\.id) }, [[api], [side]])
+  expectEqual(
+    ProjectGroup.of(p.projects.filter { $0.id == api }, in: p.organizations).map(\.title), [nil],
+    "one group has no title")
+
+  // The timesheet: personal time apart, one organization at a time.
+  _ = try! store.addEntry(project: api, workspace: nil, start: at(9), end: at(10))
+  _ = try! store.addEntry(project: side, workspace: nil, start: at(19), end: at(20, 30))
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  t.reload()
+  expectEqual(t.total(now: at(21)), 3600, "work tracked, without personal time")
+  expectEqual(t.personal(now: at(21)), 5400, "personal time apart")
+  expectEqual(t.totalsByProject(now: at(21)).map(\.project), [api])
+  expectEqual(t.personalByProject(now: at(21)).map(\.project), [side])
+  expectEqual(t.total(on: at(0), now: at(21)), 9000, "the day shows both")
+  t.organizationFilter = own
+  check(t.hidesShifts, "Personal has no shift")
+  expectEqual(t.total(now: at(21)), 0)
+  expectEqual(t.personal(now: at(21)), 5400)
+  expectEqual(t.entries(on: at(0)).count, 1, "only Personal's entry")
+  t.organizationFilter = work
+  check(!t.hidesShifts, "Work is on the shift")
+  expectEqual(t.personal(now: at(21)), 0)
+  expectEqual(t.entries(on: at(0)).count, 1, "only Work's entry")
+  t.organizationFilter = nil
+
+  // Personal tracking: off the clock, staying in a personal project.
+  let prefs = Preferences(defaults: testDefaults())
+  prefs.autoSwitchDelay = 30
+  prefs.personalIdle = 300
+  let tracking = TrackingModel(store: store)
+  tracking.reload(now: at(21))
+  var clockedIn = false
+  let personal = PersonalTracker(tracking: tracking, preferences: prefs)
+  personal.isClockedIn = { clockedIn }
+  let toSide = ShiftStore.Target(project: side)
+  check(tracking.isPersonal(side) && !tracking.isPersonal(api), "which projects are personal")
+
+  personal.observe(toSide, now: at(21))
+  check(tracking.running == nil, "not before the delay")
+  personal.observe(toSide, now: at(21) + 31)
+  expectEqual(tracking.runningTarget, toSide, "started by itself")
+  expectEqual(tracking.running?.start, at(21), "from when you got there")
+  check(personal.hasTimer, "personal tracking has the timer")
+
+  let blog = try! store.createProject(name: "blog", organization: own)
+  tracking.reload(now: at(21, 5))
+  let toBlog = ShiftStore.Target(project: blog)
+  personal.observe(toBlog, now: at(21, 10))
+  personal.observe(toBlog, now: at(21, 10) + 31)
+  expectEqual(tracking.runningTarget, toBlog, "another personal project moves it")
+  expectEqual(tracking.running?.start, at(21, 10))
+
+  personal.observe(nil, now: at(21, 20))
+  expectEqual(tracking.runningTarget, toBlog, "somewhere unlinked keeps it running")
+
+  personal.observe(toBlog, idle: 400, now: at(21, 30))
+  check(tracking.running == nil, "going idle stops it")
+  let day = DateInterval(start: at(0), end: at(23, 59))
+  let idleStop = try! store.timesheet(day).entries.first { $0.projectId == blog }?.end
+  expectEqual(idleStop, at(21, 30) - 400, "at the last touch")
+
+  personal.observe(toBlog, now: at(22))
+  personal.observe(toBlog, now: at(22) + 31)
+  expectEqual(tracking.running?.start, at(22), "back again, from coming back")
+
+  personal.observe(.init(project: api), now: at(22, 10))
+  check(tracking.running != nil, "a work project doesn't stop it at once")
+  personal.observe(.init(project: api), now: at(22, 10) + 31)
+  check(tracking.running == nil, "staying in a work project stops it")
+
+  personal.observe(toSide, now: at(22, 20))
+  personal.observe(toSide, now: at(22, 20) + 31)
+  check(tracking.running != nil, "running again")
+  clockedIn = true
+  personal.observe(toSide, now: at(22, 25))
+  check(tracking.running == nil, "clocking in stops it")
+  tracking.choose(project: side, workspace: nil, now: at(22, 26))
+  personal.observe(nil, idle: 1000, now: at(22, 27))
+  check(tracking.running != nil, "one you start on the clock is yours")
+  check(!personal.hasTimer, "and auto-switch's to move")
+  tracking.stop(now: at(22, 28))
+  clockedIn = false
+
+  personal.observe(toSide, now: at(23))
+  personal.observe(toSide, now: at(23) + 31)
+  check(tracking.running != nil, "running once more")
+  personal.pause(now: at(23, 5))
+  check(tracking.running == nil, "sleep or lock stops it")
+
+  prefs.personalTracking = false
+  personal.observe(toSide, now: at(23, 10))
+  personal.observe(toSide, now: at(23, 10) + 31)
+  check(tracking.running == nil, "off, it does nothing")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

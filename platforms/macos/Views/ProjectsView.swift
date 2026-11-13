@@ -2,30 +2,50 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Every project, to rename, recolor, or delete, with how much each has
-/// been used.
+/// Every project by organization, to rename, recolor, move, or delete, with
+/// how much each has been used.
 struct ProjectsView: View {
   @Bindable var model: ProjectsModel
   @State private var selection: UUID?
   /// The project the delete confirmation is for.
   @State private var deleting: ShiftStore.Project?
+  /// The organization the delete confirmation is for.
+  @State private var deletingOrganization: ShiftStore.Organization?
 
   var body: some View {
     List(selection: $selection) {
-      ForEach(model.projects) { project in
-        ProjectRow(model: model, project: project) { deleting = project }
-          .tag(project.id)
+      if model.organizations.isEmpty {
+        ForEach(model.projects) { project in row(project) }
+      } else {
+        ForEach(model.organizations) { org in
+          Section {
+            let projects = model.projects(in: org)
+            ForEach(projects) { project in row(project) }
+            if projects.isEmpty {
+              Text(
+                org.isPersonal
+                  ? "Your own projects go here. Their time tracks itself and never counts as worked."
+                  : "No projects yet. Move one here, or add one from this organization's menu."
+              )
+              .font(.callout)
+              .foregroundStyle(.tertiary)
+            }
+          } header: {
+            OrganizationHeader(model: model, organization: org) { deletingOrganization = org }
+          }
+        }
       }
     }
     .listStyle(.inset)
     .overlay {
-      if model.projects.isEmpty {
+      // With organizations, their sections say what goes in them.
+      if model.projects.isEmpty && model.organizations.isEmpty {
         ContentUnavailableView {
           Label("No Projects", systemImage: "folder")
         } description: {
           Text("Projects sort your time by what it's for. Pick one on any entry in the timesheet.")
         } actions: {
-          Button("New Project") { NewProjectPrompt.run(create: model.create(named:)) }
+          Button("New Project") { NewProjectPrompt.run(create: { model.create(named: $0) }) }
         }
       }
     }
@@ -49,13 +69,32 @@ struct ProjectsView: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {
-          if let id = NewProjectPrompt.run(create: model.create(named:)) { selection = id }
+          OrganizationPrompt.create(model: model)
+        } label: {
+          Label("New Organization", systemImage: "building.2")
+        }
+        .help("New organization: a company you work for, or your own projects")
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          if let id = NewProjectPrompt.run(create: { model.create(named: $0) }) { selection = id }
         } label: {
           Label("New Project", systemImage: "plus")
         }
         .keyboardShortcut("n", modifiers: .command)
         .help("New project (⌘N)")
       }
+    }
+    .alert(
+      "Delete \u{201C}\(deletingOrganization?.name ?? "")\u{201D}?",
+      isPresented: Binding(
+        get: { deletingOrganization != nil }, set: { if !$0 { deletingOrganization = nil } }),
+      presenting: deletingOrganization
+    ) { org in
+      Button("Delete Organization", role: .destructive) { model.delete(org) }
+      Button("Cancel", role: .cancel) {}
+    } message: { org in
+      Text(OrganizationHeader.deleteMessage(model: model, organization: org))
     }
     .alert(
       "Delete \u{201C}\(deleting?.name ?? "")\u{201D}?",
@@ -69,6 +108,101 @@ struct ProjectsView: View {
         ProjectRow.deleteMessage(
           usage: model.usage(of: project.id), workspaces: model.workspaces(of: project.id)))
     }
+  }
+
+  private func row(_ project: ShiftStore.Project) -> some View {
+    ProjectRow(model: model, project: project) { deleting = project }
+      .tag(project.id)
+  }
+}
+
+/// An organization's name and how it tracks, with its menu.
+struct OrganizationHeader: View {
+  let model: ProjectsModel
+  let organization: ShiftStore.Organization
+  /// Asks to delete it.
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Text(organization.name)
+      Text(organization.isPersonal ? "Tracks itself, personal" : "On the shift")
+        .fontWeight(.regular)
+        .foregroundStyle(.tertiary)
+      Spacer()
+      Menu {
+        items
+      } label: {
+        Image(systemName: "ellipsis.circle")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .help("Add a project, rename, change how it tracks, or delete")
+    }
+    .contextMenu { items }
+  }
+
+  @ViewBuilder private var items: some View {
+    Button("New Project in \(organization.name)…") {
+      NewProjectPrompt.run(create: { model.create(named: $0, in: organization.id) })
+    }
+    Button("Rename…") { OrganizationPrompt.rename(organization, model: model) }
+    Toggle(
+      "Tracks Itself (Personal)",
+      isOn: Binding(
+        get: { organization.tracking == .auto },
+        set: { model.setTracking(organization, to: $0 ? .auto : .shift) }))
+    Divider()
+    Button("Delete…", role: .destructive, action: onDelete)
+      .disabled(model.organizations.count < 2)
+  }
+
+  static func deleteMessage(model: ProjectsModel, organization: ShiftStore.Organization) -> String {
+    let count = model.projects(in: organization).count
+    let to = model.successor(of: organization)?.name ?? "another organization"
+    switch count {
+    case 0: return "It has no projects."
+    case 1: return "Its project and its time move to \(to)."
+    default: return "Its \(count) projects and their time move to \(to)."
+    }
+  }
+}
+
+/// Asking for an organization's name, and whether it tracks itself.
+enum OrganizationPrompt {
+  static func create(model: ProjectsModel) {
+    let alert = NSAlert()
+    alert.messageText = "New Organization"
+    alert.informativeText =
+      "A company you work for shares the shift with the others: clocking in and out, breaks, and the weekly goal. Your own projects can track themselves instead, from the window you're in, and never count as worked time."
+    let field = NSTextField(frame: NSRect(x: 0, y: 30, width: 280, height: 24))
+    field.placeholderString = "Name"
+    let auto = NSButton(
+      checkboxWithTitle: "Tracks itself (personal, no shift)", target: nil, action: nil)
+    auto.frame = NSRect(x: 0, y: 0, width: 280, height: 20)
+    let box = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 54))
+    box.addSubview(field)
+    box.addSubview(auto)
+    alert.accessoryView = box
+    alert.addButton(withTitle: "Add")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = field
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    model.createOrganization(named: field.stringValue, tracking: auto.state == .on ? .auto : .shift)
+  }
+
+  static func rename(_ organization: ShiftStore.Organization, model: ProjectsModel) {
+    let alert = NSAlert()
+    alert.messageText = "Rename \(organization.name)"
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+    field.stringValue = organization.name
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Rename")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = field
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    model.rename(organization, to: field.stringValue)
   }
 }
 
@@ -157,6 +291,16 @@ struct ProjectRow: View {
     .contextMenu {
       Button("Rename") { nameFocused = true }
       LinkMenu.items(model: model, project: project)
+      if model.organizations.count > 1 {
+        Menu("Move To") {
+          ForEach(model.organizations) { org in
+            Button(org.isPersonal ? "\(org.name) (personal)" : org.name) {
+              model.move(project, to: org)
+            }
+            .disabled(model.organizationOf(project)?.id == org.id)
+          }
+        }
+      }
       Divider()
       Button("Delete…", role: .destructive, action: onDelete)
     }

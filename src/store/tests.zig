@@ -44,7 +44,7 @@ test "open - creates parent dirs, migrates once, keeps replica id" {
     var stmt = try b.db.prepare("PRAGMA user_version");
     defer stmt.deinit();
     try testing.expect(try stmt.step());
-    try testing.expectEqual(8, stmt.int(0));
+    try testing.expectEqual(9, stmt.int(0));
 }
 
 test "open - lunch alarms migration keeps existing rules" {
@@ -1332,4 +1332,91 @@ test "one-off breaks - on today's shift straight away, until they start" {
     try testing.expectEqual(2, (try s.breaks(a, shift)).len);
     try s.deleteOneOffBreak(coffee, tue + 14 * h + 60);
     try testing.expectEqual(2, (try s.breaks(a, shift)).len);
+}
+
+// ── Organizations ──────────────────────────────────────────────────────────
+
+test "open - organizations migration puts every project in Work" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp: TmpDb = try .init();
+    defer tmp.deinit();
+
+    // A database as migration 0008 left it, with two projects and time.
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(tmp.path).?) catch {};
+    const db: store.sqlite.Db = try .open(tmp.path);
+    inline for (.{ "0001_init", "0002_lunch_alarms", "0003_break_presets", "0004_link_deletes", "0005_break_icons", "0006_shared_links", "0007_meetings", "0008_break_days" }) |m|
+        try db.execScript(@embedFile("migrations/" ++ m ++ ".sql"));
+    try db.execScript("PRAGMA user_version = 8");
+    try db.execScript(
+        \\INSERT INTO projects (id, name, created_ts, updated_ts)
+        \\VALUES (x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', 'web', 1, 1),
+        \\       (x'0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', 'api', 1, 1);
+        \\INSERT INTO entries (id, project_id, in_ts, utc_offset_secs, out_ts, source, created_ts, updated_ts)
+        \\VALUES (x'01010101010101010101010101010101', x'0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a', 100, 0, 200, 'cli', 1, 1);
+    );
+    db.close();
+
+    var s: Store = try .open(io, tmp.path);
+    defer s.deinit();
+    const orgs = try s.organizations(a);
+    try testing.expectEqual(2, orgs.len);
+    try testing.expectEqualStrings("Work", orgs[0].name);
+    try testing.expectEqual(store.Tracking.shift, orgs[0].tracking);
+    try testing.expectEqualStrings("Personal", orgs[1].name);
+    try testing.expectEqual(store.Tracking.auto, orgs[1].tracking);
+    for (try s.projects(a)) |p| try testing.expect(p.organization_id.?.eql(orgs[0].id));
+    try testing.expectEqual(1, (try s.entriesBetween(a, 0, 1000)).len);
+    try testing.expect((try s.defaultOrganization()).?.eql(orgs[0].id));
+}
+
+test "organizations - create, edit, move a project, delete" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    const work = (try s.organizations(a))[0].id;
+    const personal = (try s.organizations(a))[1].id;
+    const acme = try s.createOrganization(.{ .name = "Acme" }, 10);
+    try testing.expectEqual(3, (try s.organizations(a)).len);
+
+    // A new project goes to the first shift organization, or where it's told.
+    const web = try s.createProject(.{ .name = "web" }, 10);
+    const api = try s.createProject(.{ .name = "api", .organization_id = acme }, 10);
+    try testing.expectError(error.NotFound, s.createProject(.{ .name = "x", .organization_id = .{ .bytes = @splat(9) } }, 10));
+    const byName = struct {
+        fn f(ps: []const store.Project, name: []const u8) store.Project {
+            for (ps) |p| if (std.mem.eql(u8, p.name, name)) return p;
+            unreachable;
+        }
+    }.f;
+    try testing.expect(byName(try s.projects(a), "web").organization_id.?.eql(work));
+    try testing.expect(byName(try s.projects(a), "api").organization_id.?.eql(acme));
+
+    // Renaming keeps the organization; moving changes it.
+    try s.editProject(web, .{ .name = "website" }, 11);
+    try testing.expect(byName(try s.projects(a), "website").organization_id.?.eql(work));
+    try s.moveProject(web, personal, 12);
+    try testing.expect(byName(try s.projects(a), "website").organization_id.?.eql(personal));
+    try testing.expectError(error.NotFound, s.moveProject(web, .{ .bytes = @splat(9) }, 12));
+
+    try s.editOrganization(acme, .{ .name = "Acme Inc", .color = "#ff0000" }, 13);
+    const edited = (try s.organizations(a))[2];
+    try testing.expectEqualStrings("Acme Inc", edited.name);
+    try testing.expectEqualStrings("#ff0000", edited.color.?);
+
+    // Deleting moves its projects; never onto itself.
+    try testing.expectError(error.Conflict, s.deleteOrganization(acme, acme, 14));
+    try s.deleteOrganization(acme, work, 14);
+    try testing.expectEqual(2, (try s.organizations(a)).len);
+    try testing.expect(byName(try s.projects(a), "api").organization_id.?.eql(work));
+    _ = api;
+
+    // With the shift organization gone, Personal is the default.
+    try s.deleteOrganization(work, personal, 15);
+    try testing.expect((try s.defaultOrganization()).?.eql(personal));
+    for (try s.projects(a)) |p| try testing.expect(p.organization_id.?.eql(personal));
 }
