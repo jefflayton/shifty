@@ -300,7 +300,10 @@ pub const Tracker = struct {
         self.refresh();
         const snap = self.snap orelse return;
         const n = snap.breaks.len;
-        if (n == 0) {
+        if (snap.shift != null and snap.shift.?.in_ts != at.ts) {
+            // Back from clocking out early: the day's shift, resumed.
+            self.flash(false, "Back on today's shift. Clock out at {f}.", .{fmt.clock(snap.clock_out, at.utc_offset_secs)});
+        } else if (n == 0) {
             self.flash(false, "Clocked in. Clock out at {f}.", .{fmt.clock(snap.clock_out, at.utc_offset_secs)});
         } else {
             self.flash(false, "Clocked in with {d} planned break{s}. Clock out at {f}.", .{ n, if (n == 1) "" else "s", fmt.clock(snap.clock_out, at.utc_offset_secs) });

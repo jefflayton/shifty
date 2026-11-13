@@ -710,6 +710,55 @@ test "break presets - clocking in adds the day's scheduled breaks" {
     try testing.expectEqual(0, (try s.breaks(a, bare)).len);
 }
 
+test "shifts - clocking back in the same day resumes the shift" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s: Store = try .open(io, ":memory:");
+    defer s.deinit();
+
+    // Tuesday 9 to 8, with class 11 to 2. Clocked out at 11 for class and
+    // back at 2:05: the same shift, with the five minutes late as a break.
+    try s.putBreakPreset(class(.v7(io), tue_thu, 11 * h, 14 * h), 0);
+    const tuesday = try s.startShift(8 * h, at(tue + 9 * h));
+    _ = try s.endShift(tue + 11 * h);
+    try testing.expect((try s.startShift(8 * h, at(tue + 14 * h + 300))).eql(tuesday));
+    var shift = (try s.currentShift(a)).?;
+    try testing.expectEqual(tue + 9 * h, shift.in_ts);
+    try testing.expectEqual(null, shift.out_ts);
+    var brks = try s.breaks(a, tuesday);
+    try testing.expectEqual(2, brks.len);
+    try testing.expectEqual(tue + 11 * h, brks[0].in_ts);
+    try testing.expectEqual(tue + 14 * h, brks[0].out_ts.?);
+    try testing.expectEqual(tue + 14 * h, brks[1].in_ts);
+    try testing.expectEqual(tue + 14 * h + 300, brks[1].out_ts.?);
+    try testing.expectEqual(tue + 20 * h + 300, store.clockOut(shift, brks, tue + 15 * h));
+
+    // Out before class and back after it: the gap around class is break
+    // too, and class isn't counted twice. The menu bar's empty clock in
+    // resumes as well.
+    _ = try s.endShift(tue + 15 * h);
+    try testing.expect((try s.startEmptyShift(8 * h, at(tue + 16 * h))).eql(tuesday));
+    shift = (try s.currentShift(a)).?;
+    brks = try s.breaks(a, tuesday);
+    try testing.expectEqual(3, brks.len);
+    try testing.expectEqual(tue + 21 * h + 300, store.clockOut(shift, brks, tue + 16 * h));
+
+    // Back within a minute: nothing to record.
+    _ = try s.endShift(tue + 17 * h);
+    _ = try s.startShift(8 * h, at(tue + 17 * h + 30));
+    try testing.expectEqual(3, (try s.breaks(a, tuesday)).len);
+
+    // A shift worked in full, or one from another day, isn't resumed.
+    _ = try s.endShift(tue + 21 * h + 300);
+    const overtime = try s.startShift(h, at(tue + 22 * h));
+    try testing.expect(!overtime.eql(tuesday));
+    _ = try s.endShift(tue + 22 * h + 1800);
+    const wednesday = try s.startShift(8 * h, at(tue + 33 * h));
+    try testing.expect(!wednesday.eql(overtime));
+    try testing.expectEqual(tue + 33 * h, (try s.currentShift(a)).?.in_ts);
+}
+
 test "break presets - the day's breaks are cut to the shift" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
