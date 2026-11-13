@@ -841,13 +841,18 @@ pub const Store = struct {
 
     // ── Shifts and breaks ─────────────────────────────────────────────────
 
-    /// Clocks in, with the day's scheduled break presets on the shift.
-    /// Fails with `Conflict` if a shift is already open.
+    /// Clocks in, with the day's scheduled break presets on the shift, or
+    /// resumes the day's shift (see `resumeShift`). Fails with `Conflict` if
+    /// a shift is already open.
     pub fn startShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
         try self.begin();
         errdefer self.rollback();
         var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
         defer arena.deinit();
+        if (try self.resumeShift(arena.allocator(), at)) |resumed| {
+            try self.commit();
+            return resumed;
+        }
         const new = try self.insertShift(target_secs, at);
         for (try self.scheduledBreaks(arena.allocator(), at, target_secs)) |b| {
             _ = try self.addBreak(new, b.in_ts, b.out_ts, at.ts);
@@ -857,10 +862,54 @@ pub const Store = struct {
     }
 
     /// Clocks in with no breaks, for a frontend that brings its own (the
-    /// menu bar's draft already has the day's presets). `Conflict` if a
+    /// menu bar's draft already has the day's presets), or resumes the
+    /// day's shift (see `resumeShift`), breaks and all. `Conflict` if a
     /// shift is already open.
     pub fn startEmptyShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {
-        return self.insertShift(target_secs, at);
+        try self.begin();
+        errdefer self.rollback();
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer arena.deinit();
+        const started = try self.resumeShift(arena.allocator(), at) orelse
+            try self.insertShift(target_secs, at);
+        try self.commit();
+        return started;
+    }
+
+    /// Reopens the last shift if it ended earlier on `at`'s local day before
+    /// its time was worked, like clocking out for a class and back in after:
+    /// the same shift, not a fresh one. The time clocked out becomes a
+    /// break, less what breaks on the shift (the class) already cover.
+    /// Returns the shift, or null if there's none to resume. `Conflict` if a
+    /// shift is open.
+    fn resumeShift(self: *Store, arena: Allocator, at: Stamp) Error!?Uuid {
+        if (try self.currentShift(arena) != null) return error.Conflict;
+        const rows = try self.queryShifts(arena,
+            \\WHERE deleted_ts IS NULL AND out_ts IS NOT NULL ORDER BY out_ts DESC LIMIT 1
+        , .{});
+        if (rows.len == 0) return null;
+        const last = rows[0];
+        const out_ts = last.out_ts.?;
+        const midnight = at.ts - @mod(at.ts + at.utc_offset_secs, std.time.s_per_day);
+        if (out_ts < midnight or out_ts > at.ts) return null;
+        const brks = try self.breaks(arena, last.id);
+        if (clockOut(last, brks, out_ts) <= out_ts) return null;
+
+        // Breaks are oldest first, so one sweep finds the gaps they leave.
+        var cursor = out_ts;
+        for (brks) |b| {
+            const end = b.out_ts orelse continue;
+            if (end <= cursor) continue;
+            if (b.in_ts >= at.ts) break;
+            if (b.in_ts - cursor >= min_break_secs) _ = try self.addBreak(last.id, cursor, b.in_ts, at.ts);
+            cursor = @max(cursor, end);
+        }
+        if (at.ts - cursor >= min_break_secs) _ = try self.addBreak(last.id, cursor, at.ts, at.ts);
+
+        try self.db.exec(
+            \\UPDATE shifts SET out_ts = NULL, updated_ts = ? WHERE id = ?
+        , .{ at.ts, blob(&last.id) });
+        return last.id;
     }
 
     fn insertShift(self: *Store, target_secs: i64, at: Stamp) Error!Uuid {

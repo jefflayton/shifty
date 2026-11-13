@@ -329,12 +329,17 @@ fn clockIn(c: *Ctx, args: []const [:0]const u8) !void {
         },
         else => return e,
     };
-    // The day's break presets are on the shift now.
+    // The day's break presets are on the shift now, or it's the day's
+    // shift resumed, with the time away as break.
     const shift = (try c.db.currentShift(c.arena)).?;
     const brks = try c.db.breaks(c.arena, shift_id);
     const lunch = try sheet.Lunch.load(&c.db, c.arena);
     const out = try sheet.clockOut(c.arena, shift, brks, lunch, c.now.ts);
-    try c.out.print("Clocked in at {f}. Clock out at {f}.\n", .{ clock(at.ts, at.utc_offset_secs), clock(out, at.utc_offset_secs) });
+    if (shift.in_ts != at.ts) {
+        try c.out.print("Back on today's shift from {f}. Clock out at {f}.\n", .{ clock(shift.in_ts, at.utc_offset_secs), clock(out, at.utc_offset_secs) });
+    } else {
+        try c.out.print("Clocked in at {f}. Clock out at {f}.\n", .{ clock(at.ts, at.utc_offset_secs), clock(out, at.utc_offset_secs) });
+    }
     for (brks) |b| try c.out.print("Break {f}-{f}.\n", .{ clock(b.in_ts, at.utc_offset_secs), clock(b.out_ts.?, at.utc_offset_secs) });
     if (lunch) |l| if (try l.planFor(c.arena, shift, brks, c.now.ts)) |p| try lunchStatus(c, p, l, at.utc_offset_secs);
     if (open) try openLink(c, .in);

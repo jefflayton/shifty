@@ -2186,5 +2186,33 @@ do {
   expectEqual(shown.first?.projects.map(\.project), [api, nil])
 }
 
+do {
+  // Clocked out for class and back after it: the same shift, not a new
+  // day. Class stays where it was, and running late is break.
+  let path = tempStorePath()
+  defer { try? FileManager.default.removeItem(atPath: path) }
+  let store = try! ShiftStore(path: path)
+  let m = ShiftModel()
+  m.store = store
+  m.clockInTime = at(9)
+  m.shiftLength = 8
+  m.breaks = [brk(at(11), at(14))]
+  m.clockInNow(now: at(9), calendar: cal)
+  let shift = m.shiftID
+  m.clockOutNow(now: at(11))
+  check(!m.isClockedIn, "off for class")
+
+  m.clockInNow(now: at(14, 5), calendar: cal)
+  check(m.isClockedIn, "back on")
+  expectEqual(m.shiftID, shift, "the same shift")
+  expectEqual(m.clockInTime, at(9), "clock in stays at 9")
+  expectEqual(m.clockOut(now: at(14, 5)), at(20, 5), "only the five late minutes added")
+  let spans = m.anchoredBreaks()
+  expectEqual(spans.map(\.start), [at(11), at(14)], "class and the late minutes, today")
+  expectEqual(try! store.breaks(of: shift!).map(\.start), [at(11), at(14)], "stored as shown")
+  m.push(now: at(14, 6))
+  expectEqual(try! store.breaks(of: shift!).count, 2, "saving changes nothing")
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)
