@@ -231,30 +231,38 @@ import Observation
   // MARK: Clocking in and out
 
   /// Clocks in now, making this the store's open shift. If another app
-  /// clocked in first, shows that shift instead.
+  /// clocked in first, shows that shift instead. Back the same day from
+  /// clocking out early (for a class, say), the store resumes that shift,
+  /// and it's shown as the store has it.
   ///
-  /// The shift starts with the day's planned breaks (scheduled and one-off)
-  /// and the draft's breaks still to come today, all as new breaks. The
-  /// draft's breaks can be an ended shift's under that shift's ids, and
-  /// saving one of those here would take it off its own day.
+  /// Otherwise the shift starts with the day's planned breaks (scheduled
+  /// and one-off) and the draft's breaks still to come today, all as new
+  /// breaks. The draft's breaks can be an ended shift's under that shift's
+  /// ids, and saving one of those here would take it off its own day.
   func clockInNow(now: Date = Date(), calendar: Calendar = .current) {
     guard let store, !isClockedIn else { return }
     let ahead = draftBreaksAhead(now: now, calendar: calendar)
-    clockInTime = now
-    // A break you started today goes along, as a new one; an older one was
-    // forgotten.
-    if let start = breakStart, calendar.isDate(start, inSameDayAs: now), start <= now {
-      breakStartID = UUID()
-    } else {
-      breakStart = nil
-    }
-    var fresh = scheduledBreaks(clockIn: now)
-    for brk in ahead where !fresh.contains(where: { $0.inDate < brk.outDate && brk.inDate < $0.outDate }) {
-      fresh.append(brk)
-    }
-    breaks = fresh.sorted { $0.inDate < $1.inDate }
     do {
-      shiftID = try store.startShift(at: now, lengthSeconds: lengthSeconds)
+      let id = try store.startShift(at: now, lengthSeconds: lengthSeconds)
+      if let shift = try store.currentShift(), shift.id == id, shift.clockIn != now.flooredToSecond {
+        // Resumed, with the store's breaks and the time away as one.
+        pull()
+        return
+      }
+      clockInTime = now
+      // A break you started today goes along, as a new one; an older one
+      // was forgotten.
+      if let start = breakStart, calendar.isDate(start, inSameDayAs: now), start <= now {
+        breakStartID = UUID()
+      } else {
+        breakStart = nil
+      }
+      var fresh = scheduledBreaks(clockIn: now)
+      for brk in ahead where !fresh.contains(where: { $0.inDate < brk.outDate && brk.inDate < $0.outDate }) {
+        fresh.append(brk)
+      }
+      breaks = fresh.sorted { $0.inDate < $1.inDate }
+      shiftID = id
       push(now: now)
     } catch {
       log("clock in:", error)
