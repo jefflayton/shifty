@@ -182,6 +182,9 @@ struct OrganizationFilter: View {
         .labelsHidden()
       } label: {
         Label(model.filteredOrganization?.name ?? "All Organizations", systemImage: "building.2")
+          // The toolbar shows only icons unless told otherwise, and the
+          // name is what says whose time this is.
+          .labelStyle(.titleAndIcon)
       }
       .help("Show one organization's time, or all of it")
     }
