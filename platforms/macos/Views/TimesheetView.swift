@@ -720,12 +720,7 @@ struct WeekTotals: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(byProject, id: \.project) { row in
-              TotalRow(
-                color: ProjectColor.color(row.project, in: model),
-                name: model.label(project: row.project, workspace: nil) ?? "No project",
-                secondary: row.project == nil, seconds: row.seconds, of: total)
-            }
+            ProjectTotals(model: model, rows: byProject, of: total)
           }
         }
 
@@ -746,17 +741,58 @@ struct WeekTotals: View {
           TotalsList(title: "Personal") {
             FigureRow(name: "Not worked", seconds: personal)
               .help("Time on organizations that track themselves: never on the clock")
-            ForEach(byPersonal, id: \.project) { row in
-              TotalRow(
-                color: ProjectColor.color(row.project, in: model),
-                name: model.label(project: row.project, workspace: nil) ?? "No project",
-                secondary: false, seconds: row.seconds, of: personal)
-            }
+            ProjectTotals(model: model, rows: byPersonal, of: personal)
           }
         }
       }
       .padding(.horizontal, 18)
       .padding(.vertical, 20)
+    }
+  }
+}
+
+/// The week's time by project, under each project's organization while
+/// every organization shows and more than one has time.
+struct ProjectTotals: View {
+  let model: TimesheetModel
+  let rows: [(project: UUID?, seconds: TimeInterval)]
+  /// What each row's bar is a share of.
+  let total: TimeInterval
+
+  init(
+    model: TimesheetModel, rows: [(project: UUID?, seconds: TimeInterval)], of total: TimeInterval
+  ) {
+    self.model = model
+    self.rows = rows
+    self.total = total
+  }
+
+  var body: some View {
+    let groups = model.byOrganization(rows)
+    let grouped = groups.contains { $0.organization != nil }
+    ForEach(groups) { group in
+      VStack(alignment: .leading, spacing: 12) {
+        if let org = group.organization {
+          HStack(alignment: .firstTextBaseline) {
+            Text(org.name)
+              .font(.callout.weight(.semibold))
+            Spacer()
+            Text(TimesheetFormat.duration(group.seconds))
+              .font(.system(.callout, design: .rounded).weight(.semibold))
+              .monospacedDigit()
+              .foregroundStyle(.secondary)
+          }
+          .padding(.top, 4)
+          .accessibilityElement(children: .combine)
+        }
+        ForEach(group.projects, id: \.project) { row in
+          TotalRow(
+            color: ProjectColor.color(row.project, in: model),
+            name: model.label(project: row.project, workspace: nil) ?? "No project",
+            secondary: row.project == nil, seconds: row.seconds, of: total)
+        }
+        .padding(.leading, grouped && group.organization != nil ? 10 : 0)
+      }
     }
   }
 }

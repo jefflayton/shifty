@@ -2156,5 +2156,35 @@ do {
   check(tracking.running == nil, "off, it does nothing")
 }
 
+// MARK: Week totals by organization
+
+do {
+  let store = try! ShiftStore(path: tempStorePath())
+  let orgs = try! store.organizations()
+  let work = orgs[0].id
+  let acme = try! store.createOrganization(name: "Acme")
+  let api = try! store.createProject(name: "api")
+  let site = try! store.createProject(name: "site", organization: acme)
+  let side = try! store.createProject(name: "side", organization: orgs[1].id)
+  _ = try! store.addEntry(project: api, workspace: nil, start: at(9), end: at(10))
+  _ = try! store.addEntry(project: site, workspace: nil, start: at(10), end: at(12))
+  _ = try! store.addEntry(project: nil, workspace: nil, start: at(12), end: at(12, 30))
+  _ = try! store.addEntry(project: side, workspace: nil, start: at(19), end: at(20))
+  let t = TimesheetModel(store: store, calendar: cal, now: at(12))
+  t.reload()
+  let groups = t.byOrganization(t.totalsByProject(now: at(21)))
+  expectEqual(
+    groups.map { $0.organization?.name }, ["Acme", "Work", nil], "most first, no project last")
+  expectEqual(groups.map(\.seconds), [7200, 3600, 1800])
+  expectEqual(groups.map { $0.projects.map(\.project) }, [[site], [api], [nil]])
+  let personal = t.byOrganization(t.personalByProject(now: at(21)))
+  expectEqual(personal.map { $0.organization?.name }, [nil], "one organization isn't grouped")
+  expectEqual(personal.first?.projects.map(\.project), [side])
+  t.organizationFilter = work
+  let shown = t.byOrganization(t.totalsByProject(now: at(21)))
+  expectEqual(shown.map { $0.organization?.name }, [nil], "one organization shown isn't grouped")
+  expectEqual(shown.first?.projects.map(\.project), [api, nil])
+}
+
 print("\(count - failures)/\(count) checks passed")
 exit(failures == 0 ? 0 : 1)

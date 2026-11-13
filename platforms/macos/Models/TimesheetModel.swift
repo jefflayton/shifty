@@ -432,6 +432,58 @@ import Observation
     byProject(shownEntries.filter { self.isPersonal($0) }, now: now)
   }
 
+  /// One organization's share of a list of project totals.
+  struct OrganizationTotals: Identifiable {
+    /// Nil for time on no project, or when the list isn't grouped.
+    var organization: ShiftStore.Organization?
+    var seconds: TimeInterval
+    var projects: [(project: UUID?, seconds: TimeInterval)]
+
+    var id: UUID? { organization?.id }
+  }
+
+  /// `rows` (from `totalsByProject` or `personalByProject`) grouped by
+  /// their projects' organizations, most time first, with time on no
+  /// project last. It groups only while every organization shows and more
+  /// than one has time; otherwise it's one group with no organization.
+  func byOrganization(_ rows: [(project: UUID?, seconds: TimeInterval)])
+    -> [OrganizationTotals]
+  {
+    let all: TimeInterval = rows.reduce(0) { $0 + $1.seconds }
+    let whole = [OrganizationTotals(organization: nil, seconds: all, projects: rows)]
+    guard organizationFilter == nil else { return whole }
+    var groups: [OrganizationTotals] = []
+    var loose: [(project: UUID?, seconds: TimeInterval)] = []
+    for row in rows {
+      guard let org = organizationOf(project: row.project) else {
+        loose.append(row)
+        continue
+      }
+      if let i = groups.firstIndex(where: { $0.organization?.id == org.id }) {
+        groups[i].seconds += row.seconds
+        groups[i].projects.append(row)
+      } else {
+        groups.append(OrganizationTotals(organization: org, seconds: row.seconds, projects: [row]))
+      }
+    }
+    guard groups.count > 1 else { return whole }
+    // Rows come most first, so each group's are too; ties keep the
+    // organizations' own order.
+    let order = sheet.organizations.map(\.id)
+    func rank(_ group: OrganizationTotals) -> Int {
+      group.organization.flatMap { order.firstIndex(of: $0.id) } ?? order.count
+    }
+    groups.sort { a, b in
+      if a.seconds != b.seconds { return a.seconds > b.seconds }
+      return rank(a) < rank(b)
+    }
+    if !loose.isEmpty {
+      let rest: TimeInterval = loose.reduce(0) { $0 + $1.seconds }
+      groups.append(OrganizationTotals(organization: nil, seconds: rest, projects: loose))
+    }
+    return groups
+  }
+
   private func byProject(_ entries: [ShiftStore.Entry], now: Date)
     -> [(project: UUID?, seconds: TimeInterval)]
   {
